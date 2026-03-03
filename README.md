@@ -152,7 +152,10 @@ jetredline/
 │   └── jetredline/
 │       ├── SKILL.md
 │       ├── package.json
+│       ├── apply_edits.py
 │       ├── nd_cite_check.py
+│       ├── ooxml_fixup.py
+│       ├── ooxml_validate.py
 │       ├── readability_metrics.py
 │       ├── splitmarks.py
 │       ├── requirements.txt
