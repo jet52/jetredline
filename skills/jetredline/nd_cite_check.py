@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-ND Citation Checker — parses North Dakota legal citations, resolves local
-files, and builds verification URLs.
+Citation Checker — parses legal citations (ND, federal, state), resolves
+local files, and builds verification URLs.
 
 Usage:
     python3 nd_cite_check.py --file opinion.md
     echo "N.D.C.C. § 12.1-32-01" | python3 nd_cite_check.py
+    echo "42 U.S.C. § 1983" | python3 nd_cite_check.py
 
 Output: JSON array of citation records with local paths and URLs.
 """
@@ -24,7 +25,9 @@ from pathlib import Path
 _ROMAN_MAP = {
     "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7,
     "VIII": 8, "IX": 9, "X": 10, "XI": 11, "XII": 12, "XIII": 13,
-    "XIV": 14, "XV": 15, "XVI": 16,
+    "XIV": 14, "XV": 15, "XVI": 16, "XVII": 17, "XVIII": 18, "XIX": 19,
+    "XX": 20, "XXI": 21, "XXII": 22, "XXIII": 23, "XXIV": 24, "XXV": 25,
+    "XXVI": 26, "XXVII": 27,
 }
 
 
@@ -99,7 +102,36 @@ def url_ndac(p1, p2, p3):
 
 
 def url_nd_case(year, number):
-    return f"https://www.courtlistener.com/c/nd/{year}/{number}"
+    return f"https://www.ndcourts.gov/supreme-court/opinion/{year}ND{number}"
+
+
+def url_us_const_article(article_roman, section=None):
+    url = f"https://constitutioncenter.org/the-constitution/articles/article-{article_roman}"
+    if section:
+        url += f"#article-section-{section}"
+    return url
+
+
+def url_us_const_amendment(amendment_roman):
+    return f"https://constitutioncenter.org/the-constitution/amendments/amendment-{amendment_roman}"
+
+
+def url_usc(title, section):
+    return f"https://www.govinfo.gov/link/uscode/{title}/{section}?link-type=html"
+
+
+def url_cfr(title, section):
+    return f"https://www.ecfr.gov/current/title-{title}/section-{section}"
+
+
+def url_us_supreme_court(volume, page):
+    return f"https://supreme.justia.com/cases/federal/us/{volume}/{page}"
+
+
+def url_court_listener(reporter, volume, page):
+    from urllib.parse import quote
+    encoded = quote(reporter, safe="")
+    return f"https://www.courtlistener.com/c/{encoded}/{volume}/{page}/"
 
 
 # ---------------------------------------------------------------------------
@@ -148,29 +180,32 @@ def resolve_local(cite_type, parts, refs_dir):
             return str(p2_flat), True
         return str(p), False
 
-    # Court rules — no local copy
+    if cite_type == "nd_court_rule":
+        rule_set = parts.get("rule_set", "")
+        rule_parts = parts.get("parts", [])
+        if rule_set and rule_parts:
+            if rule_set == "ndstdsimposinglawyersanctions":
+                filename = f"rule-{'-'.join(rule_parts)}.md"
+            elif rule_set == "ndcodejudconduct":
+                # parts already include "canon-" prefix
+                filename = f"rule-{rule_parts[0]}.md"
+            elif rule_set == "rltdpracticeoflawbylawstudents":
+                # Roman → Arabic conversion for student practice rules
+                arabic = roman_to_arabic(rule_parts[0])
+                filename = f"rule-{arabic}.md" if arabic else f"rule-{rule_parts[0]}.md"
+            else:
+                filename = f"rule-{'.'.join(rule_parts)}.md"
+            p = refs / "rule" / rule_set / filename
+            return str(p), p.exists()
+        return None, False
+
+    # Non-local types
     return None, False
 
 
 # ---------------------------------------------------------------------------
 # Citation matchers
 # ---------------------------------------------------------------------------
-
-def match_nd_case(text):
-    """Match '2024 ND 42' style ND Supreme Court citations."""
-    m = re.search(r'([12]\d{3})\s+ND\s+(\d{1,3})', text)
-    if not m:
-        return None
-    year, number = m.group(1), m.group(2)
-    return {
-        "cite_text": m.group(0),
-        "cite_type": "nd_case",
-        "normalized": f"{year} ND {number}",
-        "parts": {"year": year, "number": number},
-        "url": url_nd_case(year, number),
-        "search_hint": f"{year}ND{number}",
-    }
-
 
 def match_ndcc(text):
     """Match NDCC section citations like 'N.D.C.C. § 12.1-32-01'."""
@@ -256,6 +291,79 @@ def match_ndcc_chapter(text):
         "url": url,
         "search_hint": f"{title_full}-{chapter_full}",
     }
+
+
+def match_us_constitution(text):
+    """Match US Constitution citations."""
+    # "U.S. Const. art. III, § 2"
+    m = re.search(
+        r'U(?:nited)?[\s.]*S(?:tates)?[\s.]*Const(?:itution)?[.\s]*'
+        r'(?:art\.|[Aa]rticle)\s*([IVX]+)[,\s]*(?:\u00a7|§|[Ss]ec(?:tion)?\.?)\s*(\d+)',
+        text, re.IGNORECASE
+    )
+    if m:
+        art, sec = m.group(1).upper(), m.group(2)
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "us_const_article",
+            "normalized": f"U.S. Const. art. {art}, \u00a7 {sec}",
+            "parts": {"article": art, "section": sec},
+            "url": url_us_const_article(art, sec),
+            "search_hint": f"article {art} section {sec}",
+        }
+
+    # "Article III of the U.S. Constitution"
+    m = re.search(
+        r'[Aa]rticle\s+([IVX]+)\s+of\s+the\s+'
+        r'U(?:nited)?[\s.]*S(?:tates)?[\s.]*Const(?:itution)?',
+        text, re.IGNORECASE
+    )
+    if m:
+        art = m.group(1).upper()
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "us_const_article",
+            "normalized": f"U.S. Const. art. {art}",
+            "parts": {"article": art},
+            "url": url_us_const_article(art),
+            "search_hint": f"article {art}",
+        }
+
+    # "U.S. Const. amend. XIV"
+    m = re.search(
+        r'U(?:nited)?[\s.]*S(?:tates)?[\s.]*Const(?:itution)?[.\s]*'
+        r'(?:amend\.|[Aa]mendment)\s*([IVX]+)',
+        text, re.IGNORECASE
+    )
+    if m:
+        amend = m.group(1).upper()
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "us_const_amendment",
+            "normalized": f"U.S. Const. amend. {amend}",
+            "parts": {"amendment": amend},
+            "url": url_us_const_amendment(amend),
+            "search_hint": f"amendment {amend}",
+        }
+
+    # "Amendment XIV to the U.S. Constitution"
+    m = re.search(
+        r'[Aa]mendment\s+([IVX]+)\s+to\s+the\s+'
+        r'U(?:nited)?[\s.]*S(?:tates)?[\s.]*Const(?:itution)?',
+        text, re.IGNORECASE
+    )
+    if m:
+        amend = m.group(1).upper()
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "us_const_amendment",
+            "normalized": f"U.S. Const. amend. {amend}",
+            "parts": {"amendment": amend},
+            "url": url_us_const_amendment(amend),
+            "search_hint": f"amendment {amend}",
+        }
+
+    return None
 
 
 def match_nd_constitution(text):
@@ -762,29 +870,325 @@ def match_ndac(text):
     return None
 
 
+def match_federal_statutes(text):
+    """Match USC, CFR, and U.S. Reports citations.
+
+    Order matters: USC before U.S. Reports to avoid ambiguity.
+    """
+    # USC: "42 U.S.C. § 1983"
+    m = re.search(
+        r'(\d+)\s*U[\s.]*S[\s.]*C(?:ode)?[,.\s]*(?:\u00a7|§|[Ss]ec(?:tion)?\.?)\s*(\d+)',
+        text, re.IGNORECASE
+    )
+    if m:
+        title, section = m.group(1), m.group(2)
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "usc",
+            "normalized": f"{title} U.S.C. \u00a7 {section}",
+            "parts": {"title": title, "section": section},
+            "url": url_usc(title, section),
+            "search_hint": f"{title} USC {section}",
+        }
+
+    # CFR: "29 C.F.R. § 1910.1200"
+    m = re.search(
+        r'(\d+)\s*C[\s.]*F[\s.]*R(?:eg)?[,.\s]*(?:\u00a7|§|[Ss]ec(?:tion)?\.?)?\s*([.\d]+)',
+        text, re.IGNORECASE
+    )
+    if m:
+        title, section = m.group(1), m.group(2)
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "cfr",
+            "normalized": f"{title} C.F.R. \u00a7 {section}",
+            "parts": {"title": title, "section": section},
+            "url": url_cfr(title, section),
+            "search_hint": f"{title} CFR {section}",
+        }
+
+    # U.S. Reports: "505 U.S. 377"
+    m = re.search(r'(\d+)\s+U\.S\.\s+(\d+)', text)
+    if m:
+        volume, page = m.group(1), m.group(2)
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "us_supreme_court",
+            "normalized": f"{volume} U.S. {page}",
+            "parts": {"volume": volume, "page": page},
+            "url": url_us_supreme_court(volume, page),
+            "search_hint": f"{volume} US {page}",
+        }
+
+    return None
+
+
+def match_state_cases(text):
+    """Match state case citations — ND neutral, other state neutrals, regional/state reporters."""
+
+    # ND neutral: "2024 ND 42"
+    m = re.search(r'([12]\d{3})\s+ND\s+(\d{1,3})', text)
+    if m:
+        year, number = m.group(1), m.group(2)
+        return {
+            "cite_text": m.group(0),
+            "cite_type": "nd_case",
+            "normalized": f"{year} ND {number}",
+            "parts": {"year": year, "number": number},
+            "url": url_nd_case(year, number),
+            "search_hint": f"{year}ND{number}",
+        }
+
+    # Ohio hyphenated: "2018-Ohio-3237"
+    m = re.search(r'(\d{4})-Ohio-(\d+)', text)
+    if m:
+        return _state_case_result(m, "Ohio", f"{m.group(1)}-Ohio-{m.group(2)}")
+
+    # NM neutral: "2009-NMSC-006"
+    m = re.search(r'(\d{4})-(NM(?:SC|CA))-(\d+)', text)
+    if m:
+        court = m.group(2)
+        return _state_case_result(m, court,
+                                  f"{m.group(1)}-{court}-{m.group(3)}")
+
+    # Illinois neutral: "2019 IL 123456"
+    m = re.search(r'(\d{4})\s+IL\s+(\d+)', text)
+    if m:
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "state_neutral",
+            "normalized": f"{m.group(1)} IL {m.group(2)}",
+            "parts": {"volume": m.group(1), "page": m.group(2)},
+            "url": url_court_listener("IL", m.group(1), m.group(2)),
+            "search_hint": f"{m.group(1)} IL {m.group(2)}",
+        }
+
+    # Standard state neutrals: "2015 Ark. 520", "2024 CO 42", etc.
+    m = re.search(
+        r'([12]\d{3})\s+(Ark\.|CO|ME|MT|N\.H\.|OK|S\.D\.|UT|VT|WI|WY|AZ)\s+(\d+)',
+        text
+    )
+    if m:
+        reporter = m.group(2)
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "state_neutral",
+            "normalized": f"{m.group(1)} {reporter} {m.group(3)}",
+            "parts": {"volume": m.group(1), "page": m.group(3)},
+            "url": url_court_listener(reporter, m.group(1), m.group(3)),
+            "search_hint": f"{m.group(1)} {reporter} {m.group(3)}",
+        }
+
+    # Regional reporters: N.W.2d/3d, A.2d/3d, N.E.2d/3d, S.E.2d, So.2d/3d, S.W.2d/3d, P.2d/3d
+    _regional = [
+        (r'(\d+)\s+N\.W\.\s?([23]d)\s+(\d+)', lambda m: f"N.W.{m.group(2)}"),
+        (r'(\d+)\s+A\.([23]d)\s+(\d+)',        lambda m: f"A.{m.group(2)}"),
+        (r'(\d+)\s+N\.E\.\s?([23]d)\s+(\d+)',  lambda m: f"N.E.{m.group(2)}"),
+        (r'(\d+)\s+S\.E\.\s?(?:(2d)\s)?(\d+)', lambda m: "S.E.2d" if m.group(2) else "S.E."),
+        (r'(\d+)\s+So\.\s?(?:([23]d)\s)?(\d+)',
+         lambda m: f"So. {m.group(2)}" if m.group(2) else "So."),
+        (r'(\d+)\s+S\.W\.\s?(?:([23]d)\s)?(\d+)',
+         lambda m: f"S.W.{m.group(2)}" if m.group(2) else "S.W."),
+        (r'(\d+)\s+P\.([23]d)\s+(\d+)',        lambda m: f"P.{m.group(2)}"),
+    ]
+    for pat, edition_fn in _regional:
+        m = re.search(pat, text)
+        if m:
+            edition = edition_fn(m)
+            vol, pg = m.group(1), m.group(3)
+            return {
+                "cite_text": m.group(0).strip(),
+                "cite_type": "state_case",
+                "normalized": f"{vol} {edition} {pg}",
+                "parts": {"volume": vol, "page": pg, "reporter": edition},
+                "url": url_court_listener(edition, vol, pg),
+                "search_hint": f"{vol} {edition} {pg}",
+            }
+
+    # California reporters
+    m = re.search(r'(\d+)\s+Cal\.\s?(?:(2d|3d|4th|5th)\s)?(\d+)', text)
+    if m:
+        suffix = m.group(2)
+        edition = f"Cal. {suffix}" if suffix else "Cal."
+        return _vol_reporter_page(m, edition)
+
+    # Cal. Rptr.
+    m = re.search(r'(\d+)\s+Cal\.\s?Rptr\.\s?(?:(2d|3d)\s)?(\d+)', text)
+    if m:
+        suffix = m.group(2)
+        edition = f"Cal. Rptr. {suffix}" if suffix else "Cal. Rptr."
+        return _vol_reporter_page(m, edition)
+
+    # N.Y. reporters
+    m = re.search(r'(\d+)\s+N\.Y\.(?:([23]d)\s)?(\d+)', text)
+    if m:
+        suffix = m.group(2)
+        edition = f"N.Y.{suffix}" if suffix else "N.Y."
+        return _vol_reporter_page(m, edition)
+
+    # N.Y.S. reporters
+    m = re.search(r'(\d+)\s+N\.Y\.S\.(?:([23]d)\s)?(\d+)', text)
+    if m:
+        suffix = m.group(2)
+        edition = f"N.Y.S.{suffix}" if suffix else "N.Y.S."
+        return _vol_reporter_page(m, edition)
+
+    # Ohio St.
+    m = re.search(r'(\d+)\s+Ohio\s+St\.\s?(?:([23]d)\s)?(\d+)', text)
+    if m:
+        suffix = m.group(2)
+        edition = f"Ohio St. {suffix}" if suffix else "Ohio St."
+        return _vol_reporter_page(m, edition)
+
+    # Wn.2d / Wn. App.
+    m = re.search(r'(\d+)\s+Wn\.\s?(2d|App\.)\s+(\d+)', text)
+    if m:
+        edition = f"Wn. {m.group(2)}"
+        return _vol_reporter_page(m, edition)
+
+    # Generic state reporters
+    m = re.search(
+        r'(\d+)\s+(Conn\.|Ga\.|Haw\.|Kan\.|Mass\.|Md\.|Mich\.|N\.C\.|N\.J\.|Neb\.|Or\.|Pa\.|S\.C\.|Va\.)\s+(\d+)',
+        text
+    )
+    if m:
+        return _vol_reporter_page(m, m.group(2))
+
+    # First-series regional: N.W., N.E., A.
+    for pat, edition in [
+        (r'(\d+)\s+N\.W\.\s+(\d+)', "N.W."),
+        (r'(\d+)\s+N\.E\.\s+(\d+)', "N.E."),
+        (r'(\d+)\s+A\.\s+(\d+)',     "A."),
+    ]:
+        m = re.search(pat, text)
+        if m:
+            vol, pg = m.group(1), m.group(2)
+            return {
+                "cite_text": m.group(0).strip(),
+                "cite_type": "state_case",
+                "normalized": f"{vol} {edition} {pg}",
+                "parts": {"volume": vol, "page": pg, "reporter": edition},
+                "url": url_court_listener(edition, vol, pg),
+                "search_hint": f"{vol} {edition} {pg}",
+            }
+
+    # Malformed NW2d fallback: "520 NW2d 808", "520 NW.2d 808"
+    m = re.search(r'(\d+)\s+(NW\.?\s?2d|N\.W2d)\s+(\d+)', text, re.IGNORECASE)
+    if m:
+        vol, pg = m.group(1), m.group(3)
+        return {
+            "cite_text": m.group(0).strip(),
+            "cite_type": "state_case",
+            "normalized": f"{vol} N.W.2d {pg}",
+            "parts": {"volume": vol, "page": pg, "reporter": "N.W.2d"},
+            "url": url_court_listener("N.W.2d", vol, pg),
+            "search_hint": f"{vol} N.W.2d {pg}",
+        }
+
+    return None
+
+
+def _state_case_result(m, reporter, description):
+    """Helper for state neutral citations with year-reporter-number format."""
+    return {
+        "cite_text": m.group(0).strip(),
+        "cite_type": "state_neutral",
+        "normalized": description,
+        "parts": {"volume": m.group(1), "page": m.group(len(m.groups()))},
+        "url": url_court_listener(reporter, m.group(1), m.group(len(m.groups()))),
+        "search_hint": description,
+    }
+
+
+def _vol_reporter_page(m, edition):
+    """Helper for volume-reporter-page state case citations."""
+    vol, pg = m.group(1), m.group(len(m.groups()))
+    return {
+        "cite_text": m.group(0).strip(),
+        "cite_type": "state_case",
+        "normalized": f"{vol} {edition} {pg}",
+        "parts": {"volume": vol, "page": pg, "reporter": edition},
+        "url": url_court_listener(edition, vol, pg),
+        "search_hint": f"{vol} {edition} {pg}",
+    }
+
+
+def match_federal_reporters(text):
+    """Match federal reporter citations — all resolve to CourtListener."""
+    _reporters = [
+        # F., F.2d, F.3d, F.4th
+        (r'(\d+)\s+F\.\s?(?:(2d|3d|4th)\s)?(\d+)',
+         lambda m: f"F.{m.group(2)}" if m.group(2) else "F."),
+        # S. Ct.
+        (r'(\d+)\s+S\.\s?Ct\.\s+(\d+)',
+         lambda m: "S. Ct."),
+        # F. Supp., F. Supp. 2d, F. Supp. 3d
+        (r'(\d+)\s+F\.\s?Supp\.\s?(?:(2d|3d)\s)?(\d+)',
+         lambda m: f"F. Supp. {m.group(2)}" if m.group(2) else "F. Supp."),
+        # L. Ed., L. Ed. 2d
+        (r'(\d+)\s+L\.\s?Ed\.\s?(?:(2d)\s)?(\d+)',
+         lambda m: "L. Ed. 2d" if m.group(2) else "L. Ed."),
+        # B.R.
+        (r'(\d+)\s+B\.\s?R\.\s+(\d+)', lambda m: "B.R."),
+        # F.R.D.
+        (r'(\d+)\s+F\.\s?R\.\s?D\.\s+(\d+)', lambda m: "F.R.D."),
+        # Fed. Cl.
+        (r'(\d+)\s+Fed\.\s?Cl\.\s+(\d+)', lambda m: "Fed. Cl."),
+        # M.J.
+        (r'(\d+)\s+M\.\s?J\.\s+(\d+)', lambda m: "M.J."),
+        # Vet. App.
+        (r'(\d+)\s+Vet\.\s?App\.\s+(\d+)', lambda m: "Vet. App."),
+        # T.C.
+        (r'(\d+)\s+T\.\s?C\.\s+(\d+)', lambda m: "T.C."),
+        # F. App'x
+        (r"(\d+)\s+F\.\s?App[\u2019']x\s+(\d+)", lambda m: "F. App'x"),
+    ]
+    for pat, edition_fn in _reporters:
+        m = re.search(pat, text)
+        if m:
+            edition = edition_fn(m)
+            vol = m.group(1)
+            pg = m.group(len(m.groups()))
+            return {
+                "cite_text": m.group(0).strip(),
+                "cite_type": "federal_reporter",
+                "normalized": f"{vol} {edition} {pg}",
+                "parts": {"volume": vol, "page": pg, "reporter": edition},
+                "url": url_court_listener(edition, vol, pg),
+                "search_hint": f"{vol} {edition} {pg}",
+            }
+
+    return None
+
+
 # ---------------------------------------------------------------------------
-# Scanner — find all ND citations in opinion text
+# Scanner — find all citations in opinion text
 # ---------------------------------------------------------------------------
 
-# Matchers in priority order (ND-specific only)
+# Matchers in priority order
 _MATCHERS = [
+    match_us_constitution,
     match_nd_constitution,
     match_ndcc,
     match_ndcc_chapter,
     match_nd_court_rules,
     match_ndac,
-    match_nd_case,
+    match_federal_statutes,
+    match_state_cases,
+    match_federal_reporters,
 ]
 
 
+_CASE_TYPES = {"nd_case", "state_case", "state_neutral", "us_supreme_court",
+                "federal_reporter"}
+
+
 def scan_opinion(text, refs_dir="~/refs"):
-    """Scan opinion text for all ND citations. Returns deduplicated list."""
+    """Scan opinion text for all citations. Returns deduplicated list."""
     results = []
     seen = set()
 
     for matcher in _MATCHERS:
-        # Re-scan full text for each matcher to catch all occurrences
-        # We use a sliding window to find multiple matches
         pos = 0
         while pos < len(text):
             chunk = text[pos:]
@@ -796,17 +1200,22 @@ def scan_opinion(text, refs_dir="~/refs"):
             if normalized not in seen:
                 seen.add(normalized)
 
-                # Resolve local path
                 cite_type = result["cite_type"]
                 parts = result.get("parts", {})
                 local_path, local_exists = resolve_local(cite_type, parts, refs_dir)
 
+                # Track absolute position in original text for parallel cite detection
+                cite_text = result["cite_text"]
+                match_start_in_chunk = chunk.find(cite_text)
+                abs_start = pos + max(match_start_in_chunk, 0)
+
                 entry = {
-                    "cite_text": result["cite_text"],
+                    "cite_text": cite_text,
                     "cite_type": cite_type,
                     "normalized": normalized,
                     "url": result["url"],
                     "search_hint": result["search_hint"],
+                    "_abs_pos": abs_start,
                 }
                 if local_path:
                     entry["local_path"] = local_path
@@ -817,12 +1226,33 @@ def scan_opinion(text, refs_dir="~/refs"):
 
                 results.append(entry)
 
-            # Advance past this match
             match_start = chunk.find(result["cite_text"])
             if match_start >= 0:
                 pos += match_start + len(result["cite_text"])
             else:
                 pos += 1
+
+    # Parallel citation detection: find adjacent case citations separated by ", " or "; "
+    case_results = [r for r in results if r["cite_type"] in _CASE_TYPES]
+    case_results.sort(key=lambda r: r["_abs_pos"])
+    for i in range(len(case_results) - 1):
+        a, b = case_results[i], case_results[i + 1]
+        a_end = a["_abs_pos"] + len(a["cite_text"])
+        gap = text[a_end:b["_abs_pos"]]
+        if gap.strip() in (",", ";"):
+            a["parallel_cite"] = b["normalized"]
+            b["parallel_cite"] = a["normalized"]
+            # Mark preferred based on local availability
+            a_local = a.get("local_exists", False)
+            b_local = b.get("local_exists", False)
+            if a_local:
+                a["preferred"] = True
+            if b_local:
+                b["preferred"] = True
+
+    # Strip internal position tracking
+    for r in results:
+        r.pop("_abs_pos", None)
 
     return results
 
@@ -833,9 +1263,9 @@ def scan_opinion(text, refs_dir="~/refs"):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Parse ND legal citations, resolve local files, build URLs."
+        description="Parse legal citations, resolve local files, build URLs."
     )
-    parser.add_argument("--file", "-f", help="Scan a file for all ND citations")
+    parser.add_argument("--file", "-f", help="Scan a file for all citations")
     parser.add_argument("--refs-dir", default="~/refs",
                         help="Override refs directory (default: ~/refs)")
     parser.add_argument("--json", action="store_true", default=True,
