@@ -702,7 +702,9 @@ Use the docx skill to produce a .docx with:
 Do not use `--force` with pack.py. The fixup script resolves issues that previously required it. If validation fails, run `ooxml_validate.py` to diagnose.
 
 ### Analysis document (if requested)
-Produce a document structured as below. The **Substantive Concerns** section varies by `DOC_TYPE`.
+Produce a document structured as below, then **save it to a markdown file** in the working directory (not the temp directory). Use the naming pattern `<original-filename>-ANALYSIS.md` (e.g., `Estate-of-Kish_Opinion-ANALYSIS.md`). This ensures the analysis survives context compression and can be opened after the session.
+
+The **Substantive Concerns** section varies by `DOC_TYPE`.
 
 **If DOC_TYPE is `opinion`**, place the Case Highlight first:
 
