@@ -1,3 +1,4 @@
 defusedxml
+jetcite @ file:///Users/jerod/code/jetcite
 pikepdf
 textstat
