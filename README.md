@@ -2,7 +2,11 @@
 
 Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court).
 
-The editing pipeline runs seven passes:
+## Caution: Privacy Settings Before Use
+
+<img width="541" height="137" alt="Screenshot 2026-03-07 at 15 31 25" src="https://github.com/user-attachments/assets/b552ef6a-0e66-41f1-91b8-21b02e49b76d" />
+
+## The editing pipeline runs seven passes:
 
 1. **Jurisdictional check** — verifies timeliness of appeal, procedural posture, and standard of review against the ND Rules of Appellate Procedure
 2. **Style and grammar** — applies Redbook rules and plain-language preferences; produces structured edit list
