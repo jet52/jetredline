@@ -49,11 +49,13 @@ Exit codes:
 """
 
 import argparse
+import html
 import json
 import os
 import random
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -287,20 +289,23 @@ def find_paragraph_by_number(dom, para_num):
 def find_paragraph_containing(dom, text, para_num=None):
     """Find a paragraph containing the given text.
 
+    Uses normalized matching (NBSP→space, NFC, HTML entity decoding)
+    to handle mismatches between edit JSON and extracted XML text.
     If para_num is provided, tries that paragraph first, then scans all.
     """
     body = dom.getElementsByTagName("w:body")
     if not body:
         return None
     paragraphs = list(body[0].getElementsByTagName("w:p"))
+    norm_text = _normalize_for_search(text)
 
     if para_num is not None and 1 <= para_num <= len(paragraphs):
         p = paragraphs[para_num - 1]
-        if text in get_paragraph_text(p):
+        if norm_text in _normalize_for_search(get_paragraph_text(p)):
             return p
 
     for p in paragraphs:
-        if text in get_paragraph_text(p):
+        if norm_text in _normalize_for_search(get_paragraph_text(p)):
             return p
     return None
 
@@ -317,6 +322,24 @@ def _escape_xml(text):
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
+
+
+def _normalize_for_search(text):
+    """Normalize text for fuzzy matching.
+
+    Handles mismatches between edit JSON text and extracted XML text:
+    - HTML entities (&#x2019; → ') — Claude may carry these from raw XML
+    - NFC normalization — compose combining sequences
+    - Non-breaking spaces (U+00A0, U+202F) → regular space
+
+    The normalization is 1:1 for NBSP→space, so character offsets remain
+    valid for mapping back to the original un-normalized text.
+    """
+    text = html.unescape(text)
+    text = unicodedata.normalize("NFC", text)
+    text = text.replace("\xa0", " ")    # NBSP → space
+    text = text.replace("\u202f", " ")  # narrow NBSP → space
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -642,14 +665,22 @@ def apply_replace(dom, edit, edit_index, author, timestamp, next_id,
             offset += len(rt)
 
     full_text = "".join(item[1] for item in text_map)
+
+    # Try exact match first, then normalized match for NBSP/entity mismatches
     match_start = full_text.find(old_text)
-    if match_start == -1:
-        return {
-            "edit_index": edit_index,
-            "status": "error",
-            "message": f"Text not found in paragraph runs: {old_text[:80]}..."
-        }
-    match_end = match_start + len(old_text)
+    if match_start != -1:
+        match_end = match_start + len(old_text)
+    else:
+        norm_full = _normalize_for_search(full_text)
+        norm_old = _normalize_for_search(old_text)
+        match_start = norm_full.find(norm_old)
+        if match_start == -1:
+            return {
+                "edit_index": edit_index,
+                "status": "error",
+                "message": f"Text not found in paragraph runs: {old_text[:80]}..."
+            }
+        match_end = match_start + len(norm_old)
 
     # Identify affected runs with their overlap portions
     affected_runs = []
@@ -782,11 +813,12 @@ def apply_comment(dom, edit, edit_index, next_id, comment_writer):
             ),
         }
 
-    # Find the run containing the anchor text
+    # Find the run containing the anchor text (with normalized matching)
     anchor_run = None
     if anchor_text:
+        norm_anchor = _normalize_for_search(anchor_text)
         for run in para.getElementsByTagName("w:r"):
-            if anchor_text in get_run_text(run):
+            if norm_anchor in _normalize_for_search(get_run_text(run)):
                 anchor_run = run
                 break
 

@@ -1,5 +1,6 @@
 ---
 name: jetredline
+version: 3.2.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -61,34 +62,61 @@ Use `$VENV_PYTHON`, `$SOFFICE`, and `$SOFFICE_DIR` in all subsequent commands in
 - Bash (macOS/Linux/Git Bash): `VAR=val command`
 - PowerShell (Windows): `$env:VAR='val'; command`
 
-## Fixed Paths — Do Not Search
+## Skill and Docx Plugin Path Discovery
 
-**Web mode:** Skip the next five sections (Fixed Paths, Python Environment, Node.js Environment, LibreOffice, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
+**Web mode:** Skip the next five sections (Skill/Docx Paths, Python Environment, Node.js Environment, LibreOffice, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
 
-All paths are hardcoded. **Do not run `ls`, `find`, or any discovery commands to locate them.**
+At the start of each CLI session, detect the skill directory and docx plugin layout. The docx plugin has different directory structures in Claude Code vs. Cowork.
+
+```bash
+# Detect skill directory
+if [ -d "$HOME/.claude/skills/jetredline" ]; then
+  SKILL_DIR="$HOME/.claude/skills/jetredline"
+elif [ -d "/mnt/.skills/skills/jetredline" ]; then
+  SKILL_DIR="/mnt/.skills/skills/jetredline"
+fi
+
+# Detect docx plugin location and layout
+if [ -d "/mnt/.skills/skills/docx" ]; then
+  DOCX_SKILL="/mnt/.skills/skills/docx"
+  UNPACK_SCRIPT="$DOCX_SKILL/scripts/office/unpack.py"
+  PACK_SCRIPT="$DOCX_SKILL/scripts/office/pack.py"
+elif [ -d "$HOME/.claude/plugins/marketplaces/anthropic-agent-skills/skills/docx" ]; then
+  DOCX_SKILL="$HOME/.claude/plugins/marketplaces/anthropic-agent-skills/skills/docx"
+  UNPACK_SCRIPT="$DOCX_SKILL/scripts/office/unpack.py"
+  PACK_SCRIPT="$DOCX_SKILL/scripts/office/pack.py"
+else
+  # Claude Code plugin cache (hash may vary)
+  DOCX_SKILL=$(ls -d "$HOME/.claude/plugins/cache/anthropic-agent-skills/document-skills"/*/skills/docx 2>/dev/null | head -1)
+  UNPACK_SCRIPT="$DOCX_SKILL/ooxml/scripts/unpack.py"
+  PACK_SCRIPT="$DOCX_SKILL/ooxml/scripts/pack.py"
+fi
+```
+
+Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all subsequent commands.
 
 | Resource | Path |
 |----------|------|
-| This skill | `~/.claude/skills/jetredline/` |
-| Docx skill (plugin) | `~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/` |
-| Venv python | `$VENV_PYTHON` (macOS/Linux: `.venv/bin/python`, Windows: `.venv/Scripts/python.exe`) |
-| splitmarks | `~/.claude/skills/jetredline/splitmarks.py` |
-| Node modules | `~/.claude/skills/jetredline/node_modules/` |
-| soffice (LibreOffice) | `$SOFFICE` (macOS: `/Applications/LibreOffice.app/Contents/MacOS/soffice`, Windows: auto-detected, Linux: `soffice`) |
+| This skill | `$SKILL_DIR` |
+| Docx skill | `$DOCX_SKILL` (detected above) |
+| Unpack script | `$UNPACK_SCRIPT` (detected above) |
+| Pack script | `$PACK_SCRIPT` (detected above) |
+| Venv python | `$VENV_PYTHON` (see Python Environment below) |
+| splitmarks | `$SKILL_DIR/splitmarks.py` |
+| Node modules | `$SKILL_DIR/node_modules/` |
+| soffice (LibreOffice) | `$SOFFICE` (macOS: `/Applications/LibreOffice.app/Contents/MacOS/soffice`, Linux: `soffice`) |
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
-| ND citation checker | `~/.claude/skills/jetredline/nd_cite_check.py` |
-| Readability metrics | `~/.claude/skills/jetredline/readability_metrics.py` |
+| ND citation checker | `$SKILL_DIR/nd_cite_check.py` |
+| Readability metrics | `$SKILL_DIR/readability_metrics.py` |
 | ND legal refs | `~/refs/` (opinions, NDCC, constitution, NDAC) |
-| OOXML fixup | `~/.claude/skills/jetredline/ooxml_fixup.py` |
-| OOXML validate | `~/.claude/skills/jetredline/ooxml_validate.py` |
-| Citation review | `~/.claude/skills/jetredline/cite_review.py` |
-| Batch edit helper | `~/.claude/skills/jetredline/apply_edits.py` |
+| OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
+| OOXML validate | `$SKILL_DIR/ooxml_validate.py` |
+| Citation review | `$SKILL_DIR/cite_review.py` |
+| Batch edit helper | `$SKILL_DIR/apply_edits.py` |
 
 The opinions directory contains markdown copies of published ND Supreme Court opinions organized as `<year>/<year>ND<number>.md` (e.g., `2022/2022ND210.md` for *Feickert v. Feickert*, 2022 ND 210). Paragraphs are marked `[¶N]`. Use `$OPINIONS_MD` in commands; fall back to the hardcoded path if the variable is unset.
 
 The `~/refs/` directory contains a local repository of ND legal materials in markdown format: opinions (`opin/markdown/`), NDCC (`ndcc/`), ND Constitution (`cnst/`), and NDAC (`ndac/`). The citation checker resolves these paths automatically.
-
-Use the docx skill path as PYTHONPATH and script root for all docx operations (unpack.py, pack.py, document.py, ooxml.md, etc.).
 
 ## Python Environment
 
@@ -97,9 +125,24 @@ This skill has a persistent virtual environment. **Always use this venv python f
 - **Pre-installed packages:** `defusedxml`, `pikepdf`, `textstat`
 - **Bundled scripts:** `splitmarks.py` (vendored; no install needed — `pikepdf` satisfies its only dependency)
 
-If the venv does not exist or a package is missing, create/repair it:
+Set `$VENV_PYTHON` with a fallback for read-only filesystems (Cowork):
+
 ```bash
-uv venv ~/.claude/skills/jetredline/.venv
+VENV_DIR="$SKILL_DIR/.venv"
+if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
+  # Skill dir is read-only (Cowork) — use session-local venv
+  VENV_DIR="/tmp/jetredline-venv"
+  if [ ! -d "$VENV_DIR" ]; then
+    python3 -m venv "$VENV_DIR"
+    "$VENV_DIR/bin/pip" install defusedxml pikepdf textstat -q
+  fi
+fi
+VENV_PYTHON="$VENV_DIR/bin/python"
+```
+
+If the venv does not exist or a package is missing in a writable environment, create/repair it:
+```bash
+uv venv "$SKILL_DIR/.venv"
 uv pip install defusedxml pikepdf textstat --python $VENV_PYTHON
 ```
 
@@ -109,9 +152,15 @@ uv pip install defusedxml pikepdf textstat --python $VENV_PYTHON
 
 **Step 0 temp-dir setup (run once):**
 ```bash
-python3 -c "import uuid,os; d=os.path.join(os.getcwd(),'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)"
+# Use /tmp if cwd is under a restricted mount (Cowork), otherwise use cwd
+if [[ "$(pwd)" == /mnt/* ]]; then
+  TMPBASE="/tmp"
+else
+  TMPBASE="$(pwd)"
+fi
+python3 -c "import uuid,os,sys; d=os.path.join(sys.argv[1],'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)" "$TMPBASE"
 ```
-This generates a UUID-based unique directory name (e.g., `.tmp-a1b2c3d4e5f6`), preventing collisions between concurrent sessions. Uses `python3` directly — no shell command substitution needed.
+This generates a UUID-based unique directory name (e.g., `.tmp-a1b2c3d4e5f6`), preventing collisions between concurrent sessions. Uses `python3` directly — no shell command substitution needed. In Cowork, temp files go to `/tmp/` to avoid permission issues on mounted filesystems.
 
 **Capture the output** (the absolute path printed by `echo`) and use it as a literal string in all subsequent commands. For example, if the output is `/path/to/cases/smith/.tmp-a1b2c3d4e5f6`, then every later command uses:
 ```
@@ -130,7 +179,7 @@ NODE_PATH=~/.claude/skills/jetredline/node_modules node script.js
 
 When running docx skill scripts (always include TMPDIR — use the literal absolute path from Step 0):
 ```bash
-TMPDIR=<TMPDIR> PYTHONPATH=~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/ $VENV_PYTHON script.py
+TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_SKILL $VENV_PYTHON script.py
 ```
 where `<TMPDIR>` is the literal path captured in Step 0 (e.g., `/path/to/cases/smith/.tmp-apple-walrus-quilt`).
 
@@ -139,7 +188,7 @@ where `<TMPDIR>` is the literal path captured in Step 0 (e.g., `/path/to/cases/s
 `soffice` may not be on PATH by default. The docx skill's `pack.py` uses it for validation. **Always prepend the LibreOffice path (via `$SOFFICE`) and set TMPDIR when running pack.py or any command that invokes soffice:**
 
 ```bash
-TMPDIR=<TMPDIR> PATH="$SOFFICE_DIR:$PATH" PYTHONPATH=~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/ $VENV_PYTHON ~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/ooxml/scripts/pack.py <input_directory> <output.docx>
+TMPDIR=<TMPDIR> PATH="$SOFFICE_DIR:$PATH" PYTHONPATH=$DOCX_SKILL $VENV_PYTHON $PACK_SCRIPT <input_directory> <output.docx>
 ```
 where `<TMPDIR>` is the literal absolute path from Step 0. `$SOFFICE_DIR` was set in Platform Detection above.
 
@@ -157,7 +206,8 @@ Also use this PATH prefix (or invoke `$SOFFICE` directly) for document-to-image 
 
 **First, create the temp directory** with a unique random name:
 ```bash
-python3 -c "import uuid,os; d=os.path.join(os.getcwd(),'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)"
+if [[ "$(pwd)" == /mnt/* ]]; then TMPBASE="/tmp"; else TMPBASE="$(pwd)"; fi
+python3 -c "import uuid,os,sys; d=os.path.join(sys.argv[1],'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)" "$TMPBASE"
 ```
 **Capture the absolute path** printed by this command (e.g., `/path/to/cases/smith/.tmp-a1b2c3d4e5f6`). Use this literal path as `TMPDIR=<path>` in all subsequent commands — never use `$(pwd)` or other command substitution for TMPDIR.
 
@@ -223,7 +273,7 @@ If the user did specify a preference, honor it:
 
 ### Steps 1–10: Core Workflow
 1. Read `references/style-guide.md`
-2. Read the docx skill: **only** `SKILL.md` and `ooxml.md` from the docx skill directory. **Do not** read `docx-js.md`, `document.py`, or other files — they are executed by scripts and not needed in context.
+2. Read the docx skill: Read `SKILL.md` from `$DOCX_SKILL`. If `ooxml.md` exists as a separate file in that directory, read it too; otherwise the OOXML XML reference is embedded in `SKILL.md`. **Do not** read `docx-js.md`, `document.py`, or other files — they are executed by scripts and not needed in context.
 3. Read the draft opinion (from Step 0 or user-provided file/pasted text). **Count paragraphs** (¶ markers or logical paragraphs) to determine opinion length.
 4. **Delegate Pass 1** (jurisdictional check) to a subagent — see Pass 1 below
 5. **Delegate Pass 3** (citation verification) to a subagent — see Pass 3 below
@@ -254,7 +304,7 @@ This produces a self-contained HTML file that displays each citation alongside t
 
 **9a. Unpack the input .docx:**
 ```bash
-TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_PLUGIN_PATH $VENV_PYTHON $DOCX_PLUGIN_PATH/ooxml/scripts/unpack.py <input.docx> <TMPDIR>/unpacked
+TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_SKILL $VENV_PYTHON $UNPACK_SCRIPT <input.docx> <TMPDIR>/unpacked
 ```
 
 **9b. Pre-validate and fix the unpacked input** (catches inherited structural problems before editing):
@@ -296,11 +346,11 @@ Write this JSON to `<TMPDIR>/edits.json`.
 
 **9d. Run apply_edits.py:**
 ```bash
-TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_PLUGIN_PATH $VENV_PYTHON ~/.claude/skills/jetredline/apply_edits.py --input <TMPDIR>/unpacked --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx>
+$VENV_PYTHON $SKILL_DIR/apply_edits.py --input <TMPDIR>/unpacked --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx> --pack-script $PACK_SCRIPT
 ```
 
-The script automatically:
-- Applies all tracked changes and comments via the docx plugin's Document API
+The script is fully self-contained (no PYTHONPATH needed) and automatically:
+- Applies all tracked changes and comments via direct XML manipulation
 - Runs `ooxml_fixup.py` (ID deconfliction, relationship dedup, orphan cleanup, xml:space fix)
 - Runs `ooxml_validate.py` (checks for remaining issues)
 - Packs the result into the output .docx
@@ -691,25 +741,26 @@ Parse the JSON output and incorporate the results into the analysis document (se
 Produce the outputs requested by the user in Step 0.5.
 
 ### Tracked-changes .docx (if requested)
-Use the docx skill to produce a .docx with:
+Use `apply_edits.py` to produce a .docx with:
 - Deletions as tracked deletions (author: "Claude")
 - Insertions as tracked insertions (author: "Claude")
-- Comments (via comment.py) for substantive notes — explaining a change or flagging an issue
+- Comments for substantive notes — explaining a change or flagging an issue
 
-**Assembly workflow** (follow this exact order):
+**Assembly workflow:** Use the batch edit workflow in Step 9 above. `apply_edits.py` handles unpacking, editing, fixup, validation, and packing in a single command. If you need to run the steps separately (e.g., for debugging):
+
 1. **Unpack** the original .docx
 2. **Edit** the unpacked XML (tracked changes, comments) in a single script execution
 3. **Run `ooxml_fixup.py`** to deconflict IDs, deduplicate relationships, clean orphans, and fix `xml:space`:
    ```bash
-   $VENV_PYTHON ~/.claude/skills/jetredline/ooxml_fixup.py <unpacked_dir>
+   $VENV_PYTHON $SKILL_DIR/ooxml_fixup.py <unpacked_dir>
    ```
 4. **Run `ooxml_validate.py`** to verify the document is clean:
    ```bash
-   $VENV_PYTHON ~/.claude/skills/jetredline/ooxml_validate.py <unpacked_dir>
+   $VENV_PYTHON $SKILL_DIR/ooxml_validate.py <unpacked_dir>
    ```
 5. **Pack** the directory into a .docx (without `--force`):
    ```bash
-   TMPDIR=<TMPDIR> PATH="$SOFFICE_DIR:$PATH" PYTHONPATH=~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/ $VENV_PYTHON ~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/ooxml/scripts/pack.py <unpacked_dir> <output.docx>
+   TMPDIR=<TMPDIR> PATH="$SOFFICE_DIR:$PATH" PYTHONPATH=$DOCX_SKILL $VENV_PYTHON $PACK_SCRIPT <unpacked_dir> <output.docx>
    ```
 
 Do not use `--force` with pack.py. The fixup script resolves issues that previously required it. If validation fails, run `ooxml_validate.py` to diagnose.
