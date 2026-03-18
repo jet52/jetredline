@@ -188,3 +188,328 @@ Build Citation objects for each category and verify the returned path:
 ## Open questions
 - Should `fetch_and_cache()` be called automatically during `nd_cite_check.py` runs, or only on demand?
 - Content quality: fetched HTML from legal sites often needs cleanup. Should there be a post-fetch markdown conversion step?
+
+---
+
+# TODO: Cowork Compatibility & Skill Improvements
+
+## Context
+These issues were identified during a Cowork session (2026-03-17) redlining a draft dissent in *Ferderer v. NDDHHS*, No. 20250335. The skill ran to completion but required multiple workarounds. The goal is full functionality in both Claude Code and Cowork without manual intervention.
+
+## Environment differences: Claude Code vs. Cowork
+
+| Constraint | Claude Code | Cowork |
+|---|---|---|
+| Skill directory | `~/.claude/skills/jetredline/` (read-write) | `/mnt/.skills/skills/jetredline/` (read-only) |
+| Docx plugin path | `~/.claude/plugins/cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/` | `/mnt/.skills/skills/docx/` |
+| Docx plugin layout | `ooxml/scripts/{unpack,pack}.py`, `scripts/document.py`, `scripts/utilities.py`, `ooxml.md` | `scripts/office/{unpack,pack}.py`, `scripts/comment.py`, no `document.py`, no `utilities.py`, no `ooxml.md` |
+| Document API | `scripts.document.Document` — full tracked-change + comment API using minidom | **Not available.** Comments via standalone `scripts/comment.py` (writes comment XML files + rels); no tracked-change helper |
+| Comment workflow | `doc.add_comment()` handles everything: range markers in document.xml, comment XML files, rels, people.xml | `comment.py` handles comment XML files + rels only; caller must insert `commentRangeStart`/`commentRangeEnd`/`commentReference` into document.xml manually |
+| LibreOffice | Installed at `/Applications/LibreOffice.app/Contents/MacOS/soffice` | Installed at `/usr/bin/soffice` (v25.2); `soffice.py` provides `LD_PRELOAD` shim for `AF_UNIX` sandbox restrictions |
+| Python venv | `~/.claude/skills/jetredline/.venv/` (writable) | Read-only skill dir; venv must go to `/tmp/` |
+| Network | Direct | SOCKS proxy (requires `httpx[socks]`); `socksio` not pre-installed |
+| Temp files | Writable anywhere | `/mnt/` has restricted write permissions; use `/tmp/` or `/sessions/` |
+| `~/refs/` | Exists on host filesystem | Not mounted by default |
+| Home directory | Real `~` with `.claude/`, `code/`, etc. | Sandboxed; `~` is `/root` with minimal contents |
+| `defusedxml` | In venv | Pre-installed (used by docx plugin) |
+
+---
+
+## Issue 1: `apply_edits.py` depends on missing `scripts.document` module
+
+**Symptom:** `ModuleNotFoundError: No module named 'scripts.document'` when running `apply_edits.py`.
+
+**Root cause:** The script imports `from scripts.document import Document`, which exists in the Claude Code docx plugin layout but not in the Cowork layout. Cowork's docx plugin is a completely different codebase — it has `scripts/comment.py` as a standalone comment injection script, but no `Document` class and no `utilities.py` (the `XMLEditor` base class).
+
+**Workaround used:** Wrote a custom `apply_edits_v2.py` script that directly manipulates document.xml with string operations.
+
+### Revised plan: Make `apply_edits.py` environment-agnostic
+
+After exploring the Cowork docx plugin layout, a full reimplementation is unnecessary. The strategy is:
+
+**1. Inline the trivial DOM manipulation.** Replace `editor.insert_before()` / `editor.insert_after()` with direct minidom calls. The Document API's `_parse_fragment()` method is ~15 lines (parse XML string with namespace declarations from the root element, import nodes into the document). `insertBefore` is a standard minidom method. This eliminates the `from scripts.document import Document` import for all tracked-change operations.
+
+**2. Inline the RSID + people.xml setup.** `Document.__init__` generates a random RSID hex string and writes it to `settings.xml`, and creates `people.xml` from a template. This is ~30 lines of straightforward XML manipulation. Without it, Word may show a "repair" dialog on first open (cosmetic, not data loss).
+
+**3. Abstract comment injection over two backends:**
+- **If `scripts.document.Document` is importable** (Claude Code) → use `doc.add_comment()` as before
+- **Otherwise** (Cowork) → shell out to Cowork's `scripts/comment.py` for the comment metadata XML (it handles all 4 comment XML files + rels + content types), then insert `commentRangeStart`/`commentRangeEnd`/`commentReference` markers into `document.xml` directly
+
+This is the cleanest split because both environments already agree on who inserts the document.xml markers — apply_edits.py does it in Claude Code (via the runs it builds), and would do it directly in Cowork. The only difference is who writes `comments.xml` et al.
+
+**4. Pass pack/unpack/comment paths via CLI args or env vars.** SKILL.md Step 0 discovers the paths; apply_edits.py receives them. No hardcoded paths in the Python script.
+
+### What the Document API actually provides (for reference)
+
+Methods used by apply_edits.py and what replaces them:
+
+| Document API method | What it does | Replacement |
+|---|---|---|
+| `Document(path, author=)` | RSID setup, people.xml, settings.xml | Inline ~30 lines |
+| `doc["word/document.xml"]` | Returns `DocxXMLEditor` (wraps minidom) | Direct `defusedxml.minidom.parse()` |
+| `editor.dom` | The minidom DOM tree | Direct from parse |
+| `editor.insert_before(elem, xml)` | Parse fragment + `insertBefore` | Inline `_parse_fragment()` (~15 lines) + `parentNode.insertBefore()` |
+| `editor.insert_after(elem, xml)` | Parse fragment + insert after | Same + `nextSibling` logic |
+| `doc.add_comment(start, end, text)` | Writes to 4 XML files + rels + document.xml markers | Claude Code: keep as-is; Cowork: shell out to `comment.py` + inline markers |
+| `doc.save(validate=False)` | Serializes DOM back to file | `dom.toxml()` + write |
+
+- [ ] Inline `_parse_fragment()`, `insert_before()`, `insert_after()` as standalone functions
+- [ ] Inline RSID generation and people.xml template setup
+- [ ] Add comment backend abstraction (Document API vs. Cowork `comment.py`)
+- [ ] Accept pack/unpack/comment paths via `--pack-script`, `--comment-script` args
+- [ ] Remove hardcoded `DOCX_PLUGIN_PATH` and `PYTHONPATH` dependency
+- [ ] Test in both Claude Code and Cowork
+
+---
+
+## Issue 2: Docx plugin path resolution in SKILL.md
+
+**Symptom:** Hardcoded paths to `ooxml/scripts/pack.py`, `ooxml/scripts/unpack.py`, and `ooxml.md` don't exist in Cowork.
+
+**Root cause:** The two environments have completely different docx plugin layouts:
+
+| Component | Claude Code | Cowork |
+|---|---|---|
+| Unpack | `ooxml/scripts/unpack.py` | `scripts/office/unpack.py` |
+| Pack | `ooxml/scripts/pack.py` | `scripts/office/pack.py` |
+| Comments | `scripts/document.py` (Document API) | `scripts/comment.py` (standalone) |
+| XML reference | `ooxml.md` (separate file) | Embedded in `SKILL.md` |
+| Validate | `ooxml/scripts/validation/` | `scripts/office/validate.py` |
+| LibreOffice env | Manual PATH setup | `scripts/office/soffice.py` → `get_soffice_env()` / `run_soffice()` |
+| Accept changes | N/A | `scripts/accept_changes.py` (headless LibreOffice macro) |
+
+**Suggested fix:** Add a docx-plugin path discovery block to SKILL.md Step 0 that probes for both layouts and sets variables consumed by apply_edits.py:
+
+```bash
+# Detect docx plugin location
+if [ -d "/mnt/.skills/skills/docx" ]; then
+    DOCX_SKILL="/mnt/.skills/skills/docx"
+elif [ -d "$HOME/.claude/plugins/cache/anthropic-agent-skills/document-skills" ]; then
+    DOCX_SKILL=$(find "$HOME/.claude/plugins/cache/anthropic-agent-skills/document-skills" -maxdepth 2 -name "docx" -type d | head -1)
+fi
+
+# Detect layout variant
+if [ -f "$DOCX_SKILL/scripts/office/unpack.py" ]; then
+    UNPACK_SCRIPT="$DOCX_SKILL/scripts/office/unpack.py"
+    PACK_SCRIPT="$DOCX_SKILL/scripts/office/pack.py"
+    COMMENT_SCRIPT="$DOCX_SKILL/scripts/comment.py"
+elif [ -f "$DOCX_SKILL/ooxml/scripts/unpack.py" ]; then
+    UNPACK_SCRIPT="$DOCX_SKILL/ooxml/scripts/unpack.py"
+    PACK_SCRIPT="$DOCX_SKILL/ooxml/scripts/pack.py"
+    COMMENT_SCRIPT=""  # Uses Document API instead
+fi
+```
+
+Also update the "read the docx skill" instruction: "Read `SKILL.md` from the docx skill directory. If `ooxml.md` exists as a separate file, read it too; otherwise the OOXML XML reference is embedded in `SKILL.md`."
+
+- [ ] Add docx plugin path discovery block to SKILL.md Step 0
+- [ ] Update SKILL.md to handle both plugin layouts for unpack/pack/comment paths
+- [ ] Update "read the docx skill" instructions to check for `ooxml.md` existence
+- [ ] Pass discovered paths to apply_edits.py via CLI args
+
+---
+
+## Issue 3: Python venv creation fails on read-only filesystem
+
+**Symptom:** `uv venv ~/.claude/skills/jetredline/.venv` fails with `Read-only file system (os error 30)`.
+
+**Root cause:** In Cowork, the skill directory is mounted read-only. The venv path is inside that directory.
+
+**Workaround used:** Attempted system-wide pip install; `textstat` was missing. Readability metrics were skipped.
+
+**Suggested fix:** Add a Cowork fallback to the venv setup:
+
+```bash
+VENV_DIR=~/.claude/skills/jetredline/.venv
+if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
+    # Read-only skill dir (Cowork) — use session-local venv
+    VENV_DIR=/tmp/jetredline-venv
+    if [ ! -d "$VENV_DIR" ]; then
+        python3 -m venv "$VENV_DIR"
+        "$VENV_DIR/bin/pip" install defusedxml pikepdf textstat -q
+    fi
+fi
+VENV_PYTHON="$VENV_DIR/bin/python"
+```
+
+Alternative: `pip install defusedxml pikepdf textstat --break-system-packages -q` as a one-liner fallback when the venv can't be created.
+
+- [ ] Add read-only filesystem detection to venv setup in SKILL.md
+- [ ] Add fallback venv path (`/tmp/jetredline-venv` or session dir)
+- [ ] Alternatively, add `--break-system-packages` pip fallback for Cowork
+
+---
+
+## Issue 4: `jetcite_tool.py` missing `httpx[socks]` dependency
+
+**Symptom:** First failure: `ModuleNotFoundError: No module named 'httpx'`. After installing httpx, second failure: `ImportError: Using SOCKS proxy, but the 'socksio' package is not installed`.
+
+**Root cause:** Cowork routes network traffic through a SOCKS proxy. The `httpx` package needs the `[socks]` extra to handle this. The jetcite skill's dependencies don't include `httpx[socks]`.
+
+**Workaround used:** `pip install "httpx[socks]" --break-system-packages`.
+
+**Suggested fix:**
+1. Add `httpx[socks]` to the skill's requirements (or `requirements.txt`)
+2. Make the ndcourts URL resolution gracefully degrade when network fails — the citation scan (regex + URL generation) doesn't need network; only the ndcourts redirect resolution does
+3. Add `socksio` to the dependency list explicitly
+
+- [ ] Add `httpx[socks]` (or `httpx` + `socksio`) to jetcite dependencies
+- [ ] Make `resolve_nd_opinion_url()` in `ndcourts.py` catch network errors and fall back to search URL pattern
+- [ ] Add `requirements.txt` to jetcite skill if not present
+
+---
+
+## Issue 5: XML entity mismatches cause edit failures in `apply_edits.py`
+
+**Symptom:** 3 of 13 tracked-change edits failed on first pass. Edit JSON contained Python Unicode strings (`'`, `¶`, `\xa0`) but the XML contained entity-encoded equivalents (`&#x2019;`, literal `¶` + `\xa0`, nested `&#x201C;...&#x2018;...&#x2019;...&#x201D;`).
+
+**Specific failures:**
+1. Smart apostrophe in possessive: `§ 75-02-13-02(5)'s` — XML has `&#x2019;s`
+2. Paragraph symbol + non-breaking space: `¶ 35` — XML has `¶\xa0` (U+00B6 + U+00A0)
+3. Nested smart quotes: `"not a 'form.'"` — XML has `&#x201C;not a &#x2018;form.&#x2019;&#x201D;`
+
+**Root cause clarification:** This is *not* an XML parsing issue. minidom correctly decodes entities when parsing. The problem occurs when the edit JSON `old` text and the extracted `w:t` text are both Unicode but use different Unicode characters for the "same" glyph — e.g., regular space (U+0020) vs. non-breaking space (U+00A0), or when Claude generates the edit JSON from reading raw XML and carries through entity notation.
+
+**Suggested fix:** Normalize both sides to NFC Unicode before searching, but operate on the original text for the actual XML manipulation. Key: normalize only for *match finding*, not for the content that gets written.
+
+```python
+import unicodedata
+
+def _normalize_for_search(text):
+    """Normalize text for fuzzy matching — NFC + NBSP→space."""
+    text = unicodedata.normalize("NFC", text)
+    text = text.replace("\xa0", " ")  # NBSP → space
+    return text
+```
+
+Apply to both `old_text` from the edit JSON and `full_text` from concatenated runs in `find_paragraph_containing()` and the run-matching loop. Once the match position is found in normalized space, map back to the un-normalized run offsets (same approach as `nd_cite_check.py`).
+
+**Risk:** Over-normalizing could cause false-positive matches. NBSP→space is the main concern — if a document intentionally uses NBSP for formatting (e.g., between `¶` and a number), collapsing it could match the wrong location. Mitigation: only normalize for searching; preserve original characters in the output.
+
+- [ ] Add Unicode normalization layer to text search in `apply_edits.py`
+- [ ] Normalize both edit JSON text and extracted run text before matching
+- [ ] Build offset mapping between normalized and original text for correct run splitting
+- [ ] Handle NBSP variants (`\xa0`, `\u202f`) with care — normalize for search only
+- [ ] Consider sharing normalization code between `apply_edits.py` and `nd_cite_check.py`
+
+---
+
+## Issue 6: Temp directory permissions in Cowork
+
+**Symptom:** `PermissionError: [Errno 13] Permission denied: '.../unpacked/word/comments.xml'` when writing to the unpacked directory.
+
+**Root cause:** Temp directory was created inside `/mnt/...` (the mounted workspace), which has restricted write permissions in Cowork's sandbox. The unpack script could create files there, but subsequent modification of those files was blocked.
+
+**Workaround used:** Re-unpacked to `/sessions/` (the VM's own writable filesystem).
+
+**Suggested fix:** In SKILL.md Step 0, detect Cowork and create temp dir under `/tmp/` rather than `$(pwd)`:
+
+```bash
+# Use /tmp for temp files if cwd is under a restricted mount
+if [[ "$(pwd)" == /mnt/* ]]; then
+    TMPBASE="/tmp"
+else
+    TMPBASE="$(pwd)"
+fi
+```
+
+This is independent of the apply_edits.py refactor — it's a SKILL.md instruction change only.
+
+- [ ] Update SKILL.md Step 0 temp-dir logic to use `/tmp/` when cwd is under `/mnt/`
+
+---
+
+## Issue 7: `ooxml.md` not found at expected path
+
+**Symptom:** Read tool returned "File does not exist" for `ooxml.md` in the docx skill directory.
+
+**Root cause:** The Cowork docx plugin embeds the XML reference in `SKILL.md` rather than providing a separate `ooxml.md` file.
+
+**Workaround used:** Read further into `SKILL.md` and found the XML Reference section there.
+
+**Suggested fix:** Update jetredline SKILL.md instruction from "Read `SKILL.md` and `ooxml.md`" to "Read `SKILL.md` from the docx skill directory. If `ooxml.md` exists as a separate file, read it too."
+
+- [ ] Update SKILL.md Step 1 to conditionally read `ooxml.md`
+
+---
+
+## Issue 8: Citation hyperlinks not applied to .docx output
+
+**Symptom:** User requested every citation be a clickable hyperlink. The `jetcite` scan produced URLs for all citations, but no mechanism exists in the edit pipeline to convert citation text into OOXML hyperlinks.
+
+**Root cause:** `apply_edits.py`'s JSON schema supports `"type": "replace"` and `"type": "comment"` but not hyperlinks. OOXML hyperlinks require: (a) adding a `<Relationship>` entry to `word/_rels/document.xml.rels`, and (b) wrapping the citation text in `<w:hyperlink r:id="rIdN">` in `document.xml`.
+
+**Suggested fix:** Add a `"type": "hyperlink"` edit type to the JSON schema:
+
+```json
+{
+    "type": "hyperlink",
+    "para": 5,
+    "anchor": "454 N.W.2d 732",
+    "url": "https://www.courtlistener.com/c/N.W.%202d/454/732/",
+    "display": "454 N.W.2d 732"
+}
+```
+
+The script would:
+1. Find the anchor text in the paragraph
+2. Generate a unique relationship ID
+3. Add a `<Relationship>` entry to `document.xml.rels`
+4. Wrap the matched text in `<w:hyperlink r:id="rIdN"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr><w:t>display text</w:t></w:r></w:hyperlink>`
+
+This integrates naturally with the `jetcite` scan output — the main-context workflow would run `jetcite scan`, collect the URLs, and generate hyperlink entries in the edits JSON alongside tracked changes and comments.
+
+- [ ] Add `"type": "hyperlink"` to `apply_edits.py` JSON schema
+- [ ] Implement relationship-ID generation and `document.xml.rels` updates
+- [ ] Implement `<w:hyperlink>` wrapping in `document.xml`
+- [ ] Integrate with `jetcite` scan output in the main workflow
+- [ ] Test hyperlink rendering in Word, LibreOffice, and Google Docs
+
+---
+
+## Issue 9: Readability metrics skipped
+
+**Symptom:** `readability_metrics.py` was not run because `textstat` wasn't available and the venv couldn't be created (Issue 3).
+
+**Root cause:** Cascading failure from Issue 3.
+
+**Suggested fix:** Resolving Issue 3 resolves this. Additionally, `readability_metrics.py` could catch `ImportError` for `textstat` and fall back to basic sentence-length and passive-voice metrics using only the standard library (regex-based).
+
+- [ ] Add `textstat` ImportError fallback in `readability_metrics.py`
+- [ ] Implement basic sentence-length and passive-voice regex metrics as fallback
+
+---
+
+## Issue 10: Citation review HTML (`cite_review.py`) skipped
+
+**Symptom:** The interactive citation review HTML was not generated.
+
+**Root cause:** Session focused on getting the core redline done; the `cite_review.py` step was deprioritized. Also depends on the opinion being available as markdown, which requires an additional conversion step for the dissent.
+
+**Suggested fix:** Lower priority, but the workflow should attempt it after the main outputs are produced. Add to SKILL.md Step 11: "If cite_review.py fails or is skipped, note this in the analysis document."
+
+- [ ] Ensure `cite_review.py` is attempted after main outputs
+- [ ] Add graceful degradation note to SKILL.md if it fails
+
+---
+
+## Summary: Priority order for implementation
+
+### Phase 1 — Core cross-environment support (Issues 1, 2, 5, 6)
+
+Make `apply_edits.py` work in both Claude Code and Cowork without manual intervention.
+
+**1a. Inline DOM manipulation** (Issue 1): Replace `Document` API calls with direct minidom. Inline `_parse_fragment()` (~15 lines), RSID setup (~30 lines). This is the gating change — everything else depends on it.
+
+**1b. Comment backend abstraction** (Issue 1): Try importing `scripts.document.Document`; if unavailable, delegate to Cowork's `comment.py` (passed via `--comment-script` arg) + inline document.xml markers.
+
+**1c. Unicode normalization for text matching** (Issue 5): Normalize both edit JSON and extracted run text to NFC before searching. Low-risk, high-impact — directly fixes 3/13 edit failures from the Ferderer session.
+
+**1d. SKILL.md environment detection** (Issues 2, 6, 7): Path discovery block in Step 0 that detects docx plugin layout, sets pack/unpack/comment paths, chooses temp directory, handles venv fallback. Pass discovered paths to apply_edits.py via CLI args.
+
+### Phase 2 — Dependency and feature improvements
+
+2. **Medium — Hyperlink support** (Issue 8): Add `"type": "hyperlink"` to edit schema. New feature; integrates with jetcite.
+3. **Medium — jetcite dependency fix** (Issue 4): Add `httpx[socks]` and graceful network fallback.
+4. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
+5. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
