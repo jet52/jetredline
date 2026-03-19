@@ -595,7 +595,8 @@ Under either option, update the Step 9 workflow to skip the unpack step:
 ### Remaining
 
 1. **Medium — Hyperlink support** (Issue 8): Add `"type": "hyperlink"` to edit schema. New feature; integrates with jetcite.
-2. **Low — Conditional ooxml.md read** (Issue 7): Update SKILL.md Step 1 to check for `ooxml.md` existence.
+2. **Medium — Bundle jetcite wheel in jetredline** (Issue 14): Currently `nd_cite_check.py` and `cite_review.py` require jetcite to be installed in the venv, but jetcite isn't on PyPI. In Claude Code this works because we `pip install ~/code/jetcite`. In Cowork the skill dir is read-only and there's no local checkout. Fix: build a wheel (`cd ~/code/jetcite && python -m build`) and include the `.whl` in the jetredline skill zip. The Cowork venv fallback in SKILL.md would then `pip install "$SKILL_DIR/jetcite-*.whl"`. This makes the citation pipeline work in any environment without a local jetcite checkout.
+3. **Low — Conditional ooxml.md read** (Issue 7): Update SKILL.md Step 1 to check for `ooxml.md` existence.
 3. **Low — Smart quote normalization** (Issue 13): Add smart↔straight quote mapping to `_normalize_for_search` in `apply_edits.py`. Currently `\u2018`/`\u2019` (curly single) and `\u201c`/`\u201d` (curly double) don't match `'`/`"` (straight). Low risk — unlikely a document would intentionally contain both forms as distinct text.
 4. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
 5. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
