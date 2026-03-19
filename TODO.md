@@ -652,8 +652,9 @@ Make `apply_edits.py` produce valid .docx files in all environments.
 
 2. **Medium — Hyperlink support** (Issue 8): Add `"type": "hyperlink"` to edit schema. New feature; integrates with jetcite.
 3. **Medium — jetcite dependency fix** (Issue 4): Add `httpx[socks]` and graceful network fallback.
-4. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
-5. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
+4. **Low — Smart quote normalization** (Issue 13): Add smart↔straight quote mapping to `_normalize_for_search` in `apply_edits.py`. Currently `\u2018`/`\u2019` (curly single) and `\u201c`/`\u201d` (curly double) don't match `'`/`"` (straight). Low risk — unlikely a document would intentionally contain both forms as distinct text. Would make edit matching more forgiving when the edit JSON is generated with straight quotes but the .docx uses smart quotes.
+5. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
+6. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
 
 ### Immediate — Unblock citation pipeline (Issue 11)
 
