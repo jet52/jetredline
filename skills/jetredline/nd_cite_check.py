@@ -47,13 +47,7 @@ except ImportError:
 # Cite-type mapping: jetcite generic types → legacy specific strings
 # ---------------------------------------------------------------------------
 
-_FEDERAL_REPORTERS = frozenset({
-    "F.", "F.2d", "F.3d", "F.4th",
-    "F. Supp.", "F. Supp. 2d", "F. Supp. 3d",
-    "S. Ct.",
-    "L. Ed.", "L. Ed. 2d",
-    "B.R.", "F.R.D.", "Fed. Cl.", "M.J.", "Vet. App.", "T.C.", "F. App'x",
-})
+from jetcite.cache import _ND_REPORTERS, _FEDERAL_REPORTERS
 
 
 def _legacy_cite_type(c: Citation) -> str:
@@ -64,12 +58,14 @@ def _legacy_cite_type(c: Citation) -> str:
         reporter = c.components.get("reporter", "")
         if reporter == "U.S.":
             return "us_supreme_court"
+        if reporter in _ND_REPORTERS:
+            return "nd_reporter"
         if reporter in _FEDERAL_REPORTERS:
             return "federal_reporter"
         # State neutral: has year+number but no reporter (or abbreviation)
         if "reporter" not in c.components:
             return "state_neutral"
-        return "state_case"
+        return "state_reporter"
 
     if c.cite_type == CitationType.STATUTE:
         if c.jurisdiction == "nd":
