@@ -1,5 +1,6 @@
 skills/jetredline/.venv/
 skills/jetredline/node_modules/
+skills/jetredline/lib/
 skills/jetredline/__pycache__/
 .claude/settings.local.json
 *.pyc
