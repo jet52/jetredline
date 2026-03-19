@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """Batch edit helper for JetRedline.
 
-Applies a JSON array of edits (tracked deletions + insertions + comments) to an
-unpacked .docx directory using direct XML manipulation, then runs ooxml_fixup.py
-and ooxml_validate.py.
+Applies a JSON array of edits (tracked deletions + insertions + comments)
+directly to a .docx file, producing a new .docx with tracked changes.
 
-Fully self-contained: requires only defusedxml beyond the standard library.
-No dependency on the docx plugin's Document API or comment.py.
+Operates on the ZIP archive directly — no unpack/pack pipeline, no dependency
+on the docx plugin.  Serializes all XML as UTF-8 with standalone="yes" and
+preserves original ZIP entry metadata, producing files Word opens cleanly.
+
+Requires only defusedxml beyond the standard library.
 
 Usage:
-    python apply_edits.py --input <unpacked_dir> --edits <edits.json> \
-        [--author "Claude"] [--output <output.docx>] \
-        [--pack-script <pack.py>]
+    python apply_edits.py --input <original.docx> --edits <edits.json> \
+        --output <output.docx> [--author "Claude"]
 
 Edits JSON format:
     [
@@ -51,17 +52,14 @@ Exit codes:
 import argparse
 import html
 import json
-import os
 import random
-import subprocess
 import sys
 import unicodedata
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 import defusedxml.minidom
-
-SKILL_DIR = Path(__file__).parent
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +103,13 @@ _COMMENTS_EXTENSIBLE_TEMPLATE = (
     ' xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"'
     ' mc:Ignorable="w16cex">'
     '</w16cex:commentsExtensible>'
+)
+
+_PEOPLE_TEMPLATE = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<w15:people'
+    ' xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">'
+    '</w15:people>'
 )
 
 
@@ -163,17 +168,68 @@ def dom_insert_after(dom, ref_elem, xml_content):
     return nodes
 
 
-def save_xml(dom, path):
-    """Serialize DOM back to file, detecting encoding from existing declaration."""
-    with open(path, "rb") as f:
-        header = f.read(200).decode("utf-8", errors="ignore")
-    encoding = "ascii" if 'encoding="ascii"' in header else "utf-8"
-    Path(path).write_bytes(dom.toxml(encoding=encoding))
+# ---------------------------------------------------------------------------
+# ZIP I/O — read from original, write preserving metadata
+# ---------------------------------------------------------------------------
+
+def serialize_dom_utf8(dom):
+    """Serialize DOM to UTF-8 bytes with standalone='yes' declaration.
+
+    minidom.toxml(encoding="UTF-8") produces:
+        <?xml version="1.0" encoding="UTF-8"?>
+    Word requires standalone="yes", so we patch the declaration.
+    """
+    raw = dom.toxml(encoding="UTF-8")
+    raw = raw.replace(
+        b'<?xml version="1.0" encoding="UTF-8"?>',
+        b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        1,
+    )
+    return raw
 
 
-def save_xml_new(dom, path):
-    """Serialize DOM to a new file (no existing encoding to detect)."""
-    Path(path).write_bytes(dom.toxml(encoding="utf-8"))
+def _windows_zipinfo(name):
+    """Create a ZipInfo with Windows-compatible metadata for new entries."""
+    info = zipfile.ZipInfo(name)
+    info.create_system = 0   # MS-DOS
+    info.create_version = 45
+    info.extract_version = 20
+    info.external_attr = 0
+    info.compress_type = zipfile.ZIP_DEFLATED
+    return info
+
+
+def build_output_zip(input_path, output_path, modified, added):
+    """Build output .docx by copying original entries, replacing modified ones.
+
+    Args:
+        input_path: Path to original .docx
+        output_path: Path for output .docx
+        modified: {entry_name: bytes} for entries to replace in-place
+        added: {entry_name: bytes} for new entries not in original
+    """
+    with zipfile.ZipFile(input_path, 'r') as zin:
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                if item.filename in modified:
+                    # Preserve original ZipInfo metadata (create_system,
+                    # external_attr, etc.) — only replace content
+                    new_info = zipfile.ZipInfo(item.filename)
+                    new_info.create_system = item.create_system
+                    new_info.create_version = item.create_version
+                    new_info.extract_version = item.extract_version
+                    new_info.flag_bits = item.flag_bits
+                    new_info.external_attr = item.external_attr
+                    new_info.compress_type = zipfile.ZIP_DEFLATED
+                    zout.writestr(new_info, modified[item.filename])
+                else:
+                    zout.writestr(item, zin.read(item.filename))
+
+            # Add new entries (comment files, people.xml if absent)
+            existing = {item.filename for item in zin.infolist()}
+            for name, data in added.items():
+                if name not in existing:
+                    zout.writestr(_windows_zipinfo(name), data)
 
 
 # ---------------------------------------------------------------------------
@@ -215,39 +271,51 @@ def _generate_hex_id():
 # People.xml
 # ---------------------------------------------------------------------------
 
-def ensure_people_xml(unpacked_dir, author):
-    """Create or update word/people.xml with the author entry."""
-    path = unpacked_dir / "word" / "people.xml"
+def ensure_people_xml(existing_bytes, author):
+    """Create or update people.xml DOM with the author entry.
+
+    Args:
+        existing_bytes: bytes of existing people.xml from ZIP, or None
+        author: author name string
+
+    Returns:
+        (dom, modified) — the people.xml DOM and whether it was changed
+    """
     escaped = _escape_xml(author)
 
-    if path.exists():
-        pdom = defusedxml.minidom.parse(str(path))
+    if existing_bytes:
+        pdom = defusedxml.minidom.parseString(existing_bytes)
         for tag in ("w15:person", "w:person"):
             for p in pdom.getElementsByTagName(tag):
-                a = p.getAttribute("w15:author") or p.getAttribute("w:author")
+                a = (
+                    p.getAttribute("w15:author")
+                    or p.getAttribute("w:author")
+                )
                 if a == author:
-                    return  # Already present
-        # Append author
+                    return pdom, False  # Already present
+        # Author not found — append
         root = pdom.documentElement
         person_xml = (
             f'<w15:person w15:author="{escaped}">'
-            f'<w15:presenceInfo w15:providerId="None" w15:userId="{escaped}"/>'
+            f'<w15:presenceInfo w15:providerId="None"'
+            f' w15:userId="{escaped}"/>'
             f'</w15:person>'
         )
         for node in parse_fragment(pdom, person_xml):
             root.appendChild(node)
-        save_xml(pdom, path)
+        return pdom, True
     else:
-        path.write_text(
-            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-            '<w15:people xmlns:w15='
-            '"http://schemas.microsoft.com/office/word/2012/wordml">\n'
-            f'  <w15:person w15:author="{escaped}">\n'
-            f'    <w15:presenceInfo w15:providerId="None"'
-            f' w15:userId="{escaped}"/>\n'
-            f'  </w15:person>\n'
-            '</w15:people>'
+        pdom = defusedxml.minidom.parseString(_PEOPLE_TEMPLATE)
+        root = pdom.documentElement
+        person_xml = (
+            f'<w15:person w15:author="{escaped}">'
+            f'<w15:presenceInfo w15:providerId="None"'
+            f' w15:userId="{escaped}"/>'
+            f'</w15:person>'
         )
+        for node in parse_fragment(pdom, person_xml):
+            root.appendChild(node)
+        return pdom, True
 
 
 # ---------------------------------------------------------------------------
@@ -343,15 +411,16 @@ def _normalize_for_search(text):
 
 
 # ---------------------------------------------------------------------------
-# CommentWriter — self-contained comment injection
+# CommentWriter — self-contained comment injection (in-memory)
 # ---------------------------------------------------------------------------
 
 class CommentWriter:
-    """Writes Word-compatible comments directly to unpacked .docx XML files.
+    """Writes Word-compatible comments to in-memory .docx XML structures.
 
     Manages all 4 comment metadata files (comments.xml, commentsExtended.xml,
     commentsIds.xml, commentsExtensible.xml), relationships, content types,
-    and document.xml range markers.
+    and document.xml range markers.  Operates on DOMs and byte buffers —
+    no filesystem access.
     """
 
     _CONTENT_TYPES = {
@@ -390,9 +459,19 @@ class CommentWriter:
             "/2011/relationships/people",
     }
 
-    def __init__(self, unpacked_dir, author, timestamp):
-        self.unpacked_dir = Path(unpacked_dir)
-        self.word_dir = self.unpacked_dir / "word"
+    def __init__(self, zip_entries, rels_dom, ct_dom, author, timestamp):
+        """Initialize comment writer with in-memory ZIP data.
+
+        Args:
+            zip_entries: {zip_name: bytes} of existing ZIP entries
+            rels_dom: DOM for word/_rels/document.xml.rels (modified in place)
+            ct_dom: DOM for [Content_Types].xml (modified in place)
+            author: author name for comments
+            timestamp: ISO timestamp string
+        """
+        self._zip_entries = zip_entries
+        self._rels_dom = rels_dom
+        self._ct_dom = ct_dom
         self.author = author
         self.timestamp = timestamp
         self.initials = (
@@ -408,7 +487,7 @@ class CommentWriter:
     def add_comment(self, comment_id, text, dom, start_elem, end_elem):
         """Add a comment spanning from start_elem to end_elem.
 
-        Writes comment metadata to the 4 comment XML files and inserts
+        Writes comment metadata to the 4 comment XML DOMs and inserts
         commentRangeStart/End/Reference markers into the document.xml DOM.
 
         Args:
@@ -433,50 +512,47 @@ class CommentWriter:
         # Document.xml markers
         self._insert_markers(dom, comment_id, start_elem, end_elem)
 
-    def save(self):
-        """Write all modified comment files to disk."""
+    def get_entries(self):
+        """Return {zip_name: bytes} for all comment metadata files."""
         if not self._dirty:
-            return
-        for filename, cdom in (
-            ("comments.xml", self._comments_dom),
-            ("commentsExtended.xml", self._extended_dom),
-            ("commentsIds.xml", self._ids_dom),
-            ("commentsExtensible.xml", self._extensible_dom),
+            return {}
+        entries = {}
+        for name, cdom in (
+            ("word/comments.xml", self._comments_dom),
+            ("word/commentsExtended.xml", self._extended_dom),
+            ("word/commentsIds.xml", self._ids_dom),
+            ("word/commentsExtensible.xml", self._extensible_dom),
         ):
             if cdom is not None:
-                path = self.word_dir / filename
-                if path.exists():
-                    save_xml(cdom, path)
-                else:
-                    save_xml_new(cdom, path)
+                entries[name] = serialize_dom_utf8(cdom)
+        return entries
 
     # -- Internal helpers --------------------------------------------------
 
     def _ensure_setup(self):
-        """Load or create all comment XML files; set up rels + content types."""
+        """Load or create all comment XML DOMs; update rels + content types."""
         if self._setup_done:
             return
         self._comments_dom = self._load_or_create(
-            "comments.xml", _COMMENTS_TEMPLATE
+            "word/comments.xml", _COMMENTS_TEMPLATE
         )
         self._extended_dom = self._load_or_create(
-            "commentsExtended.xml", _COMMENTS_EXT_TEMPLATE
+            "word/commentsExtended.xml", _COMMENTS_EXT_TEMPLATE
         )
         self._ids_dom = self._load_or_create(
-            "commentsIds.xml", _COMMENTS_IDS_TEMPLATE
+            "word/commentsIds.xml", _COMMENTS_IDS_TEMPLATE
         )
         self._extensible_dom = self._load_or_create(
-            "commentsExtensible.xml", _COMMENTS_EXTENSIBLE_TEMPLATE
+            "word/commentsExtensible.xml", _COMMENTS_EXTENSIBLE_TEMPLATE
         )
         self._ensure_relationships()
         self._ensure_content_types()
         self._setup_done = True
 
-    def _load_or_create(self, filename, template):
-        """Load existing XML file or create from template."""
-        path = self.word_dir / filename
-        if path.exists():
-            return defusedxml.minidom.parse(str(path))
+    def _load_or_create(self, zip_name, template):
+        """Load existing XML from ZIP entry or create from template."""
+        if zip_name in self._zip_entries:
+            return defusedxml.minidom.parseString(self._zip_entries[zip_name])
         return defusedxml.minidom.parseString(template)
 
     def _add_to_comments(self, comment_id, text, para_id):
@@ -532,7 +608,7 @@ class CommentWriter:
             root.appendChild(node)
 
     def _insert_markers(self, dom, comment_id, start_elem, end_elem):
-        """Insert commentRangeStart/End + commentReference into document.xml."""
+        """Insert commentRangeStart/End + commentReference into document DOM."""
         # Range start before the anchored content
         dom_insert_before(
             dom, start_elem,
@@ -554,19 +630,13 @@ class CommentWriter:
             )
 
     def _ensure_relationships(self):
-        """Add relationship entries for comment files to document.xml.rels."""
-        rels_path = self.word_dir / "_rels" / "document.xml.rels"
-        if not rels_path.exists():
-            return
-
-        rels_dom = defusedxml.minidom.parse(str(rels_path))
-        root = rels_dom.documentElement
+        """Add relationship entries for comment + people files."""
+        root = self._rels_dom.documentElement
         root_ns = root.namespaceURI or ""
 
-        # Collect existing relationship types
         existing = set()
         max_rid = 0
-        for rel in rels_dom.getElementsByTagName("Relationship"):
+        for rel in self._rels_dom.getElementsByTagName("Relationship"):
             existing.add(rel.getAttribute("Type"))
             rid = rel.getAttribute("Id")
             if rid.startswith("rId"):
@@ -575,45 +645,30 @@ class CommentWriter:
                 except ValueError:
                     pass
 
-        modified = False
         for target, rel_type in self._RELATIONSHIPS.items():
             if rel_type not in existing:
                 max_rid += 1
-                elem = rels_dom.createElementNS(root_ns, "Relationship")
+                elem = self._rels_dom.createElementNS(root_ns, "Relationship")
                 elem.setAttribute("Id", f"rId{max_rid}")
                 elem.setAttribute("Type", rel_type)
                 elem.setAttribute("Target", target)
                 root.appendChild(elem)
-                modified = True
-
-        if modified:
-            save_xml(rels_dom, rels_path)
 
     def _ensure_content_types(self):
-        """Add Override entries for comment files to [Content_Types].xml."""
-        ct_path = self.unpacked_dir / "[Content_Types].xml"
-        if not ct_path.exists():
-            return
-
-        ct_dom = defusedxml.minidom.parse(str(ct_path))
-        root = ct_dom.documentElement
+        """Add Override entries for comment + people files."""
+        root = self._ct_dom.documentElement
         root_ns = root.namespaceURI or ""
 
         existing = set()
-        for override in ct_dom.getElementsByTagName("Override"):
+        for override in self._ct_dom.getElementsByTagName("Override"):
             existing.add(override.getAttribute("PartName"))
 
-        modified = False
         for part_name, content_type in self._CONTENT_TYPES.items():
             if part_name not in existing:
-                elem = ct_dom.createElementNS(root_ns, "Override")
+                elem = self._ct_dom.createElementNS(root_ns, "Override")
                 elem.setAttribute("PartName", part_name)
                 elem.setAttribute("ContentType", content_type)
                 root.appendChild(elem)
-                modified = True
-
-        if modified:
-            save_xml(ct_dom, ct_path)
 
 
 # ---------------------------------------------------------------------------
@@ -843,191 +898,97 @@ def apply_comment(dom, edit, edit_index, next_id, comment_writer):
 
 
 # ---------------------------------------------------------------------------
-# Post-processing: fixup + validate + pack
-# ---------------------------------------------------------------------------
-
-def _find_python():
-    """Find the best available Python interpreter."""
-    venv_python = SKILL_DIR / ".venv" / "bin" / "python"
-    if venv_python.exists():
-        return str(venv_python)
-    tmp_python = Path("/tmp/jetredline-venv/bin/python")
-    if tmp_python.exists():
-        return str(tmp_python)
-    return sys.executable
-
-
-def run_fixup(unpacked_dir):
-    """Run ooxml_fixup.py on the unpacked directory."""
-    fixup_script = SKILL_DIR / "ooxml_fixup.py"
-    result = subprocess.run(
-        [_find_python(), str(fixup_script), str(unpacked_dir)],
-        capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        return {"status": "error", "message": result.stderr}
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {"status": "ok", "raw": result.stdout}
-
-
-def run_validate(unpacked_dir):
-    """Run ooxml_validate.py on the unpacked directory."""
-    validate_script = SKILL_DIR / "ooxml_validate.py"
-    result = subprocess.run(
-        [_find_python(), str(validate_script), str(unpacked_dir)],
-        capture_output=True, text=True, timeout=60,
-    )
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {
-            "status": "PASS" if result.returncode == 0 else "FAIL",
-            "raw": result.stdout,
-        }
-
-
-def pack_output(unpacked_dir, output_path, pack_script=None):
-    """Pack the unpacked directory back into a .docx file."""
-    if pack_script is None:
-        pack_script = _discover_pack_script()
-
-    if pack_script is None:
-        return {"status": "error", "message": "pack.py not found"}
-
-    pack_path = Path(pack_script)
-    python = _find_python()
-
-    env = os.environ.copy()
-    # PYTHONPATH: docx skill root (3 levels up from pack.py in both layouts)
-    docx_root = pack_path.parent.parent.parent
-    env["PYTHONPATH"] = str(docx_root) + ":" + env.get("PYTHONPATH", "")
-    # LibreOffice on PATH
-    if sys.platform == "darwin":
-        lo = "/Applications/LibreOffice.app/Contents/MacOS"
-        env["PATH"] = lo + ":" + env.get("PATH", "")
-
-    result = subprocess.run(
-        [python, str(pack_path), str(unpacked_dir), str(output_path),
-         "--force"],
-        capture_output=True, text=True, timeout=120, env=env,
-    )
-    if result.returncode != 0:
-        return {"status": "error", "message": result.stderr}
-    return {"status": "ok"}
-
-
-def _discover_pack_script():
-    """Search known locations for pack.py."""
-    candidates = []
-
-    # Cowork layout
-    cowork_pack = Path("/mnt/.skills/skills/docx/scripts/office/pack.py")
-    if cowork_pack.exists():
-        candidates.append(cowork_pack)
-
-    # Claude Code plugin cache
-    cache_base = (
-        Path.home()
-        / ".claude/plugins/cache/anthropic-agent-skills/document-skills"
-    )
-    if cache_base.is_dir():
-        for sub in cache_base.iterdir():
-            p = sub / "skills/docx/ooxml/scripts/pack.py"
-            if p.exists():
-                candidates.append(p)
-
-    # Marketplaces
-    mp = (
-        Path.home()
-        / ".claude/plugins/marketplaces/anthropic-agent-skills"
-        / "skills/docx/scripts/office/pack.py"
-    )
-    if mp.exists():
-        candidates.append(mp)
-
-    return str(candidates[0]) if candidates else None
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+def _die(message):
+    """Print error JSON and exit."""
+    print(json.dumps({"status": "error", "message": message}))
+    sys.exit(2)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Apply batch edits to an unpacked .docx as tracked changes"
+        description="Apply batch edits to a .docx file as tracked changes"
     )
     parser.add_argument(
-        "--input", required=True, help="Path to unpacked .docx directory"
+        "--input", required=True,
+        help="Path to original .docx file",
     )
     parser.add_argument(
-        "--edits", required=True, help="Path to edits JSON file"
+        "--edits", required=True,
+        help="Path to edits JSON file",
     )
     parser.add_argument(
-        "--author", default="Claude", help="Author name for tracked changes"
-    )
-    parser.add_argument("--output", help="Output .docx path")
-    parser.add_argument("--pack-script", help="Path to pack.py")
-    parser.add_argument(
-        "--no-fixup", action="store_true", help="Skip ooxml_fixup.py"
+        "--author", default="Claude",
+        help="Author name for tracked changes",
     )
     parser.add_argument(
-        "--no-validate", action="store_true", help="Skip ooxml_validate.py"
-    )
-    parser.add_argument(
-        "--no-pack", action="store_true", help="Skip packing into .docx"
+        "--output", required=True,
+        help="Output .docx path",
     )
     args = parser.parse_args()
 
-    unpacked_dir = Path(args.input)
-    if not unpacked_dir.is_dir():
-        print(json.dumps({
-            "status": "error",
-            "message": f"Not a directory: {args.input}",
-        }))
-        sys.exit(2)
+    input_path = Path(args.input)
+    if not input_path.is_file():
+        _die(f"Input file not found: {args.input}")
 
     edits_path = Path(args.edits)
-    if not edits_path.exists():
-        print(json.dumps({
-            "status": "error",
-            "message": f"Edits file not found: {args.edits}",
-        }))
-        sys.exit(2)
+    if not edits_path.is_file():
+        _die(f"Edits file not found: {args.edits}")
 
     try:
         edits = json.loads(edits_path.read_text())
     except json.JSONDecodeError as e:
-        print(json.dumps({
-            "status": "error",
-            "message": f"Invalid JSON in edits file: {e}",
-        }))
-        sys.exit(2)
+        _die(f"Invalid JSON in edits file: {e}")
 
     if not isinstance(edits, list):
-        print(json.dumps({
-            "status": "error",
-            "message": "Edits must be a JSON array",
-        }))
-        sys.exit(2)
+        _die("Edits must be a JSON array")
 
-    # Parse document.xml directly
-    doc_xml_path = unpacked_dir / "word" / "document.xml"
-    if not doc_xml_path.exists():
-        print(json.dumps({
-            "status": "error",
-            "message": f"document.xml not found in {unpacked_dir}",
-        }))
-        sys.exit(2)
+    # ------------------------------------------------------------------
+    # Read all ZIP entries into memory
+    # ------------------------------------------------------------------
+    try:
+        with zipfile.ZipFile(input_path, 'r') as zf:
+            zip_entries = {name: zf.read(name) for name in zf.namelist()}
+    except zipfile.BadZipFile as e:
+        _die(f"Not a valid .docx file: {e}")
 
-    dom = defusedxml.minidom.parse(str(doc_xml_path))
-    next_id = make_id_generator(dom)
+    if "word/document.xml" not in zip_entries:
+        _die("word/document.xml not found in input file")
+
+    # ------------------------------------------------------------------
+    # Parse DOMs for files we may modify
+    # ------------------------------------------------------------------
+    doc_dom = defusedxml.minidom.parseString(
+        zip_entries["word/document.xml"]
+    )
+
+    rels_key = "word/_rels/document.xml.rels"
+    if rels_key in zip_entries:
+        rels_dom = defusedxml.minidom.parseString(zip_entries[rels_key])
+    else:
+        rels_dom = defusedxml.minidom.parseString(
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns='
+            '"http://schemas.openxmlformats.org/package/2006/relationships"/>'
+        )
+
+    ct_key = "[Content_Types].xml"
+    ct_dom = defusedxml.minidom.parseString(zip_entries[ct_key])
+
+    next_id = make_id_generator(doc_dom)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    # ------------------------------------------------------------------
     # Set up people.xml and comment writer
-    ensure_people_xml(unpacked_dir, args.author)
-    comment_writer = CommentWriter(unpacked_dir, args.author, timestamp)
+    # ------------------------------------------------------------------
+    people_dom, people_modified = ensure_people_xml(
+        zip_entries.get("word/people.xml"), args.author
+    )
+    comment_writer = CommentWriter(
+        zip_entries, rels_dom, ct_dom, args.author, timestamp
+    )
 
     # ------------------------------------------------------------------
     # Apply edits
@@ -1040,11 +1001,11 @@ def main():
 
         if edit_type == "replace":
             result = apply_replace(
-                dom, edit, i, args.author, timestamp, next_id,
+                doc_dom, edit, i, args.author, timestamp, next_id,
                 comment_writer,
             )
         elif edit_type == "comment":
-            result = apply_comment(dom, edit, i, next_id, comment_writer)
+            result = apply_comment(doc_dom, edit, i, next_id, comment_writer)
         else:
             result = {
                 "edit_index": i,
@@ -1056,26 +1017,37 @@ def main():
         if result["status"] == "error":
             errors.append(result)
 
-    # Save document.xml and comment files
-    save_xml(dom, doc_xml_path)
-    comment_writer.save()
-
     # ------------------------------------------------------------------
-    # Post-processing
+    # Build output ZIP
     # ------------------------------------------------------------------
-    fixup_result = None
-    if not args.no_fixup:
-        fixup_result = run_fixup(unpacked_dir)
+    # Always-modified entries
+    modified = {
+        "word/document.xml": serialize_dom_utf8(doc_dom),
+    }
 
-    validate_result = None
-    if not args.no_validate:
-        validate_result = run_validate(unpacked_dir)
+    # People.xml (may be new or updated)
+    if people_modified:
+        people_bytes = serialize_dom_utf8(people_dom)
+        if "word/people.xml" in zip_entries:
+            modified["word/people.xml"] = people_bytes
+        # else: handled as 'added' below
 
-    pack_result = None
-    if args.output and not args.no_pack:
-        pack_result = pack_output(
-            unpacked_dir, args.output, args.pack_script
-        )
+    # Comment entries (rels + ct are modified in place by CommentWriter)
+    added = {}
+    if comment_writer._dirty:
+        modified[rels_key] = serialize_dom_utf8(rels_dom)
+        modified[ct_key] = serialize_dom_utf8(ct_dom)
+        for name, data in comment_writer.get_entries().items():
+            if name in zip_entries:
+                modified[name] = data
+            else:
+                added[name] = data
+
+    # People.xml as new entry if it didn't exist
+    if people_modified and "word/people.xml" not in zip_entries:
+        added["word/people.xml"] = serialize_dom_utf8(people_dom)
+
+    build_output_zip(input_path, args.output, modified, added)
 
     # ------------------------------------------------------------------
     # Summary
@@ -1097,13 +1069,6 @@ def main():
         ),
         "edit_results": results,
     }
-
-    if fixup_result:
-        summary["fixup"] = fixup_result
-    if validate_result:
-        summary["validation"] = validate_result
-    if pack_result:
-        summary["pack"] = pack_result
 
     print(json.dumps(summary, indent=2))
     sys.exit(1 if errors else 0)

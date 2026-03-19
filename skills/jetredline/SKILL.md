@@ -185,16 +185,14 @@ where `<TMPDIR>` is the literal path captured in Step 0 (e.g., `/path/to/cases/s
 
 ## LibreOffice (soffice)
 
-`soffice` may not be on PATH by default. The docx skill's `pack.py` uses it for validation. **Always prepend the LibreOffice path (via `$SOFFICE`) and set TMPDIR when running pack.py or any command that invokes soffice:**
+`soffice` may not be on PATH by default. **Always prepend the LibreOffice path when invoking soffice:**
 
 ```bash
-TMPDIR=<TMPDIR> PATH="$SOFFICE_DIR:$PATH" PYTHONPATH=$DOCX_SKILL $VENV_PYTHON $PACK_SCRIPT <input_directory> <output.docx>
+PATH="$SOFFICE_DIR:$PATH" $SOFFICE --headless --convert-to pdf <input.docx>
 ```
-where `<TMPDIR>` is the literal absolute path from Step 0. `$SOFFICE_DIR` was set in Platform Detection above.
+where `$SOFFICE_DIR` was set in Platform Detection above.
 
-Do not use `--force` with pack.py. Run `ooxml_fixup.py` before packing to resolve issues that previously required `--force`. If pack.py still reports errors, run `ooxml_validate.py` to diagnose.
-
-Also use this PATH prefix (or invoke `$SOFFICE` directly) for document-to-image conversion (`$SOFFICE --headless --convert-to pdf`) and any other LibreOffice operations.
+Note: `apply_edits.py` operates directly on .docx ZIP files and does not use LibreOffice or the docx plugin's pack/unpack scripts. LibreOffice is only needed for document-to-image/PDF conversion.
 
 ## Workflow
 
@@ -302,22 +300,7 @@ This produces a self-contained HTML file that displays each citation alongside t
 
 #### Step 9 Details: Batch Edit Workflow
 
-**9a. Unpack the input .docx:**
-```bash
-TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_SKILL $VENV_PYTHON $UNPACK_SCRIPT <input.docx> <TMPDIR>/unpacked
-```
-
-**9b. Pre-validate and fix the unpacked input** (catches inherited structural problems before editing):
-```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/ooxml_validate.py <TMPDIR>/unpacked
-```
-If validation fails, run the fixup first:
-```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/ooxml_fixup.py <TMPDIR>/unpacked
-```
-Then re-validate. This ensures edits start from a clean baseline.
-
-**9c. Collect all edits into a JSON file.** Gather Pass 2 edits (style/grammar), Pass 3A edits (citation format), and Pass 5 edits (analytical rigor) into a single JSON array:
+**9a. Collect all edits into a JSON file.** Gather Pass 2 edits (style/grammar), Pass 3A edits (citation format), and Pass 5 edits (analytical rigor) into a single JSON array:
 ```json
 [
     {
@@ -344,20 +327,21 @@ Then re-validate. This ensures edits start from a clean baseline.
 ```
 Write this JSON to `<TMPDIR>/edits.json`.
 
-**9d. Run apply_edits.py:**
+**9b. Run apply_edits.py** directly on the original .docx (no unpack step):
 ```bash
-$VENV_PYTHON $SKILL_DIR/apply_edits.py --input <TMPDIR>/unpacked --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx> --pack-script $PACK_SCRIPT
+$VENV_PYTHON $SKILL_DIR/apply_edits.py --input <input.docx> --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx>
 ```
 
-The script is fully self-contained (no PYTHONPATH needed) and automatically:
-- Applies all tracked changes and comments via direct XML manipulation
-- Runs `ooxml_fixup.py` (ID deconfliction, relationship dedup, orphan cleanup, xml:space fix)
-- Runs `ooxml_validate.py` (checks for remaining issues)
-- Packs the result into the output .docx
+The script operates directly on the .docx ZIP archive — no unpack/pack pipeline, no dependency on the docx plugin. It:
+- Reads document.xml from the original ZIP
+- Applies all tracked changes and comments via DOM manipulation
+- Serializes XML as UTF-8 with `standalone="yes"`
+- Builds the output ZIP preserving original entry metadata
+- Produces files Word opens cleanly (no encoding or ZIP metadata issues)
 
-**9e. Check the output.** Parse the JSON summary from apply_edits.py. If any edits failed, report them. If validation failed, diagnose and fix before proceeding.
+**9c. Check the output.** Parse the JSON summary from apply_edits.py. If any edits failed, report them.
 
-This replaces the previous pattern of building a bespoke XML-editing Python script each run. The agent's job is now: collect edits into JSON (1 Write call), run one command (1 Bash call).
+The agent's job is: collect edits into JSON (1 Write call), run one command (1 Bash call).
 
 **Web mode workflow:**
 1. Read `references/style-guide.md` from project knowledge. If not found, tell the user to upload it.
@@ -746,24 +730,7 @@ Use `apply_edits.py` to produce a .docx with:
 - Insertions as tracked insertions (author: "Claude")
 - Comments for substantive notes — explaining a change or flagging an issue
 
-**Assembly workflow:** Use the batch edit workflow in Step 9 above. `apply_edits.py` handles unpacking, editing, fixup, validation, and packing in a single command. If you need to run the steps separately (e.g., for debugging):
-
-1. **Unpack** the original .docx
-2. **Edit** the unpacked XML (tracked changes, comments) in a single script execution
-3. **Run `ooxml_fixup.py`** to deconflict IDs, deduplicate relationships, clean orphans, and fix `xml:space`:
-   ```bash
-   $VENV_PYTHON $SKILL_DIR/ooxml_fixup.py <unpacked_dir>
-   ```
-4. **Run `ooxml_validate.py`** to verify the document is clean:
-   ```bash
-   $VENV_PYTHON $SKILL_DIR/ooxml_validate.py <unpacked_dir>
-   ```
-5. **Pack** the directory into a .docx (without `--force`):
-   ```bash
-   TMPDIR=<TMPDIR> PATH="$SOFFICE_DIR:$PATH" PYTHONPATH=$DOCX_SKILL $VENV_PYTHON $PACK_SCRIPT <unpacked_dir> <output.docx>
-   ```
-
-Do not use `--force` with pack.py. The fixup script resolves issues that previously required it. If validation fails, run `ooxml_validate.py` to diagnose.
+**Assembly workflow:** Use the batch edit workflow in Step 9 above. `apply_edits.py` operates directly on the .docx ZIP — no unpack/pack pipeline needed. The script is fully self-contained (no docx plugin dependency).
 
 ### Analysis document (if requested)
 Produce a document structured as below, then **save it to a markdown file** in the working directory (not the temp directory). Use the naming pattern `<original-filename>-ANALYSIS.md` (e.g., `Estate-of-Kish_Opinion-ANALYSIS.md`). This ensures the analysis survives context compression and can be opened after the session.
