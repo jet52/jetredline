@@ -134,7 +134,7 @@ if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
   VENV_DIR="/tmp/jetredline-venv"
   if [ ! -d "$VENV_DIR" ]; then
     python3 -m venv "$VENV_DIR"
-    "$VENV_DIR/bin/pip" install defusedxml pikepdf textstat -q
+    "$VENV_DIR/bin/pip" install defusedxml pikepdf textstat "httpx[socks]" -q
   fi
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"

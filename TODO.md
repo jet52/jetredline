@@ -311,51 +311,13 @@ Also update the "read the docx skill" instruction: "Read `SKILL.md` from the doc
 
 ## Issue 3: Python venv creation fails on read-only filesystem
 
-**Symptom:** `uv venv ~/.claude/skills/jetredline/.venv` fails with `Read-only file system (os error 30)`.
-
-**Root cause:** In Cowork, the skill directory is mounted read-only. The venv path is inside that directory.
-
-**Workaround used:** Attempted system-wide pip install; `textstat` was missing. Readability metrics were skipped.
-
-**Suggested fix:** Add a Cowork fallback to the venv setup:
-
-```bash
-VENV_DIR=~/.claude/skills/jetredline/.venv
-if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
-    # Read-only skill dir (Cowork) — use session-local venv
-    VENV_DIR=/tmp/jetredline-venv
-    if [ ! -d "$VENV_DIR" ]; then
-        python3 -m venv "$VENV_DIR"
-        "$VENV_DIR/bin/pip" install defusedxml pikepdf textstat -q
-    fi
-fi
-VENV_PYTHON="$VENV_DIR/bin/python"
-```
-
-Alternative: `pip install defusedxml pikepdf textstat --break-system-packages -q` as a one-liner fallback when the venv can't be created.
-
-- [ ] Add read-only filesystem detection to venv setup in SKILL.md
-- [ ] Add fallback venv path (`/tmp/jetredline-venv` or session dir)
-- [ ] Alternatively, add `--break-system-packages` pip fallback for Cowork
+**Status: RESOLVED in v3.3.0.** SKILL.md Python Environment section has read-only fallback to `/tmp/jetredline-venv`. Updated in v3.4.0 to include `httpx[socks]` in the fallback install.
 
 ---
 
 ## Issue 4: `jetcite_tool.py` missing `httpx[socks]` dependency
 
-**Symptom:** First failure: `ModuleNotFoundError: No module named 'httpx'`. After installing httpx, second failure: `ImportError: Using SOCKS proxy, but the 'socksio' package is not installed`.
-
-**Root cause:** Cowork routes network traffic through a SOCKS proxy. The `httpx` package needs the `[socks]` extra to handle this. The jetcite skill's dependencies don't include `httpx[socks]`.
-
-**Workaround used:** `pip install "httpx[socks]" --break-system-packages`.
-
-**Suggested fix:**
-1. Add `httpx[socks]` to the skill's requirements (or `requirements.txt`)
-2. Make the ndcourts URL resolution gracefully degrade when network fails — the citation scan (regex + URL generation) doesn't need network; only the ndcourts redirect resolution does
-3. Add `socksio` to the dependency list explicitly
-
-- [ ] Add `httpx[socks]` (or `httpx` + `socksio`) to jetcite dependencies
-- [ ] Make `resolve_nd_opinion_url()` in `ndcourts.py` catch network errors and fall back to search URL pattern
-- [ ] Add `requirements.txt` to jetcite skill if not present
+**Status: RESOLVED.** jetcite `pyproject.toml` updated `httpx>=0.27` → `httpx[socks]>=0.27` (jetcite commit 80fabf1). SKILL.md Cowork venv fallback updated to install `httpx[socks]`. The `resolve_nd_opinion_url()` function already gracefully returns `None` on network errors — no code change needed.
 
 ---
 
@@ -396,26 +358,7 @@ Apply to both `old_text` from the edit JSON and `full_text` from concatenated ru
 
 ## Issue 6: Temp directory permissions in Cowork
 
-**Symptom:** `PermissionError: [Errno 13] Permission denied: '.../unpacked/word/comments.xml'` when writing to the unpacked directory.
-
-**Root cause:** Temp directory was created inside `/mnt/...` (the mounted workspace), which has restricted write permissions in Cowork's sandbox. The unpack script could create files there, but subsequent modification of those files was blocked.
-
-**Workaround used:** Re-unpacked to `/sessions/` (the VM's own writable filesystem).
-
-**Suggested fix:** In SKILL.md Step 0, detect Cowork and create temp dir under `/tmp/` rather than `$(pwd)`:
-
-```bash
-# Use /tmp for temp files if cwd is under a restricted mount
-if [[ "$(pwd)" == /mnt/* ]]; then
-    TMPBASE="/tmp"
-else
-    TMPBASE="$(pwd)"
-fi
-```
-
-This is independent of the apply_edits.py refactor — it's a SKILL.md instruction change only.
-
-- [ ] Update SKILL.md Step 0 temp-dir logic to use `/tmp/` when cwd is under `/mnt/`
+**Status: RESOLVED in v3.3.0.** SKILL.md Step 0 temp-dir setup detects `/mnt/*` and uses `/tmp/` as TMPBASE.
 
 ---
 
@@ -638,24 +581,21 @@ Under either option, update the Step 9 workflow to skip the unpack step:
 
 ## Summary: Priority order for implementation
 
-### Phase 1 — Fix .docx output (Issues 1, 2, 5, 6, 12)
+### Resolved
 
-Make `apply_edits.py` produce valid .docx files in all environments.
+- **Issue 1** (scripts.document dependency): RESOLVED by Issue 12 rewrite — apply_edits.py is fully self-contained.
+- **Issue 2** (docx plugin path resolution): RESOLVED by Issue 12 rewrite — no dependency on docx plugin for edit pipeline.
+- **Issue 3** (venv on read-only filesystem): RESOLVED in v3.3.0 — fallback to `/tmp/jetredline-venv`.
+- **Issue 4** (httpx[socks] dependency): RESOLVED — jetcite pyproject.toml updated, SKILL.md Cowork fallback updated.
+- **Issue 5** (Unicode normalization): RESOLVED in v3.3.0 — NFC + NBSP + HTML entity normalization in `_normalize_for_search`.
+- **Issue 6** (temp dir permissions): RESOLVED in v3.3.0 — `/mnt/*` detection uses `/tmp/`.
+- **Issue 11** (nd_cite_check.py import): RESOLVED — jetcite 1.4.0 installed with `_ND_REPORTERS`/`_FEDERAL_REPORTERS`.
+- **Issue 12** (unpack/pack produces invalid .docx): RESOLVED in v3.4.0 — direct ZIP operation, UTF-8 serialization, standalone comment fix.
 
-**1a. Rewrite apply_edits.py to work directly on .docx input** (Issue 12): This is the top priority — the current pipeline produces files Word cannot open. The rewrite eliminates the unpack/pack pipeline entirely, operates directly on the original ZIP, serializes as UTF-8, and preserves original ZIP metadata. This also resolves Issue 1 (no dependency on `scripts.document`) and Issue 2 (no dependency on docx plugin paths). See Issue 12 for the full design.
+### Remaining
 
-**1b. Unicode normalization for text matching** (Issue 5): Normalize both edit JSON and extracted run text to NFC before searching. Low-risk, high-impact — directly fixes 3/13 edit failures from the Ferderer session.
-
-**1c. SKILL.md environment detection** (Issues 2, 6, 7): Path discovery block in Step 0 that detects docx plugin layout for unpack (still needed for reading existing .docx content), chooses temp directory, handles venv fallback. The pack-side paths are no longer needed after 1a.
-
-### Phase 2 — Dependency and feature improvements
-
-2. **Medium — Hyperlink support** (Issue 8): Add `"type": "hyperlink"` to edit schema. New feature; integrates with jetcite.
-3. **Medium — jetcite dependency fix** (Issue 4): Add `httpx[socks]` and graceful network fallback.
-4. **Low — Smart quote normalization** (Issue 13): Add smart↔straight quote mapping to `_normalize_for_search` in `apply_edits.py`. Currently `\u2018`/`\u2019` (curly single) and `\u201c`/`\u201d` (curly double) don't match `'`/`"` (straight). Low risk — unlikely a document would intentionally contain both forms as distinct text. Would make edit matching more forgiving when the edit JSON is generated with straight quotes but the .docx uses smart quotes.
-5. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
-6. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
-
-### Immediate — Unblock citation pipeline (Issue 11)
-
-**0. Fix `nd_cite_check.py` import** (Issue 11): Guard the `from jetcite.cache import _ND_REPORTERS, _FEDERAL_REPORTERS` import with a try/except fallback defining the constants locally. This is a one-line fix that unblocks both `nd_cite_check.py` and `cite_review.py`. Do this before anything else — it's broken right now in the deployed skill.
+1. **Medium — Hyperlink support** (Issue 8): Add `"type": "hyperlink"` to edit schema. New feature; integrates with jetcite.
+2. **Low — Conditional ooxml.md read** (Issue 7): Update SKILL.md Step 1 to check for `ooxml.md` existence.
+3. **Low — Smart quote normalization** (Issue 13): Add smart↔straight quote mapping to `_normalize_for_search` in `apply_edits.py`. Currently `\u2018`/`\u2019` (curly single) and `\u201c`/`\u201d` (curly double) don't match `'`/`"` (straight). Low risk — unlikely a document would intentionally contain both forms as distinct text.
+4. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
+5. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
