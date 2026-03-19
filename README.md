@@ -16,7 +16,7 @@ Appellate judicial opinion and bench memo editor and proofreader. Produces a Wor
 6. **Brief matching** — confirms the opinion or memo addresses every argument raised by the parties
 7. **Dissent/concurrence cross-check** — checks fair characterization and responsiveness between majority and separate writings
 
-Passes 1–7 run as parallel subagents where possible. After all passes complete, the pipeline collects results and produces up to two outputs: a tracked-changes .docx (Pass 2 edits become tracked insertions/deletions via a batch edit helper; other pass findings become document comments; OOXML fixup and validation ensure document integrity) and a companion analysis document summarizing all findings. The analysis document is also saved as a markdown file in the working directory.
+Passes 1–7 run as parallel subagents where possible. After all passes complete, the pipeline collects results and produces up to two outputs: a tracked-changes .docx (Pass 2 edits become tracked insertions/deletions; other pass findings become document comments; `apply_edits.py` operates directly on the .docx ZIP archive with no unpack/pack pipeline) and a companion analysis document summarizing all findings. The analysis document is also saved as a markdown file in the working directory.
 
 ## Analysis Document
 
@@ -40,8 +40,8 @@ The analysis document includes the following sections (some vary by document typ
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI) or [Claude Desktop](https://claude.ai/download) with Cowork
 - Python 3.10+
-- Node.js 18+
-- [LibreOffice](https://www.libreoffice.org/) (for document conversion)
+- Node.js 18+ (for creating new .docx from scratch; not needed for tracked-changes editing)
+- [LibreOffice](https://www.libreoffice.org/) (for document-to-PDF conversion; not needed for tracked-changes editing)
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
 **Windows additional requirements:**
@@ -155,14 +155,17 @@ jetredline/
 ├── skills/
 │   └── jetredline/
 │       ├── SKILL.md
+│       ├── VERSION
 │       ├── package.json
-│       ├── apply_edits.py
-│       ├── nd_cite_check.py
-│       ├── ooxml_fixup.py
-│       ├── ooxml_validate.py
-│       ├── readability_metrics.py
-│       ├── splitmarks.py
 │       ├── requirements.txt
+│       ├── apply_edits.py          # Tracked-changes batch editor (direct ZIP)
+│       ├── nd_cite_check.py        # ND citation checker (requires jetcite)
+│       ├── cite_review.py          # Interactive citation review HTML generator
+│       ├── check_update.py         # Version check on session start
+│       ├── readability_metrics.py  # FK grade, passive voice, etc.
+│       ├── splitmarks.py           # PDF bookmark splitter (bundled)
+│       ├── ooxml_fixup.py          # OOXML debugging tool (not in main pipeline)
+│       ├── ooxml_validate.py       # OOXML debugging tool (not in main pipeline)
 │       └── references/
 │           ├── nd-appellate-rules.md
 │           └── style-guide.md
@@ -179,10 +182,11 @@ jetredline/
 | Dependency   | Purpose                        | Required?                    |
 | ------------ | ------------------------------ | ---------------------------- |
 | Python 3.10+ | PDF/XML processing             | Yes                          |
-| Node.js 18+  | DOCX generation                | Yes                          |
-| LibreOffice  | Document conversion/validation | Yes                          |
+| Node.js 18+  | New .docx creation from scratch| Only if not editing existing  |
+| LibreOffice  | Document-to-PDF conversion     | Only for PDF/image export    |
 | defusedxml   | Safe XML parsing               | Yes (installed by installer) |
 | pikepdf      | PDF manipulation               | Yes (installed by installer) |
 | splitmarks   | PDF bookmark splitting         | Bundled script (no install)  |
 | textstat     | Readability metrics            | Yes (installed by installer) |
-| docx (npm)   | DOCX document creation         | Yes (installed by installer) |
+| jetcite      | Citation parsing and linking   | Yes (installed from source)  |
+| docx (npm)   | New .docx creation from scratch| Only if not editing existing  |
