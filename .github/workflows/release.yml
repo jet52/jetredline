@@ -19,6 +19,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            jetredline-skill.zip
-            jetredline-plugin.zip
+            jetredline-skill-*.zip
+            jetredline-plugin-*.zip
           generate_release_notes: true

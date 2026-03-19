@@ -1,13 +1,14 @@
 SKILL_NAME := jetredline
-SKILL_ZIP := $(SKILL_NAME)-skill.zip
-PLUGIN_ZIP := $(SKILL_NAME)-plugin.zip
+VERSION := $(shell cat skills/jetredline/VERSION)
+SKILL_ZIP := $(SKILL_NAME)-skill-$(VERSION).zip
+PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
 
 .PHONY: package plugin clean install test
 
 package: clean
-	zip -r $(SKILL_ZIP) skills/jetredline/ install.sh install.ps1 README.md \
-		-x "skills/jetredline/.venv/*" "skills/jetredline/node_modules/*" \
-		   "skills/jetredline/package-lock.json" "skills/jetredline/__pycache__/*"
+	cd skills && zip -r ../$(SKILL_ZIP) jetredline/ \
+		-x "jetredline/.venv/*" "jetredline/node_modules/*" \
+		   "jetredline/package-lock.json" "jetredline/__pycache__/*"
 
 plugin: clean
 	zip -r $(PLUGIN_ZIP) .claude-plugin/ skills/ install.sh install.ps1 README.md \
@@ -15,7 +16,7 @@ plugin: clean
 		   "skills/jetredline/package-lock.json" "skills/jetredline/__pycache__/*"
 
 clean:
-	rm -f $(SKILL_ZIP) $(PLUGIN_ZIP)
+	rm -f $(SKILL_NAME)-skill-*.zip $(SKILL_NAME)-plugin-*.zip
 
 install:
 	bash install.sh

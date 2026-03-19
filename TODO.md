@@ -493,19 +493,160 @@ This integrates naturally with the `jetcite` scan output — the main-context wo
 
 ---
 
+## Issue 11: `nd_cite_check.py` imports symbols not yet in installed `jetcite`
+
+**Symptom:** `cite_review.py` crashes with `ImportError: cannot import name '_ND_REPORTERS' from 'jetcite.cache'`. This also blocks any tool that imports `nd_cite_check` at the module level.
+
+**Root cause:** `nd_cite_check.py` line 50 does `from jetcite.cache import _ND_REPORTERS, _FEDERAL_REPORTERS`. These symbols are defined in the TODO plan (Step 1 of the refs cache restructure above) but have not been added to the installed `jetcite` package. The code was updated to use the planned API before the package was updated.
+
+**Cascade:** `cite_review.py` imports `from nd_cite_check import scan_opinion` at line 85, triggering the same `ImportError`. This means the citation review HTML cannot be generated in any environment.
+
+**Discovered:** 2026-03-19, *Marschner v. Marschner* session. The Pass 3B citation subagent worked around this by calling `nd_cite_check.py` as a subprocess (which catches the error differently), but `cite_review.py` failed outright.
+
+**Fix options (pick one):**
+
+1. **Add the symbols to `jetcite.cache` now.** Implement the `_ND_REPORTERS` and `_FEDERAL_REPORTERS` sets as defined in Step 1 above and release an updated `jetcite` package. This is the correct long-term fix but requires the full refs cache restructure to be useful.
+
+2. **Guard the import in `nd_cite_check.py`.** Make the import conditional so the module loads even when the symbols don't exist:
+   ```python
+   try:
+       from jetcite.cache import _ND_REPORTERS, _FEDERAL_REPORTERS
+   except ImportError:
+       _ND_REPORTERS = {"N.W.", "N.W.2d", "N.D."}
+       _FEDERAL_REPORTERS = {
+           "U.S.", "S. Ct.", "L. Ed.", "L. Ed. 2d",
+           "F.", "F.2d", "F.3d", "F.4th",
+           "F. Supp.", "F. Supp. 2d", "F. Supp. 3d",
+           "B.R.", "F.R.D.", "Fed. Cl.", "M.J.",
+           "Vet. App.", "T.C.", "F. App'x",
+       }
+   ```
+   Quick fix. Duplicates the constants but unblocks both `nd_cite_check.py` and `cite_review.py` immediately.
+
+3. **Define the constants locally in `nd_cite_check.py`.** Move them out of `jetcite.cache` entirely until the cache restructure is complete. Remove the import line.
+
+**Recommendation:** Option 2 (guarded import) as an immediate fix, then Option 1 when the cache restructure lands.
+
+- [ ] Fix `nd_cite_check.py` import of `_ND_REPORTERS` / `_FEDERAL_REPORTERS` (guard or define locally)
+- [ ] Verify `cite_review.py` loads successfully after the fix
+- [ ] Add the constants to `jetcite.cache` when the refs cache restructure is implemented
+
+---
+
+## Issue 12: Unpack/pack pipeline produces .docx files Word cannot open
+
+**Symptom:** Word for Mac refuses to open .docx files produced by the `apply_edits.py` → `ooxml_fixup.py` → `pack.py` pipeline. The error is either a hard failure ("Word experienced an error trying to open the file") or a repair dialog that itself fails. LibreOffice, python-docx, and the skill's own `ooxml_validate.py` all report the files as valid.
+
+**Discovered:** 2026-03-19, *Marschner v. Marschner* session (Claude Code on macOS). The apply_edits.py pipeline reported all 19 edits applied, fixup found 0 issues, validation passed. Word refused to open the file.
+
+**Root cause (confirmed by bisection):**
+
+The unpack/pack round-trip re-serializes all XML files through Python's minidom, which changes the encoding and formatting in ways Word rejects:
+
+1. **Encoding change.** The original .docx XML files declare `encoding="UTF-8"` and contain raw UTF-8 bytes for characters like smart quotes (U+2019 → 3-byte sequence `0xe2 0x80 0x99`). The unpack script reads these, and the pack script (or `apply_edits.py` via `dom.toxml(encoding="ascii")`) re-serializes as `encoding="ascii"` with entity-encoded non-ASCII characters (`&#8217;`). While technically valid XML, Word for Mac rejects the encoding change.
+
+2. **Standalone declaration dropped.** The original has `standalone="yes"` in the XML declaration; minidom's `toxml()` omits it.
+
+3. **Whitespace reformatting.** The unpack script pretty-prints the XML (adding indentation and newlines). The original document.xml is 40,004 bytes; the unpacked/repacked version is ~60,000 bytes with identical content. While OOXML is supposed to be whitespace-insensitive between elements, Word may be sensitive to whitespace changes in certain contexts.
+
+4. **ZIP metadata.** Python's `zipfile` module creates entries with `create_system=3` (Unix) and `external_attr=0x81a40000` (Unix file permissions). The original has `create_system=0` (MS-DOS) and `external_attr=0`. This alone doesn't cause the hard failure (confirmed: repacking the original byte-identical XML with Unix ZIP attrs still opens), but it may contribute to the repair dialog.
+
+**Bisection results:**
+
+| Test | Result |
+|------|--------|
+| Byte-for-byte copy of original .docx | Opens |
+| Original XML round-tripped through minidom with `encoding="UTF-8"` + `standalone="yes"` | Opens |
+| Original XML round-tripped through minidom with `encoding="ascii"` | Fails |
+| apply_edits.py output (through unpack pipeline, ASCII encoding) | Fails |
+| Direct minidom edits on original XML, serialized as UTF-8, ZIP entries copied from original | Opens with all tracked changes and comments |
+
+**Workaround used (Marschner session):**
+
+Wrote a standalone `build_redline.py` script that:
+1. Extracts `document.xml` directly from the original .docx ZIP (no unpack reformatting)
+2. Parses with minidom and applies tracked changes + comment markers via DOM manipulation
+3. Serializes back with `dom.toxml(encoding="UTF-8")` and restores `standalone="yes"`
+4. Builds comments.xml, people.xml, Content_Types.xml, and document.xml.rels from scratch
+5. Constructs the output ZIP by copying all original entries byte-for-byte and replacing/adding only the modified files, preserving the original ZIP entry metadata (`create_system=0`, `external_attr=0`)
+
+This bypasses the entire unpack/apply_edits/ooxml_fixup/pack pipeline.
+
+**Proper fix — two options:**
+
+### Option A: Fix the serialization in apply_edits.py (recommended)
+
+Modify `apply_edits.py` to work directly on the original ZIP rather than requiring an unpacked directory:
+
+```python
+# Instead of:
+#   apply_edits.py --input <unpacked_dir> --edits edits.json --output out.docx --pack-script pack.py
+# Change to:
+#   apply_edits.py --input original.docx --edits edits.json --output out.docx
+
+# Internally:
+# 1. Extract document.xml from the ZIP (raw bytes, no reformatting)
+# 2. Parse with minidom
+# 3. Apply edits via DOM manipulation
+# 4. Serialize with dom.toxml(encoding="UTF-8"), restore standalone="yes"
+# 5. Build comment XML files from scratch (no dependency on docx plugin)
+# 6. Copy all original ZIP entries, replacing/adding only changed files
+# 7. Preserve original ZIP entry metadata (create_system, external_attr, etc.)
+```
+
+This eliminates the dependency on unpack.py, pack.py, ooxml_fixup.py, and the docx plugin entirely. The script becomes fully self-contained.
+
+**Key serialization rules:**
+- Always use `dom.toxml(encoding="UTF-8")` — never `encoding="ascii"`
+- Restore `standalone="yes"` in the XML declaration after serialization
+- When building the output ZIP, copy `ZipInfo` objects from the original for replaced files (preserves `create_system`, `create_version`, `extract_version`, `flag_bits`, `external_attr`)
+- For new files (comments.xml, people.xml), use `create_system=0`, `create_version=45`, `extract_version=20`, `external_attr=0` to match Windows-originated entries
+
+### Option B: Fix the unpack/pack pipeline
+
+Make the pipeline preserve original encoding:
+1. `unpack.py`: Store the original XML declaration and encoding for each file
+2. `apply_edits.py`: Serialize using the stored encoding
+3. `pack.py`: Preserve original ZIP entry metadata
+
+This is more work and still requires the docx plugin dependency. Option A is simpler and more robust.
+
+### Changes to SKILL.md
+
+Under either option, update the Step 9 workflow to skip the unpack step:
+
+```bash
+# Old workflow (broken):
+# 1. Unpack: unpack.py original.docx unpacked/
+# 2. Edit:   apply_edits.py --input unpacked/ --edits edits.json
+# 3. Fixup:  ooxml_fixup.py unpacked/
+# 4. Pack:   pack.py unpacked/ output.docx
+
+# New workflow:
+# 1. Edit:   apply_edits.py --input original.docx --edits edits.json --output output.docx
+```
+
+- [ ] Rewrite `apply_edits.py` to accept .docx input directly (no unpack required)
+- [ ] Serialize all XML as UTF-8 with `standalone="yes"`
+- [ ] Copy ZIP entries from original, preserving metadata
+- [ ] Build comment infrastructure (comments.xml, people.xml, Content_Types, rels) internally
+- [ ] Remove dependency on unpack.py, pack.py, ooxml_fixup.py, and docx plugin
+- [ ] Update SKILL.md Step 9 workflow
+- [ ] Test with Word for Mac, Word for Windows, and LibreOffice
+
+---
+
 ## Summary: Priority order for implementation
 
-### Phase 1 — Core cross-environment support (Issues 1, 2, 5, 6)
+### Phase 1 — Fix .docx output (Issues 1, 2, 5, 6, 12)
 
-Make `apply_edits.py` work in both Claude Code and Cowork without manual intervention.
+Make `apply_edits.py` produce valid .docx files in all environments.
 
-**1a. Inline DOM manipulation** (Issue 1): Replace `Document` API calls with direct minidom. Inline `_parse_fragment()` (~15 lines), RSID setup (~30 lines). This is the gating change — everything else depends on it.
+**1a. Rewrite apply_edits.py to work directly on .docx input** (Issue 12): This is the top priority — the current pipeline produces files Word cannot open. The rewrite eliminates the unpack/pack pipeline entirely, operates directly on the original ZIP, serializes as UTF-8, and preserves original ZIP metadata. This also resolves Issue 1 (no dependency on `scripts.document`) and Issue 2 (no dependency on docx plugin paths). See Issue 12 for the full design.
 
-**1b. Comment backend abstraction** (Issue 1): Try importing `scripts.document.Document`; if unavailable, delegate to Cowork's `comment.py` (passed via `--comment-script` arg) + inline document.xml markers.
+**1b. Unicode normalization for text matching** (Issue 5): Normalize both edit JSON and extracted run text to NFC before searching. Low-risk, high-impact — directly fixes 3/13 edit failures from the Ferderer session.
 
-**1c. Unicode normalization for text matching** (Issue 5): Normalize both edit JSON and extracted run text to NFC before searching. Low-risk, high-impact — directly fixes 3/13 edit failures from the Ferderer session.
-
-**1d. SKILL.md environment detection** (Issues 2, 6, 7): Path discovery block in Step 0 that detects docx plugin layout, sets pack/unpack/comment paths, chooses temp directory, handles venv fallback. Pass discovered paths to apply_edits.py via CLI args.
+**1c. SKILL.md environment detection** (Issues 2, 6, 7): Path discovery block in Step 0 that detects docx plugin layout for unpack (still needed for reading existing .docx content), chooses temp directory, handles venv fallback. The pack-side paths are no longer needed after 1a.
 
 ### Phase 2 — Dependency and feature improvements
 
@@ -513,3 +654,7 @@ Make `apply_edits.py` work in both Claude Code and Cowork without manual interve
 3. **Medium — jetcite dependency fix** (Issue 4): Add `httpx[socks]` and graceful network fallback.
 4. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
 5. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
+
+### Immediate — Unblock citation pipeline (Issue 11)
+
+**0. Fix `nd_cite_check.py` import** (Issue 11): Guard the `from jetcite.cache import _ND_REPORTERS, _FEDERAL_REPORTERS` import with a try/except fallback defining the constants locally. This is a one-line fix that unblocks both `nd_cite_check.py` and `cite_review.py`. Do this before anything else — it's broken right now in the deployed skill.
