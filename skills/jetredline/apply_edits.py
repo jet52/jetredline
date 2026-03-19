@@ -877,15 +877,32 @@ def apply_comment(dom, edit, edit_index, next_id, comment_writer):
                 anchor_run = run
                 break
 
-    target = anchor_run if anchor_run else para
+    if anchor_run:
+        start_elem = anchor_run
+        end_elem = anchor_run
+    else:
+        # Anchor spans multiple runs or not found — attach to whole
+        # paragraph.  Use the first and last child elements so that
+        # markers stay *inside* the w:p (a bare w:r in w:body is
+        # invalid OOXML and causes Word to reject the file).
+        children = [
+            c for c in para.childNodes
+            if c.nodeType == c.ELEMENT_NODE
+        ]
+        if children:
+            start_elem = children[0]
+            end_elem = children[-1]
+        else:
+            start_elem = para
+            end_elem = para
 
     try:
         comment_writer.add_comment(
             comment_id=next_id(),
             text=comment_text,
             dom=dom,
-            start_elem=target,
-            end_elem=target,
+            start_elem=start_elem,
+            end_elem=end_elem,
         )
     except Exception as e:
         return {
