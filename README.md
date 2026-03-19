@@ -159,8 +159,10 @@ jetredline/
 │       ├── package.json
 │       ├── requirements.txt
 │       ├── apply_edits.py          # Tracked-changes batch editor (direct ZIP)
-│       ├── nd_cite_check.py        # ND citation checker (requires jetcite)
+│       ├── nd_cite_check.py        # ND citation checker (uses bundled jetcite)
 │       ├── cite_review.py          # Interactive citation review HTML generator
+│       ├── lib/
+│       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)
 │       ├── check_update.py         # Version check on session start
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.
 │       ├── splitmarks.py           # PDF bookmark splitter (bundled)
@@ -188,5 +190,5 @@ jetredline/
 | pikepdf      | PDF manipulation               | Yes (installed by installer) |
 | splitmarks   | PDF bookmark splitting         | Bundled script (no install)  |
 | textstat     | Readability metrics            | Yes (installed by installer) |
-| jetcite      | Citation parsing and linking   | Yes (installed from source)  |
+| jetcite      | Citation parsing and linking   | Bundled (vendored source)   |
 | docx (npm)   | New .docx creation from scratch| Only if not editing existing  |

@@ -17,31 +17,25 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Locate jetcite: pip install, skill directory, or bail with instructions.
+# Locate jetcite: bundled lib/, pip install, or bail with instructions.
 # ---------------------------------------------------------------------------
-_JETCITE_SKILL = Path.home() / ".claude" / "skills" / "jetcite-skill" / "src"
+_BUNDLED_LIB = Path(__file__).resolve().parent / "lib"
+
+if _BUNDLED_LIB.is_dir():
+    sys.path.insert(0, str(_BUNDLED_LIB))
 
 try:
     from jetcite import Citation, CitationType, scan_text
     from jetcite.cache import _citation_path
 except ImportError:
-    if _JETCITE_SKILL.is_dir():
-        sys.path.insert(0, str(_JETCITE_SKILL))
-        try:
-            from jetcite import Citation, CitationType, scan_text
-            from jetcite.cache import _citation_path
-        except ImportError:
-            pass
-    if "jetcite" not in sys.modules:
-        print(
-            "ERROR: jetcite is not installed.\n"
-            "Install it as a Claude skill:\n"
-            "  https://github.com/jet52/jetcite\n"
-            "Or install via pip:\n"
-            "  pip install git+https://github.com/jet52/jetcite.git",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    print(
+        "ERROR: jetcite not found. Expected bundled copy at:\n"
+        f"  {_BUNDLED_LIB / 'jetcite'}\n"
+        "Run 'make vendor-jetcite' to re-vendor, or install via pip:\n"
+        "  pip install git+https://github.com/jet52/jetcite.git",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 # ---------------------------------------------------------------------------
 # Cite-type mapping: jetcite generic types → legacy specific strings
