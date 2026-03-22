@@ -122,7 +122,7 @@ The `~/refs/` directory contains a local repository of ND legal materials in mar
 
 This skill has a persistent virtual environment. **Always use this venv python for all Python operations — never create a new venv in the working directory.**
 
-- **Pre-installed packages:** `defusedxml`, `pikepdf`, `textstat`
+- **Pre-installed packages:** `defusedxml`, `httpx[socks]`, `pikepdf`, `textstat`
 - **Bundled scripts:** `splitmarks.py` (vendored; no install needed — `pikepdf` satisfies its only dependency)
 
 Set `$VENV_PYTHON` with a fallback for read-only filesystems (Cowork):
@@ -132,19 +132,19 @@ VENV_DIR="$SKILL_DIR/.venv"
 if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
   # Skill dir is read-only (Cowork) — use session-local venv
   VENV_DIR="/tmp/jetredline-venv"
-  if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-    "$VENV_DIR/bin/pip" install defusedxml pikepdf textstat "httpx[socks]" -q
-  fi
+    if [ ! -d "$VENV_DIR" ]; then
+      python3 -m venv "$VENV_DIR"
+      "$VENV_DIR/bin/pip" install -r "$SKILL_DIR/requirements.txt" -q
+    fi
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 ```
 
-If the venv does not exist or a package is missing in a writable environment, create/repair it:
-```bash
-uv venv "$SKILL_DIR/.venv"
-uv pip install defusedxml pikepdf textstat --python $VENV_PYTHON
-```
+  If the venv does not exist or a package is missing in a writable environment, create/repair it:
+  ```bash
+  uv venv "$SKILL_DIR/.venv"
+  uv pip install -r "$SKILL_DIR/requirements.txt" --python $VENV_PYTHON
+  ```
 
 ## Temporary Files
 
