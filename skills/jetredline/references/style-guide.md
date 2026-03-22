@@ -22,17 +22,19 @@
 - Prefer concrete nouns over nominalizations (e.g., "the court decided" not "the court's determination was").
 - Avoid throat-clearing phrases: "It is well settled that," "It is important to note that," "It should be noted that."
 
-### Pronouns
-- Never use plural pronouns (they/them/their) as gender-neutral singulars.
-- Use he, she, or it as appropriate.
-- When gender is unknown or irrelevant, rephrase to avoid the pronoun entirely.
-- Acceptable techniques: repeat the noun, restructure the sentence, use "a person who" or "one."
+### Pronouns and Gender-Neutral Writing
+- Prefer invisible gender-neutrality: rephrase to avoid gendered pronouns when the referent's gender is unknown or irrelevant.
+- Techniques: use a plural noun as the antecedent (allowing plural pronouns naturally), repeat the noun, restructure the sentence, replace a pronoun with an article, or use "a person who" or "one."
+  - Not this: "An accused person must actively waive his right to speak to his lawyer."
+  - But this: "An accused person must actively waive the right to speak to a lawyer."
+- If all parties in a case consistently use a specific pronoun to refer to a person, do not deviate from that usage.
+- Do not use singular "they" to refer to a specific, identified individual whose pronouns are otherwise clear from context.
 
 ### Constitutional Language
-- Always refer to constitutions as protecting, guaranteeing, or preserving rights.
-- Never say the constitution "creates," "grants," or "gives" rights unless the text clearly declares a newly created right.
-- Correct: "The Fourth Amendment protects against unreasonable searches."
+- Where the text of a constitutional provision is framed as recognizing or protecting a pre-existing right, preserve that framing. Do not rephrase such provisions as granting, creating, or giving the right.
+- Correct: "The Fourth Amendment protects against unreasonable searches." (The text says "shall not be violated," presupposing the right.)
 - Incorrect: "The Fourth Amendment grants a right against unreasonable searches."
+- If a provision's text expressly establishes a new governmental structure or process, "creates" or "establishes" may be appropriate.
 
 ### Oxford Comma
 - Always use the Oxford comma (serial comma before "and" or "or" in a list of three or more).
