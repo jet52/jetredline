@@ -29,9 +29,10 @@ try:
     from jetcite.cache import _citation_path
 except ImportError:
     print(
-        "ERROR: jetcite not found. Expected bundled copy at:\n"
+        "ERROR: jetcite import failed. Bundled copy expected at:\n"
         f"  {_BUNDLED_LIB / 'jetcite'}\n"
-        "Run 'make vendor-jetcite' to re-vendor, or install via pip:\n"
+        "Ensure httpx is installed:  pip install httpx[socks]\n"
+        "Or install jetcite via pip:\n"
         "  pip install git+https://github.com/jet52/jetcite.git",
         file=sys.stderr,
     )
