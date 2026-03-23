@@ -50,16 +50,7 @@ The analysis document includes the following sections (some vary by document typ
 
 ## Installation
 
-### Cowork Plugin (Claude Desktop)
-
-1. Download [`jetredline-plugin.zip`](https://github.com/jet52/jetredline/releases/latest/download/jetredline-plugin.zip)
-2. Open Claude Desktop → Settings → Customize → Install Plugin
-3. Select the downloaded zip file
-4. Run the appropriate installer to set up dependencies:
-   - **macOS/Linux:** `bash install.sh` from the plugin directory
-   - **Windows:** `powershell -ExecutionPolicy Bypass -File install.ps1` from the plugin directory
-
-### Claude Code (CLI)
+JetRedline installs as a skill to `~/.claude/skills/jetredline/`. Both Claude Code (CLI) and Claude Desktop with Cowork use the same skill directory, so any of the options below work for either.
 
 **Option A: From .zip**
 
@@ -110,14 +101,6 @@ uv pip install -r requirements.txt --python .venv\Scripts\python.exe
 npm install
 ```
 
-### Claude Desktop (Manual Skill Install)
-
-1. Download [`jetredline-skill.zip`](https://github.com/jet52/jetredline/releases/latest/download/jetredline-skill.zip)
-2. Open Settings > Features > Claude's Computer Use > Skills directory
-3. Set the skills directory to a folder of your choice (e.g., `~/.claude/skills/`)
-4. Copy `skills/jetredline/` contents into `<skills-dir>/jetredline/`
-5. Set up the Python venv and Node dependencies manually (see Option C above)
-
 ### Claude Projects (web)
 
 1. Download [`jetredline-skill.zip`](https://github.com/jet52/jetredline/releases/latest/download/jetredline-skill.zip) from GitHub
@@ -150,8 +133,6 @@ Provide a `.docx` draft opinion in the working directory. Optionally include `.p
 
 ```
 jetredline/
-├── .claude-plugin/
-│   └── plugin.json
 ├── skills/
 │   └── jetredline/
 │       ├── SKILL.md
