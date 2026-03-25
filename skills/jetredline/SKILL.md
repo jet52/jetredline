@@ -280,6 +280,7 @@ If the user did specify a preference, honor it:
 6b. **Delegate Pass 7** (dissent/concurrence cross-check) to a subagent if a dissent or concurrence was identified in Step 0 and `DOC_TYPE == opinion` — see Pass 7 below
 7. **Pass 2 routing:** If the opinion has **more than 30 paragraphs**, delegate Pass 2 to a subagent — see "Delegated Pass 2" below. Otherwise, perform Pass 2 in main context. **Pass 5** (analytical rigor) is always performed in main context. Pass 2 (when not delegated) and Pass 5 can proceed in parallel with subagents.
 8. Collect subagent results from Passes 1, 3, 4, 6, 7, and (if delegated) Pass 2 — **use the `TaskOutput` tool**, not Bash `tail`
+8a. **Caption mismatches → edits.** Check the Pass 3B results table for any Caption Check mismatches. For each mismatch, generate a tracked-change edit correcting the case name in the draft to match the official caption, with a comment citing the source (e.g., "Official caption per 2023 ND 219: 'Tracey v. Tracey'"). Include these in the edits JSON alongside Pass 2/3A/5 edits.
 9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
 10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
 11. **Generate citation review HTML** (CLI mode only): After Pass 3 completes, generate an interactive citation review page for human verification:
@@ -509,23 +510,25 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > 3. **Existence check.** Does the cited provision/opinion actually exist? For statutes and rules, confirm the section number is valid.
 >
-> 4. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
+> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/markdown/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. For non-case citations (statutes, rules, etc.), mark as N/A.
+>
+> 5. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
 >    - Does the source actually state or hold the legal principle attributed to it?
 >    - Is the signal appropriate? (No signal = direct support; *See* = clearly supports; *see also* = additional support; *cf.* = analogous; *but see* = contrary)
 >    - Is the proposition a fair characterization, or does it overstate/understate/distort the source?
 >    - Report: **Supports** (the cite supports the proposition), **Partially supports** (some nuance lost or overstated), or **Does not support** (the cite does not stand for the stated proposition).
 >
-> 5. **Currency check** (statutes, rules, admin code only). If the source text includes effective date or amendment information, flag if the cited version may not be current.
+> 6. **Currency check** (statutes, rules, admin code only). If the source text includes effective date or amendment information, flag if the cited version may not be current.
 >
-> 6. **Build the results table.** The Source Link column **must** use the full `url` value from the nd_cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
+> 7. **Build the results table.** The Source Link column **must** use the full `url` value from the nd_cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
 >
-> | ¶ | Citation | Type | Quote Check | Supports? | Source Link | Notes |
-> |---|----------|------|-------------|-----------|-------------|-------|
-> | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
+> | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Source Link | Notes |
+> |---|----------|------|---------------|-------------|-----------|-------------|-------|
+> | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Matches / Mismatch: official is [X] / N/A | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
 >
 > For locally-verified citations, still include the official URL from the lookup plan so readers can independently check the source. The URL was already computed — do not substitute or shorten it.
 >
-> 7. **Return** the completed table and a summary: [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] citations that may not support the stated proposition.
+> 8. **Return** the completed table and a summary: [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] citations that may not support the stated proposition.
 >
 > **Error handling:**
 > - If `nd_cite_check.py` fails or returns an error, report the error in the summary and proceed with manual verification using the URL patterns and local paths below.
@@ -664,7 +667,7 @@ Perform the following checks on **all documents** (both opinions and memos), the
 Read the entire document and build a mental index of: party names (including aliases and roles), dates, monetary amounts, numerical counts, procedural events, and terminology choices. Compare every reference to each entity, date, and event across the document. Flag any discrepancy with paragraph references for both the first usage and the inconsistent usage.
 
 Check for:
-- **Name/spelling inconsistencies** (e.g., "Johnson" vs "Johnsen", "Meier" vs "Meyer")
+- **Name/spelling inconsistencies** (e.g., "Johnson" vs "Johnsen", "Meier" vs "Meyer"). **Exclude case names** — party names in cited cases are verified in Pass 3B against official captions. Only flag non-case-name spelling inconsistencies here (party names in the case being decided, witness names, place names, ordinary words).
 - **Date inconsistencies** (same event assigned different dates in different paragraphs)
 - **Terminology drift** (switching between "defendant"/"respondent", "trial court"/"district court" without reason)
 - **Factual contradictions** (facts section says X, analysis section says Y)
@@ -918,6 +921,22 @@ This produces a self-contained HTML file with:
 - An "Export JSON" button to save the review state
 
 Tell the user the citation review file is available and can be opened in any browser. Name it `<original-filename>-CITE-REVIEW.html`.
+
+### Step 12: End-of-Workflow Summary
+
+After all outputs are generated, present a clear summary to the user:
+
+> **JetRedline Complete**
+>
+> **Documents generated:**
+> - Tracked-changes .docx: `<filename>` *(if generated)*
+> - Analysis report: `<filename>` *(if generated)*
+> - Citation review: `<filename>` *(CLI mode only)*
+>
+> **Citation Verification (quality gate):**
+> Open `<cite-review-filename>` in your browser to verify each citation against its source. Keyboard: `j`/`k` to navigate, `v`/`f`/`s` to verify/flag/skip, `?` for all shortcuts.
+
+Always include this summary. Adapt the list to reflect which outputs were actually generated. The citation verification prompt is the most important part — it's a quality gate, not an optional extra.
 
 ## Key Reminders
 
