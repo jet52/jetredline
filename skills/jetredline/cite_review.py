@@ -4,17 +4,17 @@ Citation Review Generator — produces a self-contained HTML file for
 human review of citations in a judicial opinion or bench memo.
 
 Left sidebar lists all citations with status indicators.
-Main pane is split vertically: draft paragraph on top, cited authority
-(iframe or fallback link) on bottom.  Keyboard navigation: j/k to
-move between citations, v/f/s to mark verified/flagged/skipped,
-n to focus notes field.
+Main pane is split horizontally: full draft opinion on top (with paragraph
+anchors and scrolling), cited authority on bottom (iframe for ND sources,
+"open in new tab" for others).  Keyboard navigation: j/k to move between
+citations, v/f/s to mark verified/flagged/skipped, n to focus notes field.
 
 Usage:
-    python3 cite_review.py --opinion opinion.md --refs-dir ~/refs \
+    python3 cite_review.py --opinion opinion.md --refs-dir ~/refs \\
         --output cite-review.html --title "2026 ND 42, State v. Henderson"
 
     # Or pipe nd_cite_check.py JSON directly:
-    python3 cite_review.py --opinion opinion.md --cite-json cites.json \
+    python3 cite_review.py --opinion opinion.md --cite-json cites.json \\
         --output cite-review.html
 """
 
@@ -24,6 +24,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # ---------------------------------------------------------------------------
 # Paragraph splitting
@@ -69,6 +70,36 @@ def _find_paragraph(paragraphs: list[dict], cite_text: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Opinion to HTML
+# ---------------------------------------------------------------------------
+
+def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
+    """Convert opinion text to HTML fragment with paragraph anchors."""
+    if not paragraphs or paragraphs[0]["num"] is None:
+        return f'<div class="opinion-text">{html.escape(text)}</div>'
+
+    parts = []
+    # Header text before first ¶ marker
+    first_match = _PARA_RE.search(text)
+    if first_match and first_match.start() > 0:
+        header = text[:first_match.start()].strip()
+        if header:
+            parts.append(
+                f'<div class="opinion-header">{html.escape(header)}</div>'
+            )
+
+    for p in paragraphs:
+        pid = f'para-{p["num"]}' if p["num"] is not None else "para-0"
+        escaped = html.escape(p["text"])
+        parts.append(
+            f'<div class="opinion-para" id="{pid}">'
+            f'<span class="para-marker">[¶{p["num"]}]</span> '
+            f'{escaped}</div>'
+        )
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
 # Citation data
 # ---------------------------------------------------------------------------
 
@@ -87,6 +118,12 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
         return scan_opinion(text, refs_dir=refs_dir)
     finally:
         sys.path.pop(0)
+
+
+# Domains whose pages can be loaded in an iframe (no X-Frame-Options block)
+_IFRAME_OK_DOMAINS = frozenset({
+    "www.ndcourts.gov", "ndcourts.gov", "ndlegis.gov",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -204,28 +241,30 @@ main { display:flex; flex:1; overflow:hidden; }
   flex:1; padding:16px 24px; overflow-y:auto;
   line-height:1.7; font-family:'Charter','Georgia',serif; font-size:15px;
 }
-.draft-body .para {
-  padding:14px 16px; background:var(--surface);
-  border-radius:6px; border:1px solid var(--border);
+.opinion-header {
+  margin-bottom:20px; padding:12px 16px;
+  text-align:center; font-style:italic;
+  color:var(--text-muted); white-space:pre-line;
+  border-bottom:1px solid var(--border);
+}
+.opinion-para {
+  padding:8px 16px; margin:2px 0;
+  border-left:3px solid transparent;
+  border-radius:4px;
+  transition:background 0.2s, border-color 0.2s;
+}
+.opinion-para.active-para {
+  background:var(--highlight);
+  border-left-color:var(--accent);
+}
+.para-marker {
+  color:var(--accent); font-weight:600;
+  font-family:'SF Mono','Cascadia Code',monospace; font-size:12px;
 }
 .cite-hl {
   background:var(--cite-hl); padding:1px 4px;
   border-radius:3px; border-bottom:2px solid var(--accent);
 }
-.notes-field { margin-top:12px; }
-.notes-field .nlbl {
-  font-size:10px; text-transform:uppercase; letter-spacing:0.05em;
-  color:var(--text-muted); margin-bottom:4px;
-  font-family:'SF Mono',monospace;
-}
-.notes-field textarea {
-  width:100%; padding:8px 12px; background:var(--bg);
-  border:1px solid var(--border); border-radius:4px;
-  color:var(--text); font-family:inherit; font-size:12px;
-  resize:vertical; min-height:36px; max-height:120px;
-}
-.notes-field textarea::placeholder { color:var(--text-muted); }
-.notes-field textarea:focus { outline:none; border-color:var(--accent); }
 
 /* Resize handle */
 .resize-handle {
@@ -246,10 +285,19 @@ main { display:flex; flex:1; overflow:hidden; }
 .pane-src iframe {
   flex:1; border:none; background:#fff; width:100%;
 }
-.pane-src .no-url {
-  flex:1; display:flex; align-items:center; justify-content:center;
-  color:var(--text-muted); font-size:13px;
+.pane-src .no-url, .pane-src .no-local {
+  flex:1; display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  color:var(--text-muted); font-size:13px; gap:16px;
 }
+.open-tab-btn {
+  display:inline-block; padding:10px 20px;
+  font-size:13px; color:#fff; background:var(--accent);
+  border-radius:6px; text-decoration:none;
+  font-family:'SF Mono',monospace; font-weight:600;
+  transition:background 0.15s;
+}
+.open-tab-btn:hover { background:var(--accent-dim); }
 .fallback-link {
   position:absolute; bottom:8px; right:12px;
   font-size:11px; color:var(--accent); background:var(--surface);
@@ -263,7 +311,7 @@ main { display:flex; flex:1; overflow:hidden; }
 .action-bar {
   padding:10px 20px; background:var(--surface);
   border-top:1px solid var(--border);
-  display:flex; align-items:center; justify-content:space-between;
+  display:flex; align-items:center; gap:16px;
   flex-shrink:0;
 }
 .actions { display:flex; gap:8px; }
@@ -277,6 +325,14 @@ main { display:flex; flex:1; overflow:hidden; }
 .btn.v-btn.active { background:#4a92; border-color:var(--verified); color:var(--verified); }
 .btn.f-btn.active { background:#d682; border-color:var(--flagged); color:var(--flagged); }
 .btn.s-btn.active { background:#8882; border-color:var(--skipped); color:var(--skipped); }
+.notes-input {
+  flex:1; padding:6px 12px; background:var(--bg);
+  border:1px solid var(--border); border-radius:4px;
+  color:var(--text); font-family:inherit; font-size:12px;
+  min-width:0;
+}
+.notes-input::placeholder { color:var(--text-muted); }
+.notes-input:focus { outline:none; border-color:var(--accent); }
 .kbd {
   display:inline-block; padding:1px 5px; font-size:10px;
   background:var(--bg); border:1px solid var(--border);
@@ -284,6 +340,7 @@ main { display:flex; flex:1; overflow:hidden; }
 }
 .shortcuts {
   display:flex; gap:14px; font-size:11px; color:var(--text-muted);
+  flex-shrink:0;
 }
 .shortcuts span { display:flex; align-items:center; gap:4px; }
 
@@ -354,16 +411,23 @@ _JS = """\
   });
 
   function esc(s) {
+    if (!s) return '';
     const el = document.createElement('span');
     el.textContent = s;
     return el.innerHTML;
   }
 
+  // Store original paragraph HTML for restoring after highlight removal
+  const paraOriginals = {};
+  document.querySelectorAll('.opinion-para').forEach(el => {
+    paraOriginals[el.id] = el.innerHTML;
+  });
+
   function navigate(idx) {
     if (idx < 0 || idx >= DATA.length) return;
     // Save current notes
-    const ta = document.getElementById('notes-ta');
-    if (ta) setCiteState(currentIdx, 'notes', ta.value);
+    const notesEl = document.getElementById('notes-input');
+    if (notesEl) setCiteState(currentIdx, 'notes', notesEl.value);
 
     currentIdx = idx;
     const d = DATA[idx];
@@ -375,25 +439,40 @@ _JS = """\
       if (i === idx) el.scrollIntoView({ block: 'nearest' });
     });
 
-    // Draft pane
+    // Draft pane header
     document.querySelector('.pane-hdr .ptitle').textContent =
-      'Draft' + (d.para_num != null ? ' — \\u00b6 ' + d.para_num : '');
+      'Draft' + (d.para_num != null ? ' \\u2014 \\u00b6 ' + d.para_num : '');
     document.querySelector('.pane-hdr .ctitle').textContent = d.cite_text;
 
-    const paraEl = document.querySelector('.draft-body .para');
-    if (d.para_text) {
-      const highlighted = d.para_text.replace(
-        d.cite_text,
-        '<span class="cite-hl">' + esc(d.cite_text) + '</span>'
-      );
-      paraEl.innerHTML = highlighted;
-    } else {
-      paraEl.innerHTML = '<em style="color:var(--text-muted)">Paragraph not found</em>';
+    // Restore previous paragraph, highlight new one
+    document.querySelectorAll('.opinion-para.active-para').forEach(el => {
+      el.classList.remove('active-para');
+      if (paraOriginals[el.id]) el.innerHTML = paraOriginals[el.id];
+    });
+
+    if (d.para_num != null) {
+      const paraEl = document.getElementById('para-' + d.para_num);
+      if (paraEl) {
+        paraEl.classList.add('active-para');
+        // Highlight the citation text
+        const escapedCite = esc(d.cite_text);
+        const original = paraEl.innerHTML;
+        const markerEnd = original.indexOf('</span>');
+        if (markerEnd > -1) {
+          const cutpoint = markerEnd + 7;
+          const before = original.slice(0, cutpoint);
+          const after = original.slice(cutpoint);
+          paraEl.innerHTML = before + after.replace(
+            escapedCite,
+            '<span class="cite-hl">' + escapedCite + '</span>'
+          );
+        }
+        paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     }
 
     // Notes
-    const ta2 = document.getElementById('notes-ta');
-    ta2.value = cs.notes || '';
+    if (notesEl) notesEl.value = cs.notes || '';
 
     // Source pane
     const srcHdr = document.querySelector('.pane-src .pane-hdr');
@@ -403,10 +482,19 @@ _JS = """\
     if (d.url) {
       urlLink.href = d.url;
       urlLink.textContent = d.url.replace(/^https?:\\/\\//, '');
-      srcBody.innerHTML =
-        '<iframe src="' + esc(d.url) + '"></iframe>' +
-        '<a class="fallback-link" href="' + esc(d.url) +
-        '" target="_blank">Open in new tab</a>';
+      if (d.iframe_ok) {
+        srcBody.innerHTML =
+          '<iframe src="' + esc(d.url) + '"></iframe>' +
+          '<a class="fallback-link" href="' + esc(d.url) +
+          '" target="_blank">Open in new tab</a>';
+      } else {
+        srcBody.innerHTML =
+          '<div class="no-local">' +
+          '<p>Source cannot be embedded (site restriction)</p>' +
+          '<a class="open-tab-btn" href="' + esc(d.url) +
+          '" target="_blank">Open source in new tab &#x2197;</a>' +
+          '</div>';
+      }
     } else {
       urlLink.href = '#';
       urlLink.textContent = 'no URL available';
@@ -453,8 +541,7 @@ _JS = """\
 
   // Keyboard
   document.addEventListener('keydown', (e) => {
-    // Don't capture when typing in textarea
-    if (e.target.tagName === 'TEXTAREA') {
+    if (e.target.tagName === 'INPUT') {
       if (e.key === 'Escape') { e.target.blur(); return; }
       return;
     }
@@ -463,7 +550,7 @@ _JS = """\
     else if (e.key === 'v') setStatus('verified');
     else if (e.key === 'f') setStatus('flagged');
     else if (e.key === 's') setStatus('skipped');
-    else if (e.key === 'n') { e.preventDefault(); document.getElementById('notes-ta').focus(); }
+    else if (e.key === 'n') { e.preventDefault(); document.getElementById('notes-input').focus(); }
     else if (e.key === '?') toggleHelp();
     else if (e.key === 'Escape') closeHelp();
   });
@@ -530,19 +617,21 @@ _JS = """\
 
 
 def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
-                file_key: str) -> str:
+                file_key: str, opinion_text: str) -> str:
     """Build the self-contained HTML string."""
-    # Enrich citation entries with paragraph context
+    # Enrich citation entries
     enriched = []
     for c in citations:
         para = _find_paragraph(paragraphs, c["cite_text"])
+        url = c.get("url") or ""
+        host = urlparse(url).netloc if url else ""
         enriched.append({
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
             "normalized": c.get("normalized", c["cite_text"]),
-            "url": c.get("url"),
+            "url": url or None,
+            "iframe_ok": host in _IFRAME_OK_DOMAINS,
             "para_num": para["num"] if para else None,
-            "para_text": para["text"] if para else None,
         })
 
     data_json = json.dumps(enriched, ensure_ascii=False)
@@ -550,6 +639,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
 
     js = _JS.replace("__DATA__", data_json).replace("__FILE_KEY__", file_key_json)
     escaped_title = html.escape(title)
+    opinion_html = _opinion_to_html(opinion_text, paragraphs)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -585,12 +675,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
           <span class="ptitle">Draft</span>
           <span class="ctitle"></span>
         </div>
-        <div class="draft-body">
-          <div class="para"></div>
-          <div class="notes-field">
-            <div class="nlbl">Notes</div>
-            <textarea id="notes-ta" placeholder="Add notes about this citation..."></textarea>
-          </div>
+        <div class="draft-body" id="opinion-body">
+          {opinion_html}
         </div>
       </div>
 
@@ -616,6 +702,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
           Export JSON
         </button>
       </div>
+      <input type="text" class="notes-input" id="notes-input"
+             placeholder="Notes for this citation..." />
       <div class="shortcuts">
         <span><span class="kbd">j</span>/<span class="kbd">&darr;</span> next</span>
         <span><span class="kbd">k</span>/<span class="kbd">&uarr;</span> prev</span>
@@ -686,7 +774,7 @@ def main():
     title = args.title or opinion_path.stem
     file_key = opinion_path.stem
 
-    html_str = _build_html(title, citations, paragraphs, file_key)
+    html_str = _build_html(title, citations, paragraphs, file_key, text)
 
     out = Path(args.output)
     out.write_text(html_str, encoding="utf-8")

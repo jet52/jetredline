@@ -7,3 +7,5 @@ skills/jetredline/__pycache__/
 .DS_Store
 jetredline-skill.zip
 package-lock.json
+test-data/
+.tmp-*/

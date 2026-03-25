@@ -4,7 +4,7 @@ SKILL_ZIP := $(SKILL_NAME)-skill-$(VERSION).zip
 JETCITE_SRC := ../jetcite/src/jetcite
 JETCITE_DEST := skills/jetredline/lib/jetcite
 
-.PHONY: package clean install test vendor-jetcite
+.PHONY: package clean install test test-structure test-unit vendor-jetcite
 
 package: clean
 	cd skills && zip -r ../$(SKILL_ZIP) jetredline/ \
@@ -25,7 +25,9 @@ vendor-jetcite:
 	find $(JETCITE_DEST) -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@echo "Vendored jetcite from $(JETCITE_SRC)"
 
-test:
+test: test-structure test-unit
+
+test-structure:
 	@echo "Validating skill structure..."
 	@test -f skills/jetredline/SKILL.md || (echo "FAIL: skills/jetredline/SKILL.md missing" && exit 1)
 	@test -d skills/jetredline/references || (echo "FAIL: skills/jetredline/references/ missing" && exit 1)
@@ -34,4 +36,8 @@ test:
 	@test -f install.sh || (echo "FAIL: install.sh missing" && exit 1)
 	@test -f install.ps1 || (echo "FAIL: install.ps1 missing" && exit 1)
 	@test -f README.md || (echo "FAIL: README.md missing" && exit 1)
-	@echo "All checks passed."
+	@echo "All structure checks passed."
+
+test-unit:
+	@echo "Running unit tests..."
+	skills/jetredline/.venv/bin/python3 -m pytest tests/ -v

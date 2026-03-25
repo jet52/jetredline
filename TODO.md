@@ -1,4 +1,35 @@
-# TODO: Refs Cache Directory Restructure & Tests
+# TODO
+
+---
+
+## HIGH PRIORITY: Use jetcite to verify case names before applying spelling corrections
+
+**Problem:** The redline workflow currently flags case-name spelling inconsistencies (e.g., "Tracey v. Tracey" in one paragraph vs. "Tracy v. Tracy" in another) and "corrects" them without verifying whether they are actually the same case. In the Lopez-Rangel opinion, the tool changed "Tracey v. Tracey, 2023 ND 219" to "Tracy v. Tracy" — but these are two different cases with two different families (Tracey, 2023 ND 219 and Tracy, 2024 ND 195). The different spelling *and* different citation should have been a strong signal that no correction was needed.
+
+**Fix:** Before proposing any case-name spelling correction, the workflow must use jetcite (or the refs cache) to look up each citation independently and confirm the official case caption. Different citations (different year, different ND number) should never be "harmonized" — they are presumptively different cases. Only flag a spelling issue when the same citation number appears with inconsistent party-name spelling.
+
+**Acceptance criteria:**
+- When two citations share a party surname but differ in spelling *and* differ in citation, no correction is applied and a comment is added noting they are distinct cases.
+- When the same citation appears with inconsistent spelling, the tool looks up the official caption via jetcite/refs before choosing the correct form.
+- The analysis report should reflect verified case names, not assumed corrections.
+
+---
+
+## HIGH PRIORITY: Debug and improve the citation verification interface; add end-of-workflow prompt
+
+**Problem:** The cite verification interface (CITE-REVIEW HTML or similar) needs debugging — it doesn't work quite right in its current state. Additionally, users are not prompted to use it after the redline document is generated, so it's easy to skip.
+
+**Fix:**
+1. Debug the citation verification interface so it works reliably end-to-end.
+2. At the end of the redline document generation workflow, output a clear prompt suggesting the user invoke the cite verification step. Something like: "Run /jetcite to verify all citations in this opinion against official sources." Make it prominent enough that users are motivated to call it up — this is a quality gate, not an optional extra.
+
+**Acceptance criteria:**
+- The cite verification interface renders and functions correctly.
+- After generating a redline document, the workflow outputs a visible suggestion to run citation verification.
+
+---
+
+## Refs Cache Directory Restructure & Tests
 
 ## Goal
 Restructure `_citation_path()` in jetcite `cache.py` to use a three-tier directory layout under `~/refs/`, then validate with tests.
@@ -596,7 +627,104 @@ Under either option, update the Step 9 workflow to skip the unpack step:
 ### Remaining
 
 1. **Medium — Hyperlink support** (Issue 8): Add `"type": "hyperlink"` to edit schema. New feature; integrates with jetcite.
-2. **Low — Conditional ooxml.md read** (Issue 7): Update SKILL.md Step 1 to check for `ooxml.md` existence.
-3. **Low — Smart quote normalization** (Issue 13): Add smart↔straight quote mapping to `_normalize_for_search` in `apply_edits.py`. Currently `\u2018`/`\u2019` (curly single) and `\u201c`/`\u201d` (curly double) don't match `'`/`"` (straight). Low risk — unlikely a document would intentionally contain both forms as distinct text.
-4. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
-5. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
+2. **Medium — Playwright browser tests for cite_review.py**: Add browser-based integration tests that load the generated HTML and verify: sidebar renders with correct count, clicking citations updates draft/source panes, local content renders (no iframe), non-local citations show "Open in new tab", keyboard navigation (j/k/v/f/s) works, export produces valid JSON. Use the `document-skills:webapp-testing` skill's Playwright toolkit.
+3. **Low — Conditional ooxml.md read** (Issue 7): Update SKILL.md Step 1 to check for `ooxml.md` existence.
+4. **Low — Smart quote normalization** (Issue 13): Add smart↔straight quote mapping to `_normalize_for_search` in `apply_edits.py`. Currently `\u2018`/`\u2019` (curly single) and `\u201c`/`\u201d` (curly double) don't match `'`/`"` (straight). Low risk — unlikely a document would intentionally contain both forms as distinct text.
+5. **Low — Readability fallback** (Issue 9): Standard-library fallback for `textstat`.
+6. **Low — cite_review.py robustness** (Issue 10): Graceful degradation.
+
+---
+
+# TODO: Correction Classification & Frequency Log
+
+## Goal
+
+Maintain a running log of corrections made across redline runs, classified by type, to enable:
+1. **Upstream feedback** — identify recurring issues to push back to drafting workflows or sub-agents
+2. **Fine-tuning targets** — surface the most frequent correction categories for workflow and sub-agent improvement
+
+## Design considerations
+
+- Each correction in the edits JSON already has a `reason` field. Classify each edit into a taxonomy of correction types (e.g., citation format, punctuation, word choice, grammar, sentence structure, redundancy, style/Redbook, consistency, substantive/accuracy).
+- Taxonomy should be specific enough to be actionable but not so granular that categories fragment into noise. Aim for ~10–20 top-level categories with optional subcategories.
+- Log should persist across runs — append to a file (JSON lines, CSV, or SQLite) with metadata: timestamp, source document name, correction category, subcategory, brief description, original text snippet, replacement text snippet.
+- Provide a summary/report mode: aggregate counts by category over a date range, show trends, flag spikes.
+- Consider whether classification happens during edit generation (the LLM tags each edit) or post-hoc (a classifier pass over the edits JSON). LLM-at-generation-time is simpler and probably sufficient.
+
+## Open questions
+
+- Where to store the log — project-local file, `~/.claude/` subdirectory, or configurable?
+- Report format — terminal summary, markdown file, or both?
+- Should the taxonomy be hardcoded or user-extensible?
+
+---
+
+## Support Local Citation Preferences (Overrides to Bluebook/Redbook)
+
+The redline workflow currently applies standard Bluebook/Redbook citation conventions only. Many courts and users have local citation preferences that deviate from or supplement standard practice — different short-form conventions, jurisdiction-specific statutory abbreviations, era-based citation formats, etc. The workflow should support an optional local citation preferences file that layers rules on top of the Bluebook/Redbook defaults.
+
+### Design
+
+- Local citation preferences are stored in a user-editable reference file (e.g., `local-citation-prefs.md`) that the workflow loads alongside the existing style guide.
+- The file format should be straightforward markdown — rule categories with examples — so non-technical users can maintain it.
+- When a local preferences file is present, its rules take precedence over Bluebook/Redbook defaults on any point they address. Standard rules apply for everything the local file doesn't cover.
+- The redline analysis document should note when a local preference (as opposed to general Bluebook/Redbook) triggered a correction, so the user can see which layer produced each edit.
+
+### Initial local preferences file (NDSC)
+
+The first local preferences file ships with the NDSC rules below. This serves as both the working default and a template for other courts/users.
+
+#### Case citations — era-based format
+
+- **1997–present (public-domain):** `Case Name, YYYY ND ###, ¶ ##, Vol N.W.2d FirstPage.` Use ¶ (with non-breaking space) for pinpoint. Always include parallel N.W.2d cite but **no pin cite to N.W.2d**. Omit parenthetical court/year. Court of Appeals uses `ND App`.
+- **1954–1996:** `Case Name, Vol N.W.2d Page, PinPage (N.D. Year).` Cite only N.W.2d; omit N.D. Reports.
+- **1890–1953:** `Case Name, Vol N.W. Page, PinPage (N.D. Year).` Cite only N.W.; omit N.D. Reports.
+
+#### Short forms for public-domain cases
+
+- **Short form:** Omit the N.W.2d cite entirely. Use `Case Name, YYYY ND ###, ¶ ##.`
+- ***Id.* pinpoint:** Use `Id. at ¶ ##.` (not page-based).
+
+#### Same-paragraph short form (no Bluebook analog)
+
+When *id.* is unavailable (intervening citation) but the full cite appeared in the **same paragraph**, use: `First Party Name, at [pin].` Examples: `Falcon, at 836.` or `Kuntz, at ¶ 11.` Do not use across paragraph boundaries.
+
+#### State code
+
+- **Century Code:** `N.D.C.C. § [section]` (not `N.D. Cent. Code`). Omit parenthetical year unless the statute has been amended or repealed and the year is relevant.
+- **Revised Code:** `N.D.R.C. § [section] ([year])` — always include the year.
+
+#### Session Laws
+
+- `[Year] N.D. Sess. Laws ch. [chapter], § [section].`
+
+#### Legislative history
+
+- Bill abbreviations: H.B. (1xxx), S.B. (2xxx), H.C.R. (3xxx), S.C.R. (4xxx).
+- Full cite: `Hearing on [Bill] Before the [Committee], [session] N.D. Legis. Sess. ([date]) ([speaker]).`
+- When *supra* with author's name is awkward, append a bracketed short title and use it in subsequent *supra* references.
+
+#### Interim/Rules Committee minutes
+
+- `Committee Name Page (Date(s)) (optional parenthetical).`
+
+#### Constitutional Convention history
+
+- Follows Bluebook book form (R15) with jurisdiction-specific sources.
+
+### Common errors to flag (under local preferences)
+
+| Error | Correct local practice |
+|---|---|
+| Pin cite to N.W.2d in full public-domain cite | Omit — ¶ number is the pinpoint |
+| Cite N.D. Reports alongside N.W./N.W.2d | Cite only the regional reporter |
+| Include N.W.2d in public-domain short form | Drop it entirely |
+| Page-based *id.* for post-1997 cases | Use *id.* at ¶ [number] |
+| Year in N.D.C.C. parenthetical routinely | Omit unless amendment/repeal at issue |
+| Omit year from N.D.R.C. cite | Always include year |
+
+### Implementation notes
+
+- The local preferences file should be incorporated into the citation-checking sub-agent instructions at workflow startup.
+- Keep the mechanism generic: loading path, override semantics, and analysis-document labeling should work for any court's preferences, not just NDSC.
+- The NDSC file is the first instance; the architecture should make it easy to swap in a different court's file or let users create their own.
