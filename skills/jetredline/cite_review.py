@@ -19,10 +19,12 @@ Usage:
 """
 
 import argparse
+import base64
 import html
 import json
 import re
 import sys
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -124,6 +126,177 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
 _IFRAME_OK_DOMAINS = frozenset({
     "www.ndcourts.gov", "ndcourts.gov", "ndlegis.gov",
 })
+
+# PDF.js CDN version
+_PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38"
+
+# Self-contained PDF.js viewer HTML template.
+# The search term is read from the URL hash (#search=...) so one viewer file
+# can serve multiple pinpoints for the same opinion.
+# Placeholder: __PDF_BASE64__
+_PDFJS_VIEWER_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>PDF Viewer</title>
+<style>
+html, body { margin:0; padding:0; background:#444; height:100%%; overflow:auto; }
+#pages { display:flex; flex-direction:column; align-items:center; gap:4px; padding:4px; }
+canvas { display:block; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+.target-page { outline:3px solid #5b8def; outline-offset:2px; }
+#loading { color:#ccc; font:14px/1.4 system-ui,sans-serif; text-align:center; padding:40px; }
+#search-bar { position:fixed; top:0; right:0; background:rgba(0,0,0,.75);
+  color:#eee; font:12px/1.4 system-ui,sans-serif; padding:6px 12px;
+  border-radius:0 0 0 6px; z-index:10; }
+</style>
+</head>
+<body>
+<div id="search-bar"></div>
+<div id="loading">Loading PDF\u2026</div>
+<div id="pages"></div>
+<script type="module">
+import * as pdfjsLib from '%(cdn)s/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = '%(cdn)s/pdf.worker.min.mjs';
+
+const PDF_DATA = '__PDF_BASE64__';
+// Read search term from URL hash: viewer.html#search=...
+const hashParams = new URLSearchParams(location.hash.slice(1));
+const SEARCH = decodeURIComponent(hashParams.get('search') || '');
+
+const raw = atob(PDF_DATA);
+const bytes = new Uint8Array(raw.length);
+for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+try {
+  const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  document.getElementById('loading').remove();
+
+  const container = document.getElementById('pages');
+  const scale = 1.5;
+  let targetCanvas = null;
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.id = 'page-' + i;
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    container.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    if (SEARCH && !targetCanvas) {
+      const tc = await page.getTextContent();
+      const text = tc.items.map(item => item.str).join('');
+      if (text.includes(SEARCH)) {
+        targetCanvas = canvas;
+      }
+    }
+  }
+
+  if (targetCanvas) {
+    targetCanvas.classList.add('target-page');
+    targetCanvas.scrollIntoView({ block: 'start' });
+    document.getElementById('search-bar').textContent =
+      'Found on page ' + targetCanvas.id.replace('page-', '');
+    setTimeout(() => targetCanvas.classList.remove('target-page'), 3000);
+  } else if (SEARCH) {
+    document.getElementById('search-bar').textContent =
+      'Search term not found: ' + SEARCH;
+  }
+} catch (err) {
+  document.getElementById('loading').textContent = 'Error loading PDF: ' + err.message;
+}
+</script>
+</body>
+</html>
+""" % {"cdn": _PDFJS_CDN}
+
+
+def _needs_pdfjs_viewer(url: str, pinpoint: str | None) -> bool:
+    """Check if a citation URL should use the PDF.js viewer with search."""
+    if not url or not pinpoint:
+        return False
+    # Already has a named destination — browser handles it
+    if "#nameddest=" in url:
+        return False
+    # Only for ndcourts.gov opinion PDFs
+    host = urlparse(url).netloc
+    return host in ("www.ndcourts.gov", "ndcourts.gov")
+
+
+def _pinpoint_search_term(pinpoint: str | None) -> str:
+    """Convert a pinpoint like '¶ 15' to a PDF search term like '[¶15]'."""
+    if not pinpoint:
+        return ""
+    m = re.search(r"\d+", pinpoint)
+    if not m:
+        return ""
+    return f"[¶{m.group(0)}]"
+
+
+def _download_pdf(url: str, dest: Path, timeout: int = 15) -> bool:
+    """Download a PDF to dest. Returns True on success."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "jetredline-cite-review/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            dest.write_bytes(resp.read())
+        return True
+    except Exception as e:
+        print(f"  Warning: could not download {url}: {e}", file=sys.stderr)
+        return False
+
+
+def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path) -> dict[str, str]:
+    """Download opinion PDFs and generate self-contained PDF.js viewer HTML files.
+
+    Returns a mapping of original URL → relative path to viewer HTML file.
+    """
+    viewers: dict[str, str] = {}
+    urls_seen: set[str] = set()
+
+    # Collect unique URLs needing viewers
+    needs_viewer = []
+    for c in enriched:
+        url = c.get("url") or ""
+        if url in urls_seen:
+            continue
+        if _needs_pdfjs_viewer(url, c.get("pinpoint")):
+            urls_seen.add(url)
+            needs_viewer.append(c)
+
+    if not needs_viewer:
+        return viewers
+
+    pdf_dir = output_path.parent / (output_path.stem + "_pdfs")
+    pdf_dir.mkdir(exist_ok=True)
+
+    for c in needs_viewer:
+        url = c["url"]
+        normalized = c.get("normalized", "opinion").replace(" ", "")
+        pdf_file = pdf_dir / f"{normalized}.pdf"
+
+        print(f"  Downloading {url} ...", file=sys.stderr)
+        if not _download_pdf(url, pdf_file):
+            continue
+
+        pdf_b64 = base64.b64encode(pdf_file.read_bytes()).decode("ascii")
+
+        viewer_html = _PDFJS_VIEWER_TEMPLATE.replace("__PDF_BASE64__", pdf_b64)
+
+        viewer_file = pdf_dir / f"{normalized}.html"
+        viewer_file.write_text(viewer_html, encoding="utf-8")
+
+        # Clean up the intermediate PDF file
+        pdf_file.unlink(missing_ok=True)
+
+        # Relative path from output HTML to viewer
+        viewers[url] = str(viewer_file.relative_to(output_path.parent))
+
+    return viewers
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +479,14 @@ main { display:flex; flex:1; overflow:hidden; }
   font-family:'SF Mono',monospace; z-index:10;
 }
 .fallback-link:hover { background:var(--accent-dim); color:#fff; }
+.search-hint {
+  position:absolute; bottom:8px; left:12px;
+  font-size:11px; color:var(--text-muted); background:var(--surface);
+  padding:4px 10px; border-radius:4px;
+  border:1px solid var(--border);
+  font-family:'SF Mono',monospace; z-index:10;
+}
+.search-hint code { color:var(--accent); }
 
 /* Action bar */
 .action-bar {
@@ -482,7 +663,20 @@ _JS = """\
     if (d.url) {
       urlLink.href = d.url;
       urlLink.textContent = d.url.replace(/^https?:\\/\\//, '');
-      if (d.iframe_ok) {
+      if (d.viewer_path) {
+        // Local PDF.js viewer with embedded PDF and auto-search
+        var viewerUrl = d.viewer_path;
+        if (d.search_term) {
+          viewerUrl += '#search=' + encodeURIComponent(d.search_term);
+        }
+        srcBody.innerHTML =
+          '<iframe src="' + esc(viewerUrl) + '"></iframe>' +
+          (d.search_term
+            ? '<div class="search-hint">Searching: <code>' + esc(d.search_term) + '</code></div>'
+            : '') +
+          '<a class="fallback-link" href="' + esc(d.url) +
+          '" target="_blank">Open in new tab</a>';
+      } else if (d.iframe_ok) {
         srcBody.innerHTML =
           '<iframe src="' + esc(d.url) + '"></iframe>' +
           '<a class="fallback-link" href="' + esc(d.url) +
@@ -617,14 +811,19 @@ _JS = """\
 
 
 def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
-                file_key: str, opinion_text: str) -> str:
+                file_key: str, opinion_text: str,
+                viewers: dict[str, str] | None = None) -> str:
     """Build the self-contained HTML string."""
+    viewers = viewers or {}
     # Enrich citation entries
     enriched = []
     for c in citations:
         para = _find_paragraph(paragraphs, c["cite_text"])
         url = c.get("url") or ""
         host = urlparse(url).netloc if url else ""
+        pinpoint = c.get("pinpoint")
+        viewer_path = viewers.get(url) if url else None
+        search_term = _pinpoint_search_term(pinpoint) if pinpoint and viewer_path else ""
         enriched.append({
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
@@ -632,6 +831,10 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "url": url or None,
             "iframe_ok": host in _IFRAME_OK_DOMAINS,
             "para_num": para["num"] if para else None,
+            "search_hint": c.get("search_hint", ""),
+            "pinpoint": pinpoint,
+            "viewer_path": viewer_path,
+            "search_term": search_term,
         })
 
     data_json = json.dumps(enriched, ensure_ascii=False)
@@ -773,12 +976,22 @@ def main():
 
     title = args.title or opinion_path.stem
     file_key = opinion_path.stem
-
-    html_str = _build_html(title, citations, paragraphs, file_key, text)
-
     out = Path(args.output)
+
+    # Download opinion PDFs and generate local PDF.js viewers for pinpoint search
+    viewers = _generate_pdfjs_viewers(
+        [{"url": c.get("url"), "pinpoint": c.get("pinpoint"),
+          "normalized": c.get("normalized", "")}
+         for c in citations],
+        out,
+    )
+
+    html_str = _build_html(title, citations, paragraphs, file_key, text, viewers)
+
     out.write_text(html_str, encoding="utf-8")
-    print(f"Wrote {out} ({len(citations)} citations)")
+    n_viewers = len(viewers)
+    extra = f", {n_viewers} PDF viewer(s)" if n_viewers else ""
+    print(f"Wrote {out} ({len(citations)} citations{extra})")
 
 
 if __name__ == "__main__":
