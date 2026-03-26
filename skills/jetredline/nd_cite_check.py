@@ -167,6 +167,7 @@ def _to_legacy(c: Citation, refs_dir: Path) -> dict:
         "normalized": c.normalized,
         "url": url,
         "search_hint": _search_hint(c, legacy_type),
+        "pinpoint": c.pinpoint,
     }
 
     # Local path resolution
