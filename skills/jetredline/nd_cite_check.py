@@ -26,7 +26,7 @@ if _BUNDLED_LIB.is_dir():
 
 try:
     from jetcite import Citation, CitationType, scan_text
-    from jetcite.cache import _citation_path
+    from jetcite.cache import _citation_path, fetch_and_cache
 except ImportError:
     print(
         "ERROR: jetcite import failed. Bundled copy expected at:\n"
@@ -43,6 +43,12 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 from jetcite.cache import _ND_REPORTERS, _FEDERAL_REPORTERS
+
+# Case cite types eligible for auto-caching
+_CASE_TYPES = frozenset({
+    "nd_case", "nd_reporter", "federal_reporter", "us_supreme_court",
+    "state_neutral", "state_reporter",
+})
 
 
 def _legacy_cite_type(c: Citation) -> str:
@@ -215,13 +221,31 @@ def _add_parallel_info(entries: list[dict], citations: list[Citation]) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
-def scan_opinion(text: str, refs_dir: str = "~/refs") -> list[dict]:
-    """Scan opinion text for all citations. Returns legacy-format dicts."""
+def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = False) -> list[dict]:
+    """Scan opinion text for all citations. Returns legacy-format dicts.
+
+    If cache_missing is True, fetches and caches all case citations that
+    are not already in the local refs directory (ND, federal, other states).
+    """
     refs = Path(refs_dir).expanduser()
     citations = scan_text(text, refs_dir=refs)
 
     entries = [_to_legacy(c, refs) for c in citations]
     _add_parallel_info(entries, citations)
+
+    if cache_missing:
+        norm_to_cite = {c.normalized: c for c in citations}
+        for entry in entries:
+            if (entry.get("cite_type") in _CASE_TYPES
+                    and not entry.get("local_exists")
+                    and entry.get("url")):
+                cite = norm_to_cite.get(entry["normalized"])
+                if cite is None:
+                    continue
+                cached = fetch_and_cache(cite, refs_dir=refs, timeout=15.0)
+                if cached is not None:
+                    entry["local_path"] = str(cached)
+                    entry["local_exists"] = True
 
     return entries
 
@@ -239,6 +263,8 @@ def main():
                         help="Override refs directory (default: ~/refs)")
     parser.add_argument("--json", action="store_true", default=True,
                         help="Output as JSON (default)")
+    parser.add_argument("--cache", action="store_true",
+                        help="Auto-fetch and cache missing case citations")
     args = parser.parse_args()
 
     if args.file:
@@ -247,7 +273,7 @@ def main():
             print(f"Error: file not found: {path}", file=sys.stderr)
             sys.exit(1)
         text = path.read_text(encoding="utf-8")
-        results = scan_opinion(text, refs_dir=args.refs_dir)
+        results = scan_opinion(text, refs_dir=args.refs_dir, cache_missing=args.cache)
     else:
         # stdin mode — one citation per line
         results = []
@@ -255,7 +281,7 @@ def main():
             line = line.strip()
             if not line:
                 continue
-            found = scan_opinion(line, refs_dir=args.refs_dir)
+            found = scan_opinion(line, refs_dir=args.refs_dir, cache_missing=args.cache)
             results.extend(found)
 
     print(json.dumps(results, indent=2, ensure_ascii=False))

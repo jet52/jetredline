@@ -59,6 +59,59 @@ def courtlistener_neutral_url(jurisdiction: str, year: str, number: str) -> str:
     return f"{_CL_BASE}/c/{jurisdiction}/{year}/{number}/"
 
 
+def lookup_citation(
+    volume: str,
+    reporter: str,
+    page: str,
+    token: str | None = None,
+    timeout: float = 10.0,
+) -> dict | None:
+    """Lightweight citation lookup — cluster metadata only, no opinion text.
+
+    Returns {"case_name": str, "cluster_id": str, "date_filed": str}
+    or None on failure / no match. Requires a CourtListener API token.
+    """
+    t = token or _get_token()
+    if not t:
+        return None
+
+    headers = _auth_headers(t)
+    try:
+        resp = httpx.post(
+            _LOOKUP_URL,
+            data={"volume": volume, "reporter": reporter, "page": page},
+            headers=headers,
+            timeout=timeout,
+        )
+        if resp.status_code >= 400:
+            return None
+        results = resp.json()
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError):
+        return None
+
+    if not results:
+        return None
+
+    for r in results:
+        if r.get("status") == 200 and r.get("clusters"):
+            cluster = r["clusters"][0]
+            cluster_id = ""
+            for field in ("resource_uri", "absolute_url"):
+                val = cluster.get(field, "")
+                if val:
+                    m = re.search(r"/(\d+)/?$", val)
+                    if m:
+                        cluster_id = m.group(1)
+                    break
+            return {
+                "case_name": cluster.get("case_name", ""),
+                "cluster_id": cluster_id,
+                "date_filed": cluster.get("date_filed", ""),
+            }
+
+    return None
+
+
 def _clean_html_to_markdown(html: str) -> str:
     """Convert opinion HTML to clean markdown, preserving all text content.
 

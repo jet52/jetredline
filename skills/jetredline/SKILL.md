@@ -108,7 +108,7 @@ Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all sub
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
 | ND citation checker | `$SKILL_DIR/nd_cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
-| ND legal refs | `~/refs/` (opinions, NDCC, constitution, NDAC) |
+| ND legal refs | `~/refs/nd/` (opinions, code, constitution, regs, rules) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
 | OOXML validate | `$SKILL_DIR/ooxml_validate.py` |
 | Citation review | `$SKILL_DIR/cite_review.py` |
@@ -116,7 +116,7 @@ Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all sub
 
 The opinions directory contains markdown copies of published ND Supreme Court opinions organized as `<year>/<year>ND<number>.md` (e.g., `2022/2022ND210.md` for *Feickert v. Feickert*, 2022 ND 210). Paragraphs are marked `[¶N]`. Use `$OPINIONS_MD` in commands; fall back to the hardcoded path if the variable is unset.
 
-The `~/refs/` directory contains a local repository of ND legal materials in markdown format: opinions (`opin/markdown/`), NDCC (`ndcc/`), ND Constitution (`cnst/`), and NDAC (`ndac/`). The citation checker resolves these paths automatically.
+The `~/refs/nd/` directory contains a local repository of ND legal materials in markdown format: opinions (`opin/markdown/`), Century Code (`code/`), ND Constitution (`cnst/`), Administrative Code (`regs/`), and court rules (`rule/`). The citation checker resolves these paths automatically via jetcite's `cache.py`.
 
 ## Python Environment
 
@@ -225,17 +225,22 @@ For PDF files **> 10 MB**, use `splitmarks` to split the PDF at its top-level bo
 # Preview what bookmarks exist
 $VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf --dry-run -vv
 
-# Split into individual files in an output directory
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v
+# Split into individual files in an output directory and check for text layers
+$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v --check-text
 ```
 
 **Recursive split:** After the initial split, check the resulting files. If any single file is still **> 10 MB** (typically a record bundle containing many individual record items), split it again into a subdirectory:
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v
+$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v --check-text
 ```
 This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
 
-Pass the resulting file paths to the fact-checking subagent in Pass 4.
+**Image-scanned PDFs:** The `--check-text` flag runs `pdftotext` on each output file and warns about PDFs that appear to be image-scanned (low or no extractable text). If warnings appear:
+- Report the warnings to the user so they can consider running `ocrmypdf` on the affected files and re-running.
+- Tell subagents which files are image-scanned so they can fall back to reading the PDF directly with the Read tool instead of relying on `pdftotext`.
+- Subagents should proceed with available sources rather than stalling — image-scanned files may still be readable via the Read tool (which handles PDFs as images).
+
+Pass the resulting file paths — and any image-scanned warnings — to the fact-checking and brief-matching subagents.
 
 ### Step 0.1: Determine Document Type
 
@@ -487,8 +492,10 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > **Step 1: Generate the lookup plan.** Run the citation checker on the opinion file to get structured resolution data:
 > ```bash
-> python3 ~/.claude/skills/jetredline/nd_cite_check.py --file <opinion_path> --refs-dir ~/refs
+> python3 ~/.claude/skills/jetredline/nd_cite_check.py --file <opinion_path> --refs-dir ~/refs --cache
 > ```
+> The `--cache` flag auto-fetches and caches any case citations (ND, federal, other states) not already in `~/refs/`. This builds the local cache progressively so future runs have more local hits.
+>
 > This outputs a JSON array with one entry per citation found. Each entry includes:
 > - `cite_type`: nd_case, ndcc, ndcc_chapter, nd_const, ndac, nd_court_rule
 > - `local_path` / `local_exists`: path in `~/refs/` and whether it exists
@@ -510,7 +517,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > 3. **Existence check.** Does the cited provision/opinion actually exist? For statutes and rules, confirm the section number is valid.
 >
-> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/markdown/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. For non-case citations (statutes, rules, etc.), mark as N/A.
+> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/nd/opin/markdown/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. For non-case citations (statutes, rules, etc.), mark as N/A.
 >
 > 5. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
 >    - Does the source actually state or hold the legal principle attributed to it?
@@ -537,10 +544,10 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 > - Always return partial results. A table with UNVERIFIED entries is better than no table. Never fail silently — every citation must appear in the output table with a status.
 >
 > **Reference file paths (do not search — use directly):**
-> - ND opinions (markdown): `~/refs/opin/markdown/` — organized as `<year>/<year>ND<number>.md`
-> - ND Century Code: `~/refs/ndcc/` — organized by title/chapter
-> - ND Constitution: `~/refs/cnst/`
-> - ND Administrative Code: `~/refs/ndac/`
+> - ND opinions (markdown): `~/refs/nd/opin/markdown/` — organized as `<year>/<year>ND<number>.md`
+> - ND Century Code: `~/refs/nd/code/` — organized by title/chapter
+> - ND Constitution: `~/refs/nd/cnst/`
+> - ND Administrative Code: `~/refs/nd/regs/`
 
 **Web mode:** Skip local resolution — no `~/refs/` directory is available.
 1. Run `nd_cite_check.py` with `--refs-dir /dev/null` (or skip the script entirely and use the URL patterns below).
@@ -568,6 +575,7 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with the following instructions and the extracted claims list:
 
 - For each PDF source file, extract text locally: `pdftotext <file>.pdf <file>.txt`
+- **Image-scanned fallback:** After extraction, check each `.txt` file size. If a multi-page PDF produces < 500 bytes of text, it is likely image-scanned. For those files, use the Read tool to read the PDF directly instead of grepping text. Note which files were image-scanned in the results.
 - Use Grep to search the extracted `.txt` files for passages relevant to each claim — **do not** read entire documents into context
 - For claims with cited record items, search those files first. Then search the remaining record-item files for corroborating or contradicting evidence.
 - For each claim, build a row:
@@ -595,6 +603,8 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 > Read the draft document at `[path]` and the party briefs at `[brief paths]`.
 >
 > For each brief, extract text locally: `pdftotext <file>.pdf <file>.txt`
+>
+> **Image-scanned fallback:** After extraction, check each `.txt` file size. If a multi-page brief produces < 500 bytes of text, it is likely image-scanned. For those files, use the Read tool to read the PDF directly instead of working from the text extraction. Note which briefs were image-scanned in the results.
 >
 > **Step 1:** Extract every distinct argument or contention from each party's brief. For each argument, record:
 > - The party (Appellant/Appellee/Petitioner/Respondent)
