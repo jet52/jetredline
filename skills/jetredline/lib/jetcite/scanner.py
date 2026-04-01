@@ -87,72 +87,6 @@ def _looks_like_pinpoint_or_empty(s: str) -> bool:
     ))
 
 
-def _verify_parallel_citations(citations: list[Citation], refs_dir: Path) -> None:
-    """For parallel pairs where one cite is cached, verify the other via CL lookup.
-
-    Compares case names between the cached opinion and the CL cluster metadata
-    for the uncached parallel cite. Sets parallel_verified on the uncached cite.
-    """
-    import re
-
-    from jetcite.sources.courtlistener import _get_token, lookup_citation
-
-    token = _get_token()
-    if not token:
-        return
-
-    norm_map = {c.normalized: c for c in citations}
-
-    for cite in citations:
-        if not cite.parallel_cites:
-            continue
-        has_local = any(s.name == "local" for s in cite.sources)
-        if not has_local:
-            continue
-
-        for par_norm in cite.parallel_cites:
-            par = norm_map.get(par_norm)
-            if par is None or par.parallel_verified is not None:
-                continue
-            if any(s.name == "local" for s in par.sources):
-                continue
-
-            comp = par.components
-            if not (comp.get("volume") and comp.get("reporter") and comp.get("page")):
-                continue
-
-            # Read case name from cached file: first line is "# Case Name"
-            local_source = next((s for s in cite.sources if s.name == "local"), None)
-            if local_source is None:
-                continue
-            local_path = Path(local_source.url.removeprefix("file://"))
-            try:
-                first_line = local_path.open(encoding="utf-8").readline().strip()
-            except OSError:
-                continue
-            if not first_line.startswith("# "):
-                continue
-            cached_name = first_line[2:].strip()
-
-            result = lookup_citation(
-                volume=comp["volume"],
-                reporter=comp["reporter"],
-                page=comp["page"],
-                token=token,
-                timeout=5.0,
-            )
-            if result is None:
-                continue
-
-            def _norm_name(s: str) -> str:
-                return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
-
-            if _norm_name(cached_name) == _norm_name(result["case_name"]):
-                par.parallel_verified = True
-            else:
-                par.parallel_verified = False
-
-
 def _apply_cache(citations: list[Citation], refs_dir: Path) -> None:
     """Check the local cache for each citation and add local sources."""
     from jetcite.cache import add_local_source, resolve_local
@@ -202,7 +136,6 @@ def scan_text(
     # Check local cache
     if refs_dir is not None:
         _apply_cache(all_citations, refs_dir)
-        _verify_parallel_citations(all_citations, refs_dir)
 
     return all_citations
 

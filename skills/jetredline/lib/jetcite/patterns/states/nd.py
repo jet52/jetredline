@@ -125,7 +125,7 @@ _NDREV = re.compile(
 
 # Procedural rules: N.D.R.Civ.P., N.D.R.Crim.P., N.D.R.App.P., N.D.R.Juv.P.
 _PROC_RULES = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2})'
+    r'(?:(?:Rule\s+)?(\d{1,2}(?:\.\d{1,2})?)'
     r'(?:(?:\([a-z\d]*\))*|[^.\d])[,\s]*'
     r'(?:North\s+Dakota\s+Rules?\s+of\s+(Civil|Criminal|Appellate|Juvenile)\s+Procedure'
     r'|N[\s.]*D[\s.]*R[\s.]*(Civ|Crim|App|Juv)(?:il|inal|ellate|enile)?[\s.]*'
@@ -136,7 +136,7 @@ _PROC_RULES = re.compile(
 # Also match "N.D.R.Civ.P. Rule 12" (rule set first)
 _PROC_RULES_PREFIX = re.compile(
     r'N[\s.]*D[\s.]*R[\s.]*(Civ|Crim|App|Juv)(?:il|inal|ellate|enile)?[\s.]*'
-    r'P(?:rocedure)?[.\s]*(?:Rule\s+)?(\d{1,2})',
+    r'P(?:rocedure)?[.\s]*(?:Rule\s+)?(\d{1,2}(?:\.\d{1,2})?)',
     re.IGNORECASE,
 )
 
@@ -256,7 +256,7 @@ _STUDENT = re.compile(
 _PROC_MAP = {
     "civil": "ndrcivp", "civ": "ndrcivp",
     "criminal": "ndrcrimp", "crim": "ndrcrimp",
-    "appellate": "ndrapp", "app": "ndrapp",
+    "appellate": "ndrappp", "app": "ndrappp",
     "juvenile": "ndrjuvp", "juv": "ndrjuvp",
 }
 
@@ -445,10 +445,11 @@ class NDMatcher(BaseMatcher):
                 display = {
                     "ndrcivp": "N.D.R.Civ.P.",
                     "ndrcrimp": "N.D.R.Crim.P.",
-                    "ndrapp": "N.D.R.App.P.",
+                    "ndrappp": "N.D.R.App.P.",
                     "ndrjuvp": "N.D.R.Juv.P.",
                 }.get(rule_set, rule_set)
-                results.append(self._rule_cite(m, rule_set, display, [rule_num]))
+                parts = rule_num.split(".")
+                results.append(self._rule_cite(m, rule_set, display, parts))
 
         # Procedural rules (prefix pattern)
         for m in _PROC_RULES_PREFIX.finditer(text):
@@ -459,10 +460,11 @@ class NDMatcher(BaseMatcher):
                 display = {
                     "ndrcivp": "N.D.R.Civ.P.",
                     "ndrcrimp": "N.D.R.Crim.P.",
-                    "ndrapp": "N.D.R.App.P.",
+                    "ndrappp": "N.D.R.App.P.",
                     "ndrjuvp": "N.D.R.Juv.P.",
                 }.get(rule_set, rule_set)
-                results.append(self._rule_cite(m, rule_set, display, [rule_num]))
+                parts = rule_num.split(".")
+                results.append(self._rule_cite(m, rule_set, display, parts))
 
         # Professional Conduct
         for m in _PROF_CONDUCT.finditer(text):

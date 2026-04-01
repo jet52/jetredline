@@ -31,7 +31,6 @@ class Citation:
     sources: list[Source] = field(default_factory=list)
     position: int = 0  # character offset in source text
     parallel_cites: list[str] = field(default_factory=list)  # normalized forms of parallel citations
-    parallel_verified: bool | None = None  # True if parallel cite confirmed via lightweight CL lookup
 
     def to_dict(self) -> dict:
         """Convert to a plain dictionary suitable for JSON serialization."""
@@ -45,8 +44,6 @@ class Citation:
             d["pinpoint"] = self.pinpoint
         if self.parallel_cites:
             d["parallel_cites"] = self.parallel_cites
-        if self.parallel_verified is not None:
-            d["parallel_verified"] = self.parallel_verified
         d["sources"] = [
             {"name": s.name, "url": s.url}
             | ({"verified": s.verified} if s.verified is not None else {})
