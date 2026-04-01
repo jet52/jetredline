@@ -38,15 +38,31 @@ _PARA_RE = re.compile(
     r"\[?¶\s*(\d+)\]?"    # ¶ marker with optional brackets, capture number
 )
 
+# Fallback: numbered paragraph markers like "1.  " (markdown ordered-list style)
+_PARA_NUM_RE = re.compile(
+    r"(?:^|\n)"           # start of text or newline
+    r"\s*"
+    r"(\d+)\.\s+"          # number, dot, whitespace
+)
+
 
 def _split_paragraphs(text: str) -> list[dict]:
     """Split opinion text into paragraphs keyed by ¶ number.
 
     Returns list of {"num": int|None, "text": str}.
+    Supports both [¶ N] markers and numbered-list style (N.  text).
     """
-    matches = list(_PARA_RE.finditer(text))
-    if not matches:
-        # No ¶ markers — treat entire text as one block
+    para_matches = list(_PARA_RE.finditer(text))
+    num_matches = list(_PARA_NUM_RE.finditer(text))
+
+    # Prefer numbered-list markers when they yield more paragraphs,
+    # since ¶ may also appear in citation pinpoints (e.g., "2020 ND 30, ¶ 6")
+    if num_matches and len(num_matches) > len(para_matches):
+        matches = num_matches
+    elif para_matches:
+        matches = para_matches
+    else:
+        # No markers at all — treat entire text as one block
         return [{"num": None, "text": text.strip()}]
 
     paragraphs = []
@@ -81,8 +97,14 @@ def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
         return f'<div class="opinion-text">{html.escape(text)}</div>'
 
     parts = []
-    # Header text before first ¶ marker
-    first_match = _PARA_RE.search(text)
+    # Header text before first paragraph marker
+    # Use whichever regex produced more matches (same logic as _split_paragraphs)
+    para_matches = list(_PARA_RE.finditer(text))
+    num_matches = list(_PARA_NUM_RE.finditer(text))
+    if num_matches and len(num_matches) > len(para_matches):
+        first_match = num_matches[0] if num_matches else None
+    else:
+        first_match = para_matches[0] if para_matches else None
     if first_match and first_match.start() > 0:
         header = text[:first_match.start()].strip()
         if header:
@@ -105,21 +127,115 @@ def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
 # Citation data
 # ---------------------------------------------------------------------------
 
+def _disable_url_resolution():
+    """Monkey-patch jetcite to skip all HTTP URL resolution."""
+    saved = {}
+    import jetcite.scanner as _scanner
+    saved["scanner"] = _scanner.resolve_nd_opinion_urls
+    _scanner.resolve_nd_opinion_urls = lambda cites: None
+    from jetcite.sources import ndcourts as _ndcourts
+    saved["ndcourts"] = _ndcourts.resolve_nd_opinion_url
+    _ndcourts.resolve_nd_opinion_url = lambda year, number: None
+    from jetcite.patterns import neutral as _neutral
+    if hasattr(_neutral, "resolve_nd_opinion_url"):
+        saved["neutral"] = _neutral.resolve_nd_opinion_url
+        _neutral.resolve_nd_opinion_url = lambda year, number: None
+    return saved
+
+
+def _restore_url_resolution(saved: dict):
+    """Undo _disable_url_resolution."""
+    import jetcite.scanner as _scanner
+    _scanner.resolve_nd_opinion_urls = saved["scanner"]
+    from jetcite.sources import ndcourts as _ndcourts
+    _ndcourts.resolve_nd_opinion_url = saved["ndcourts"]
+    if "neutral" in saved:
+        from jetcite.patterns import neutral as _neutral
+        _neutral.resolve_nd_opinion_url = saved["neutral"]
+
+
 def _load_citations(opinion_path: Path, cite_json_path: Path | None,
-                    refs_dir: str) -> list[dict]:
-    """Load citation JSON — from file or by running nd_cite_check."""
+                    refs_dir: str, local_only: bool = False) -> list[dict]:
+    """Load citation JSON — from file or by running nd_cite_check.
+
+    Default mode runs with cache_missing=True so citations are fetched
+    and cached in refs_dir for future offline use.  --local-only skips
+    all HTTP calls and uses whatever is already cached.
+    """
     if cite_json_path and cite_json_path.exists():
         return json.loads(cite_json_path.read_text(encoding="utf-8"))
 
-    # Import and run nd_cite_check directly
+    # Import and run nd_cite_check directly.
+    # Always disable per-citation URL resolution during scanning — it's
+    # slow and we derive direct URLs from local paths instead.  Only the
+    # explicit caching step below needs web access.
     skill_dir = Path(__file__).parent
     sys.path.insert(0, str(skill_dir))
     try:
+        saved = _disable_url_resolution()
+
         from nd_cite_check import scan_opinion
         text = opinion_path.read_text(encoding="utf-8")
-        return scan_opinion(text, refs_dir=refs_dir)
+        result = scan_opinion(text, refs_dir=refs_dir, cache_missing=False)
+
+        _restore_url_resolution(saved)
+
+        # Cache missing citations (unless local_only)
+        if not local_only:
+            from jetcite.cache import fetch_and_cache
+            from jetcite import Citation
+            # Build Citation objects from the result entries for fetch_and_cache.
+            # Re-scan with resolution disabled to get Citation objects.
+            saved2 = _disable_url_resolution()
+            from jetcite import scan_text as _st
+            cite_objs = {
+                c.normalized: c
+                for c in _st(text, refs_dir=Path(refs_dir).expanduser())
+            }
+            _restore_url_resolution(saved2)
+
+            _CACHEABLE = {
+                "nd_case", "us_supreme_court",
+                "federal_reporter", "state_reporter",
+            }
+            to_cache = [
+                e for e in result
+                if not e.get("local_exists") and e.get("url")
+                and e.get("cite_type") in _CACHEABLE
+            ]
+            if to_cache:
+                total = len(to_cache)
+                print(f"  Caching {total} citation(s) to {refs_dir} ...",
+                      file=sys.stderr)
+                for i, entry in enumerate(to_cache, 1):
+                    cite = cite_objs.get(entry["normalized"])
+                    if cite is None:
+                        continue
+                    norm = entry["normalized"]
+                    print(f"  [{i}/{total}] {norm} ...",
+                          file=sys.stderr, end="", flush=True)
+                    try:
+                        cached = fetch_and_cache(
+                            cite, refs_dir=Path(refs_dir).expanduser(),
+                            timeout=15.0,
+                        )
+                        if cached is not None:
+                            entry["local_path"] = str(cached)
+                            entry["local_exists"] = True
+                            print(" cached", file=sys.stderr)
+                        else:
+                            print(" not available", file=sys.stderr)
+                    except Exception as exc:
+                        print(f" error: {exc}", file=sys.stderr)
+
+        return result
     finally:
         sys.path.pop(0)
+
+
+# Pattern to extract neutral citation from ND opinion local paths
+# e.g., ~/refs/nd/opin/markdown/2008/2008ND228.md → 2008ND228
+_ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 
 
 # Domains whose pages can be loaded in an iframe (no X-Frame-Options block)
@@ -216,6 +332,20 @@ try {
 """ % {"cdn": _PDFJS_CDN}
 
 
+def _nd_direct_url(local_path: str | None) -> str | None:
+    """Derive a direct ndcourts.gov opinion URL from a local markdown path.
+
+    If local_path matches the ND opinion pattern, returns e.g.
+    https://www.ndcourts.gov/supreme-court/opinion/2008ND228
+    """
+    if not local_path:
+        return None
+    m = _ND_LOCAL_PATH_RE.search(local_path)
+    if not m:
+        return None
+    return f"https://www.ndcourts.gov/supreme-court/opinion/{m.group(1)}"
+
+
 def _needs_pdfjs_viewer(url: str, pinpoint: str | None) -> bool:
     """Check if a citation URL should use the PDF.js viewer with search."""
     if not url or not pinpoint:
@@ -250,12 +380,121 @@ def _download_pdf(url: str, dest: Path, timeout: int = 15) -> bool:
         return False
 
 
-def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path) -> dict[str, str]:
+def _read_local_markdown(local_path: str | None) -> str | None:
+    """Read the full markdown file for a citation. Returns None if unavailable."""
+    if not local_path:
+        return None
+    p = Path(local_path).expanduser()
+    if not p.is_file():
+        return None
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return text if text.strip() else None
+
+
+# Lightweight markdown → HTML for legal texts
+_MD_HEADING = re.compile(r"^(#{1,4})\s+(.*)", re.MULTILINE)
+_MD_PARA_MARKER = re.compile(r"\[¶\s*(\d+)\]")
+_MD_SECTION = re.compile(r"§\s*([\d\w.-]+)")
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_MD_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
+_MD_BLOCKQUOTE_LINE = re.compile(r"^>\s?(.*)", re.MULTILINE)
+
+
+def _md_to_html(md: str) -> str:
+    """Convert legal markdown to HTML with anchors for pinpoint navigation."""
+    lines = md.split("\n")
+    out: list[str] = []
+    in_blockquote = False
+    in_para = False
+
+    def _inline(text: str) -> str:
+        text = html.escape(text)
+        text = _MD_BOLD.sub(r"<strong>\1</strong>", text)
+        text = _MD_ITALIC.sub(r"<em>\1</em>", text)
+        # Add anchors for ¶ markers
+        text = _MD_PARA_MARKER.sub(
+            r'<span class="para-anchor" id="pin-\1">[¶\1]</span>', text
+        )
+        # Add anchors for § section numbers
+        text = _MD_SECTION.sub(
+            lambda m: (
+                f'<span class="sec-anchor" id="sec-{m.group(1).rstrip(".")}">'
+                f'§\u00a0{m.group(1)}</span>'
+            ),
+            text,
+        )
+        return text
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Headings
+        hm = _MD_HEADING.match(stripped)
+        if hm:
+            if in_para:
+                out.append("</p>")
+                in_para = False
+            if in_blockquote:
+                out.append("</blockquote>")
+                in_blockquote = False
+            level = min(len(hm.group(1)), 4)
+            out.append(f"<h{level}>{_inline(hm.group(2))}</h{level}>")
+            continue
+
+        # Blockquote lines
+        bqm = _MD_BLOCKQUOTE_LINE.match(line)
+        if bqm:
+            if in_para:
+                out.append("</p>")
+                in_para = False
+            if not in_blockquote:
+                out.append("<blockquote>")
+                in_blockquote = True
+            out.append(_inline(bqm.group(1)) + "<br>")
+            continue
+
+        # End blockquote on non-quote line
+        if in_blockquote and not bqm:
+            out.append("</blockquote>")
+            in_blockquote = False
+
+        # Blank line → end paragraph
+        if not stripped:
+            if in_para:
+                out.append("</p>")
+                in_para = False
+            continue
+
+        # Regular text → paragraph
+        if not in_para:
+            out.append("<p>")
+            in_para = True
+        else:
+            out.append(" ")
+        out.append(_inline(stripped))
+
+    if in_para:
+        out.append("</p>")
+    if in_blockquote:
+        out.append("</blockquote>")
+
+    return "\n".join(out)
+
+
+def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path,
+                            local_only: bool = False) -> dict[str, str]:
     """Download opinion PDFs and generate self-contained PDF.js viewer HTML files.
 
     Returns a mapping of original URL → relative path to viewer HTML file.
+    When local_only is True, skips all web downloads.
     """
     viewers: dict[str, str] = {}
+    if local_only:
+        return viewers
+
     urls_seen: set[str] = set()
 
     # Collect unique URLs needing viewers
@@ -263,6 +502,9 @@ def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path) -> dict[str
     for c in enriched:
         url = c.get("url") or ""
         if url in urls_seen:
+            continue
+        # Skip if we already have local text for this citation
+        if c.get("local_exists"):
             continue
         if _needs_pdfjs_viewer(url, c.get("pinpoint")):
             urls_seen.add(url)
@@ -479,6 +721,41 @@ main { display:flex; flex:1; overflow:hidden; }
   font-family:'SF Mono',monospace; z-index:10;
 }
 .fallback-link:hover { background:var(--accent-dim); color:#fff; }
+.local-toggle {
+  position:absolute; bottom:8px; left:12px;
+  font-size:11px; color:var(--accent); background:var(--surface);
+  padding:4px 10px; border-radius:4px;
+  border:1px solid var(--border); text-decoration:none;
+  font-family:'SF Mono',monospace; z-index:10; cursor:pointer;
+}
+.local-toggle:hover { background:var(--accent-dim); color:#fff; }
+.local-ref-html {
+  flex:1; overflow-y:auto; padding:20px 28px;
+  font-family:'Charter','Georgia',serif; font-size:14px;
+  line-height:1.7; color:#222; background:#fafaf8;
+  margin:0;
+}
+.local-ref-html h1, .local-ref-html h2, .local-ref-html h3, .local-ref-html h4 {
+  color:#1a1a2e; margin:1.2em 0 0.4em; font-family:system-ui,sans-serif;
+}
+.local-ref-html h1 { font-size:18px; }
+.local-ref-html h2 { font-size:16px; }
+.local-ref-html h3 { font-size:14px; }
+.local-ref-html p { margin:0.6em 0; }
+.local-ref-html blockquote {
+  border-left:3px solid #c0c0d0; margin:0.8em 0; padding:4px 16px;
+  color:#444; background:#f0f0f4;
+}
+.local-ref-html .para-anchor {
+  font-weight:700; color:#5b8def; scroll-margin-top:40px;
+}
+.local-ref-html .sec-anchor {
+  font-weight:600; color:#5b8def; scroll-margin-top:40px;
+}
+.local-ref-html .pinpoint-active {
+  background:#fde68a; padding:2px 6px; border-radius:3px;
+  outline:2px solid #e8b931; outline-offset:2px;
+}
 .search-hint {
   position:absolute; bottom:8px; left:12px;
   font-size:11px; color:var(--text-muted); background:var(--surface);
@@ -549,6 +826,7 @@ main { display:flex; flex:1; overflow:hidden; }
 _JS = """\
 (function() {
   const DATA = __DATA__;
+  const SOURCES = __SOURCES__;
   const STORAGE_KEY = 'cite-review-' + __FILE_KEY__;
 
   let currentIdx = 0;
@@ -585,7 +863,7 @@ _JS = """\
     const cs = getCiteState(i);
     item.innerHTML =
       '<div class="dot' + (cs.status ? ' ' + cs.status : '') + '"></div>' +
-      '<span class="lbl">' + esc(d.cite_text) + '</span>' +
+      '<span class="lbl">' + escWithItalics(d.cite_text) + '</span>' +
       '<span class="typ">' + esc(d.cite_type) + '</span>';
     item.addEventListener('click', () => navigate(i));
     listEl.appendChild(item);
@@ -596,6 +874,12 @@ _JS = """\
     const el = document.createElement('span');
     el.textContent = s;
     return el.innerHTML;
+  }
+
+  function escWithItalics(s) {
+    // HTML-escape then convert *text* to <em>text</em>
+    var h = esc(s);
+    return h.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
   }
 
   // Store original paragraph HTML for restoring after highlight removal
@@ -659,16 +943,46 @@ _JS = """\
     const srcHdr = document.querySelector('.pane-src .pane-hdr');
     const urlLink = srcHdr.querySelector('.curl');
     const srcBody = document.querySelector('.src-body');
+    const sourceHtml = d.source_key ? SOURCES[d.source_key] : null;
 
-    if (d.url) {
-      urlLink.href = d.url;
-      urlLink.textContent = d.url.replace(/^https?:\\/\\//, '');
+    // Helper: render local source HTML into the source pane
+    function showLocal() {
+      var wrap = document.createElement('div');
+      wrap.className = 'local-ref-html';
+      wrap.innerHTML = sourceHtml;
+      srcBody.innerHTML = '';
+      srcBody.appendChild(wrap);
+      // Overlay buttons — use appendChild to avoid destroying wrap
+      if (d.url) {
+        var link = document.createElement('a');
+        link.className = 'fallback-link';
+        link.href = d.url;
+        link.target = '_blank';
+        link.innerHTML = 'Open official source &#x2197;';
+        srcBody.appendChild(link);
+      }
+      // Scroll to pinpoint anchor
+      var target = null;
+      if (d.pinpoint) {
+        // Opinion ¶ pinpoint
+        var pNum = (d.pinpoint.match(/\\d+/) || [''])[0];
+        if (pNum) target = wrap.querySelector('#pin-' + pNum);
+      }
+      if (!target && d.search_hint) {
+        // Statute § section anchor
+        target = wrap.querySelector('#sec-' + d.search_hint);
+      }
+      if (target) {
+        target.classList.add('pinpoint-active');
+        setTimeout(function() { target.scrollIntoView({block:'center'}); }, 80);
+      }
+    }
+
+    // Helper: render iframe/web view into the source pane
+    function showIframe() {
       if (d.viewer_path) {
-        // Local PDF.js viewer with embedded PDF and auto-search
         var viewerUrl = d.viewer_path;
-        if (d.search_term) {
-          viewerUrl += '#search=' + encodeURIComponent(d.search_term);
-        }
+        if (d.search_term) viewerUrl += '#search=' + encodeURIComponent(d.search_term);
         srcBody.innerHTML =
           '<iframe src="' + esc(viewerUrl) + '"></iframe>' +
           (d.search_term
@@ -681,17 +995,45 @@ _JS = """\
           '<iframe src="' + esc(d.url) + '"></iframe>' +
           '<a class="fallback-link" href="' + esc(d.url) +
           '" target="_blank">Open in new tab</a>';
-      } else {
-        srcBody.innerHTML =
-          '<div class="no-local">' +
-          '<p>Source cannot be embedded (site restriction)</p>' +
-          '<a class="open-tab-btn" href="' + esc(d.url) +
-          '" target="_blank">Open source in new tab &#x2197;</a>' +
-          '</div>';
       }
+      if (sourceHtml) {
+        srcBody.innerHTML +=
+          '<span class="local-toggle" onclick="window._showLocal()">Local reference</span>';
+      }
+      // Detect iframe load failure and auto-switch to local
+      var iframe = srcBody.querySelector('iframe');
+      if (iframe && sourceHtml) {
+        var loadTimer = setTimeout(function() { showLocal(); }, 8000);
+        iframe.addEventListener('load', function() { clearTimeout(loadTimer); });
+        iframe.addEventListener('error', function() { clearTimeout(loadTimer); showLocal(); });
+      }
+    }
+    // Expose for onclick
+    window._showLocal = showLocal;
+    window._showIframe = showIframe;
+
+    // Set URL link (always visible)
+    if (d.url) {
+      urlLink.href = d.url;
+      urlLink.textContent = d.url.replace(/^https?:\\/\\//, '');
     } else {
       urlLink.href = '#';
-      urlLink.textContent = 'no URL available';
+      urlLink.textContent = sourceHtml ? 'local reference' : 'no URL available';
+    }
+
+    // Choose primary view: local source preferred (instant), web as fallback
+    if (sourceHtml) {
+      showLocal();
+    } else if (d.viewer_path || d.iframe_ok) {
+      showIframe();
+    } else if (d.url) {
+      srcBody.innerHTML =
+        '<div class="no-local">' +
+        '<p>Source not cached locally</p>' +
+        '<a class="open-tab-btn" href="' + esc(d.url) +
+        '" target="_blank">Open source in new tab &#x2197;</a>' +
+        '</div>';
+    } else {
       srcBody.innerHTML = '<div class="no-url">No source URL for this citation</div>';
     }
 
@@ -810,20 +1152,94 @@ _JS = """\
 """
 
 
+_NW_RE = re.compile(r"N\.W\.\s*[23]d")
+_SCT_RE = re.compile(r"S\.\s*Ct\.")
+_LED_RE = re.compile(r"L\.\s*Ed\.")
+
+
+def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
+    """Remove secondary parallel citations from the list.
+
+    Rules (type-based, no reliance on parallel_cite directionality):
+    - state_reporter (N.W.2d/3d) that has a parallel_cite → drop it
+    - federal_reporter matching S.Ct. or L.Ed. → always drop
+    - Any citation whose parallel_cite points to a primary already kept
+      and the citation itself is a reporter (not neutral/U.S.) → drop
+    """
+    # Build a set of primary normalizations we want to keep
+    primary_norms: set[str] = set()
+    for c in citations:
+        ct = c.get("cite_type", "")
+        norm = c.get("normalized", "")
+        # ND neutral citations are always primary
+        if ct == "nd_case":
+            primary_norms.add(norm)
+        # U.S. Reports are always primary
+        elif ct == "us_supreme_court":
+            primary_norms.add(norm)
+
+    skip_norms: set[str] = set()
+    for c in citations:
+        norm = c.get("normalized", "")
+        ct = c.get("cite_type", "")
+        pc = c.get("parallel_cite", "")
+
+        # N.W.2d/3d parallel of an ND neutral → drop
+        if ct == "state_reporter" and _NW_RE.search(norm) and pc:
+            skip_norms.add(norm)
+            continue
+
+        # S.Ct. → always drop (SCOTUS parallel)
+        if ct == "federal_reporter" and _SCT_RE.search(norm):
+            skip_norms.add(norm)
+            continue
+
+        # L.Ed. → always drop (SCOTUS parallel)
+        if ct == "federal_reporter" and _LED_RE.search(norm):
+            skip_norms.add(norm)
+            continue
+
+        # Old ND cases cited only by N.W.2d (no neutral) with no parallel
+        # → keep (e.g., 543 N.W.2d 491 for pre-1997 ND cases)
+
+    removed = len(skip_norms)
+    if removed:
+        print(f"  Removed {removed} parallel citations", file=sys.stderr)
+    return [c for c in citations if c.get("normalized") not in skip_norms]
+
+
 def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 file_key: str, opinion_text: str,
                 viewers: dict[str, str] | None = None) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
+    # Build a de-duplicated map of local source HTML keyed by local_path.
+    # Each citation references into this map by key, avoiding duplication.
+    sources_map: dict[str, str] = {}  # local_path → rendered HTML
+    for c in citations:
+        lp = c.get("local_path")
+        if lp and lp not in sources_map and c.get("local_exists"):
+            md = _read_local_markdown(lp)
+            if md:
+                sources_map[lp] = _md_to_html(md)
+
     # Enrich citation entries
     enriched = []
     for c in citations:
         para = _find_paragraph(paragraphs, c["cite_text"])
         url = c.get("url") or ""
+        # For ND opinions with local refs, derive the direct URL
+        lp = c.get("local_path")
+        if lp and (not url or "?cit1=" in url):
+            direct = _nd_direct_url(lp)
+            if direct:
+                url = direct
         host = urlparse(url).netloc if url else ""
         pinpoint = c.get("pinpoint")
         viewer_path = viewers.get(url) if url else None
         search_term = _pinpoint_search_term(pinpoint) if pinpoint and viewer_path else ""
+        lp = c.get("local_path")
+        has_source = lp is not None and lp in sources_map
         enriched.append({
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
@@ -835,12 +1251,17 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "pinpoint": pinpoint,
             "viewer_path": viewer_path,
             "search_term": search_term,
+            "source_key": lp if has_source else None,
         })
 
     data_json = json.dumps(enriched, ensure_ascii=False)
+    sources_json = json.dumps(sources_map, ensure_ascii=False)
     file_key_json = json.dumps(file_key, ensure_ascii=False)
 
-    js = _JS.replace("__DATA__", data_json).replace("__FILE_KEY__", file_key_json)
+    js = (_JS
+          .replace("__DATA__", data_json)
+          .replace("__SOURCES__", sources_json)
+          .replace("__FILE_KEY__", file_key_json))
     escaped_title = html.escape(title)
     opinion_html = _opinion_to_html(opinion_text, paragraphs)
 
@@ -957,6 +1378,8 @@ def main():
                         help="Output HTML file path (default: cite-review.html)")
     parser.add_argument("--title", "-t", default="",
                         help="Document title for the header")
+    parser.add_argument("--local-only", action="store_true",
+                        help="Skip web downloads; use local refs only")
     args = parser.parse_args()
 
     opinion_path = Path(args.opinion).expanduser()
@@ -965,11 +1388,14 @@ def main():
         sys.exit(1)
 
     cite_json_path = Path(args.cite_json).expanduser() if args.cite_json else None
-    citations = _load_citations(opinion_path, cite_json_path, args.refs_dir)
+    citations = _load_citations(opinion_path, cite_json_path, args.refs_dir,
+                                local_only=args.local_only)
 
     if not citations:
         print("No citations found.", file=sys.stderr)
         sys.exit(1)
+
+    citations = _dedup_parallel_citations(citations)
 
     text = opinion_path.read_text(encoding="utf-8")
     paragraphs = _split_paragraphs(text)
@@ -981,9 +1407,12 @@ def main():
     # Download opinion PDFs and generate local PDF.js viewers for pinpoint search
     viewers = _generate_pdfjs_viewers(
         [{"url": c.get("url"), "pinpoint": c.get("pinpoint"),
-          "normalized": c.get("normalized", "")}
+          "normalized": c.get("normalized", ""),
+          "local_path": c.get("local_path"),
+          "local_exists": c.get("local_exists")}
          for c in citations],
         out,
+        local_only=args.local_only,
     )
 
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers)
