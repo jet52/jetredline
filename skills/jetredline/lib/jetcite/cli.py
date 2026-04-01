@@ -209,12 +209,15 @@ def cite_cmd(
               help="Show what would be fetched without actually fetching.")
 @click.option("--status", is_flag=True,
               help="Report cache status for each citation.")
+@click.option("--force", is_flag=True,
+              help="Re-fetch even if already cached.")
 def cache(
     citation: str | None,
     cache_file: str | None,
     refs_dir: str,
     dry_run: bool,
     status: bool,
+    force: bool,
 ):
     """Fetch citation content and cache locally.
 
@@ -277,7 +280,7 @@ def cache(
 
     for cite in citations:
         local = resolve_local(cite, refs_path)
-        if local and not is_stale(cite, local):
+        if local and not force and not is_stale(cite, local):
             skipped += 1
             if dry_run:
                 click.echo(f"  skip  {cite.normalized:<30} (cached)")
@@ -291,7 +294,7 @@ def cache(
                     break
             click.echo(f"  fetch {cite.normalized:<30} <- {url}")
         else:
-            cached = fetch_and_cache(cite, refs_dir=refs_path)
+            cached = fetch_and_cache(cite, refs_dir=refs_path, force=force)
             if cached:
                 fetched += 1
                 click.echo(f"  ok    {cite.normalized:<30} -> {cached}", err=True)
