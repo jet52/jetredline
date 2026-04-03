@@ -6,7 +6,7 @@ skills/jetredline/__pycache__/
 .claude/settings.local.json
 *.pyc
 .DS_Store
-jetredline-skill.zip
+jetredline-skill*.zip
 package-lock.json
 test-data/
 .tmp-*/
