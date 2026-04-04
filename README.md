@@ -140,7 +140,7 @@ jetredline/
 │       ├── package.json
 │       ├── requirements.txt
 │       ├── apply_edits.py          # Tracked-changes batch editor (direct ZIP)
-│       ├── nd_cite_check.py        # ND citation checker (uses bundled jetcite)
+│       ├── cite_check.py           # Citation checker (uses bundled jetcite)
 │       ├── cite_review.py          # Interactive citation review HTML generator
 │       ├── lib/
 │       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)

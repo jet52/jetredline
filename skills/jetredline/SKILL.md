@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 3.6.0
+version: 4.0.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -106,9 +106,9 @@ Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all sub
 | Node modules | `$SKILL_DIR/node_modules/` |
 | soffice (LibreOffice) | `$SOFFICE` (macOS: `/Applications/LibreOffice.app/Contents/MacOS/soffice`, Linux: `soffice`) |
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
-| ND citation checker | `$SKILL_DIR/nd_cite_check.py` |
+| Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
-| ND legal refs | `~/refs/nd/` (opinions, code, constitution, regs, rules) |
+| Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
 | OOXML validate | `$SKILL_DIR/ooxml_validate.py` |
 | Citation review | `$SKILL_DIR/cite_review.py` |
@@ -116,7 +116,7 @@ Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all sub
 
 The opinions directory contains markdown copies of published ND Supreme Court opinions organized as `<year>/<year>ND<number>.md` (e.g., `2022/2022ND210.md` for *Feickert v. Feickert*, 2022 ND 210). Paragraphs are marked `[¶N]`. Use `$OPINIONS_MD` in commands; fall back to the hardcoded path if the variable is unset.
 
-The `~/refs/nd/` directory contains a local repository of ND legal materials in markdown format: opinions (`opin/markdown/`), Century Code (`code/`), ND Constitution (`cnst/`), Administrative Code (`regs/`), and court rules (`rule/`). The citation checker resolves these paths automatically via jetcite's `cache.py`.
+The `~/refs/` directory contains a local repository of legal materials in markdown format: opinions (`opin/{reporter}/`), statutes (`statute/NDCC/`, `statute/USC/`), constitutions (`cnst/ND/`, `cnst/US/`), regulations (`reg/NDAC/`, `reg/CFR/`), and court rules (`rule/{set}/`). The citation checker resolves these paths automatically via jetcite.
 
 ## Python Environment
 
@@ -492,12 +492,12 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > **Step 1: Generate the lookup plan.** Run the citation checker on the opinion file to get structured resolution data:
 > ```bash
-> python3 ~/.claude/skills/jetredline/nd_cite_check.py --file <opinion_path> --refs-dir ~/refs --cache
+> python3 ~/.claude/skills/jetredline/cite_check.py --file <opinion_path> --refs-dir ~/refs --cache
 > ```
 > The `--cache` flag auto-fetches and caches any case citations (ND, federal, other states) not already in `~/refs/`. This builds the local cache progressively so future runs have more local hits.
 >
 > This outputs a JSON array with one entry per citation found. Each entry includes:
-> - `cite_type`: nd_case, ndcc, ndcc_chapter, nd_const, ndac, nd_court_rule
+> - `cite_type`: neutral_cite, statute, statute_chapter, constitution, regulation, court_rule, regional_reporter, federal_reporter, us_supreme_court
 > - `local_path` / `local_exists`: path in `~/refs/` and whether it exists
 > - `url`: official source URL (always populated)
 > - `search_hint`: text to search for within the local file
@@ -517,7 +517,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > 3. **Existence check.** Does the cited provision/opinion actually exist? For statutes and rules, confirm the section number is valid.
 >
-> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/nd/opin/markdown/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. For non-case citations (statutes, rules, etc.), mark as N/A.
+> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/ND/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. For non-case citations (statutes, rules, etc.), mark as N/A.
 >
 > 5. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
 >    - Does the source actually state or hold the legal principle attributed to it?
@@ -527,7 +527,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > 6. **Currency check** (statutes, rules, admin code only). If the source text includes effective date or amendment information, flag if the cited version may not be current.
 >
-> 7. **Build the results table.** The Source Link column **must** use the full `url` value from the nd_cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
+> 7. **Build the results table.** The Source Link column **must** use the full `url` value from the cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
 >
 > | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Source Link | Notes |
 > |---|----------|------|---------------|-------------|-----------|-------------|-------|
@@ -538,19 +538,20 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 > 8. **Return** the completed table and a summary: [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] citations that may not support the stated proposition.
 >
 > **Error handling:**
-> - If `nd_cite_check.py` fails or returns an error, report the error in the summary and proceed with manual verification using the URL patterns and local paths below.
+> - If `cite_check.py` fails or returns an error, report the error in the summary and proceed with manual verification using the URL patterns and local paths below.
 > - If a local reference file does not exist for a citation, proceed with web verification only (WebFetch on the `url`). Do not stall or re-search for the file.
 > - If WebFetch also fails, mark the citation as **UNVERIFIED** in the results table with the reason (e.g., "Local file missing, URL unreachable").
 > - Always return partial results. A table with UNVERIFIED entries is better than no table. Never fail silently — every citation must appear in the output table with a status.
 >
 > **Reference file paths (do not search — use directly):**
-> - ND opinions (markdown): `~/refs/nd/opin/markdown/` — organized as `<year>/<year>ND<number>.md`
-> - ND Century Code: `~/refs/nd/code/` — organized by title/chapter
-> - ND Constitution: `~/refs/nd/cnst/`
-> - ND Administrative Code: `~/refs/nd/regs/`
+> - Opinions: `~/refs/opin/{reporter}/` — e.g., `opin/ND/2024/2024ND156.md`, `opin/NW2d/585/351.md`
+> - Statutes: `~/refs/statute/NDCC/` (by title/chapter), `~/refs/statute/USC/`
+> - Constitution: `~/refs/cnst/ND/`, `~/refs/cnst/US/`
+> - Regulations: `~/refs/reg/NDAC/`, `~/refs/reg/CFR/`
+> - Court Rules: `~/refs/rule/{set}/` — e.g., `rule/ndrcivp/rule-56.md`
 
 **Web mode:** Skip local resolution — no `~/refs/` directory is available.
-1. Run `nd_cite_check.py` with `--refs-dir /dev/null` (or skip the script entirely and use the URL patterns below).
+1. Run `cite_check.py` with `--refs-dir /dev/null` (or skip the script entirely and use the URL patterns below).
 2. For each ND citation, use WebFetch on the URL from the lookup plan.
 3. For ND case citations, use web search to locate the opinion on ndcourts.gov or Google Scholar.
 4. Verify quotes and substantive support as described above.

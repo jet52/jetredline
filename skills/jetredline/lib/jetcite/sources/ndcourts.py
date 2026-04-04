@@ -48,6 +48,53 @@ def resolve_nd_opinion_url(year: str, number: str) -> str | None:
     return f"https://www.ndcourts.gov/supreme-court/opinions/{m.group(1)}"
 
 
+def fetch_ndcourts(
+    source_url: str,
+    citation: object,
+    timeout: float = 15.0,
+) -> tuple[str | None, dict, bytes | None]:
+    """Fetch ND opinion content from ndcourts.gov.
+
+    Downloads the opinion PDF, extracts text via pdfplumber, and applies
+    opinion-specific cleanup.
+
+    Returns (markdown_content, metadata_dict, original_pdf_bytes)
+    or (None, {}, None) on failure.
+    """
+    try:
+        resp = httpx.get(source_url, follow_redirects=True, timeout=timeout,
+                         headers={"User-Agent": _USER_AGENT})
+        if resp.status_code >= 400:
+            return None, {}, None
+    except (httpx.HTTPError, httpx.TimeoutException):
+        return None, {}, None
+
+    content_type = resp.headers.get("content-type", "").split(";")[0].strip()
+    pdf_bytes = resp.content
+
+    # If we got HTML (search page), try to extract the opinion ID and follow
+    if content_type in ("text/html", "application/xhtml+xml"):
+        m = _OPINION_ID_RE.search(resp.text)
+        if not m:
+            return None, {}, None
+        direct_url = f"https://www.ndcourts.gov/supreme-court/opinions/{m.group(1)}"
+        try:
+            resp = httpx.get(direct_url, follow_redirects=True, timeout=timeout,
+                             headers={"User-Agent": _USER_AGENT})
+            if resp.status_code >= 400:
+                return None, {}, None
+        except (httpx.HTTPError, httpx.TimeoutException):
+            return None, {}, None
+        pdf_bytes = resp.content
+
+    from jetcite.cache import pdf_to_text
+    text = pdf_to_text(pdf_bytes)
+    if not text:
+        return None, {}, None
+
+    return text, {}, pdf_bytes
+
+
 def nd_court_rule_url(rule_set: str, parts: list[str]) -> str:
     """Generate an ndcourts.gov URL for a ND court rule."""
     joined = "-".join(parts)

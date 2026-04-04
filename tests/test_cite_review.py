@@ -160,23 +160,23 @@ class TestOpinionToHtml:
 class TestBuildHtml:
     @pytest.fixture
     def citations_basic(self):
-        """Citation data mimicking nd_cite_check.py output."""
+        """Citation data mimicking cite_check.py output."""
         return [
             {
                 "cite_text": "2023 ND 219",
-                "cite_type": "nd_case",
+                "cite_type": "neutral_cite",
                 "normalized": "2023 ND 219",
                 "url": "https://www.ndcourts.gov/supreme-court/opinions/12345",
             },
             {
                 "cite_text": "N.D.C.C. § 14-05-24",
-                "cite_type": "ndcc",
+                "cite_type": "statute",
                 "normalized": "N.D.C.C. § 14-05-24",
                 "url": "https://ndlegis.gov/cencode/t14c05.pdf",
             },
             {
                 "cite_text": "2024 ND 42",
-                "cite_type": "nd_case",
+                "cite_type": "neutral_cite",
                 "normalized": "2024 ND 42",
                 "url": "https://www.ndcourts.gov/supreme-court/opinions/67890",
             },
@@ -188,7 +188,7 @@ class TestBuildHtml:
             },
             {
                 "cite_text": "938 N.W.2d 897",
-                "cite_type": "state_reporter",
+                "cite_type": "regional_reporter",
                 "normalized": "938 N.W.2d 897",
                 "url": "https://www.courtlistener.com/c/N.W.%202d/938/897/",
             },
