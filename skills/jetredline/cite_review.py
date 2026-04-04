@@ -13,7 +13,7 @@ Usage:
     python3 cite_review.py --opinion opinion.md --refs-dir ~/refs \\
         --output cite-review.html --title "2026 ND 42, State v. Henderson"
 
-    # Or pipe nd_cite_check.py JSON directly:
+    # Or pipe cite_check.py JSON directly:
     python3 cite_review.py --opinion opinion.md --cite-json cites.json \\
         --output cite-review.html
 """
@@ -156,7 +156,7 @@ def _restore_url_resolution(saved: dict):
 
 def _load_citations(opinion_path: Path, cite_json_path: Path | None,
                     refs_dir: str, local_only: bool = False) -> list[dict]:
-    """Load citation JSON — from file or by running nd_cite_check.
+    """Load citation JSON — from file or by running cite_check.
 
     Default mode runs with cache_missing=True so citations are fetched
     and cached in refs_dir for future offline use.  --local-only skips
@@ -165,7 +165,7 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
     if cite_json_path and cite_json_path.exists():
         return json.loads(cite_json_path.read_text(encoding="utf-8"))
 
-    # Import and run nd_cite_check directly.
+    # Import and run cite_check directly.
     # Always disable per-citation URL resolution during scanning — it's
     # slow and we derive direct URLs from local paths instead.  Only the
     # explicit caching step below needs web access.
@@ -174,7 +174,7 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
     try:
         saved = _disable_url_resolution()
 
-        from nd_cite_check import scan_opinion
+        from cite_check import scan_opinion
         text = opinion_path.read_text(encoding="utf-8")
         result = scan_opinion(text, refs_dir=refs_dir, cache_missing=False)
 
@@ -195,8 +195,8 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
             _restore_url_resolution(saved2)
 
             _CACHEABLE = {
-                "nd_case", "us_supreme_court",
-                "federal_reporter", "state_reporter",
+                "neutral_cite", "us_supreme_court",
+                "federal_reporter", "regional_reporter",
             }
             to_cache = [
                 e for e in result
@@ -233,8 +233,8 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
         sys.path.pop(0)
 
 
-# Pattern to extract neutral citation from ND opinion local paths
-# e.g., ~/refs/nd/opin/markdown/2008/2008ND228.md → 2008ND228
+# Pattern to extract neutral citation from opinion local paths
+# e.g., ~/refs/opin/ND/2008/2008ND228.md → 2008ND228
 _ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 
 
@@ -1161,7 +1161,7 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
     """Remove secondary parallel citations from the list.
 
     Rules (type-based, no reliance on parallel_cite directionality):
-    - state_reporter (N.W.2d/3d) that has a parallel_cite → drop it
+    - regional_reporter (N.W.2d/3d) that has a parallel_cite → drop it
     - federal_reporter matching S.Ct. or L.Ed. → always drop
     - Any citation whose parallel_cite points to a primary already kept
       and the citation itself is a reporter (not neutral/U.S.) → drop
@@ -1171,8 +1171,8 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
     for c in citations:
         ct = c.get("cite_type", "")
         norm = c.get("normalized", "")
-        # ND neutral citations are always primary
-        if ct == "nd_case":
+        # Neutral citations are always primary
+        if ct == "neutral_cite":
             primary_norms.add(norm)
         # U.S. Reports are always primary
         elif ct == "us_supreme_court":
@@ -1184,8 +1184,8 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
         ct = c.get("cite_type", "")
         pc = c.get("parallel_cite", "")
 
-        # N.W.2d/3d parallel of an ND neutral → drop
-        if ct == "state_reporter" and _NW_RE.search(norm) and pc:
+        # N.W.2d/3d parallel of a neutral cite → drop
+        if ct == "regional_reporter" and _NW_RE.search(norm) and pc:
             skip_norms.add(norm)
             continue
 
@@ -1370,10 +1370,10 @@ def main():
     parser.add_argument("--opinion", "-o", required=True,
                         help="Path to opinion markdown file")
     parser.add_argument("--cite-json", "-c",
-                        help="Path to pre-generated nd_cite_check.py JSON "
-                             "(if omitted, runs nd_cite_check internally)")
+                        help="Path to pre-generated cite_check.py JSON "
+                             "(if omitted, runs cite_check internally)")
     parser.add_argument("--refs-dir", default="~/refs",
-                        help="Refs directory for nd_cite_check (default: ~/refs)")
+                        help="Refs directory for cite_check (default: ~/refs)")
     parser.add_argument("--output", default="cite-review.html",
                         help="Output HTML file path (default: cite-review.html)")
     parser.add_argument("--title", "-t", default="",

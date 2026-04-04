@@ -211,6 +211,10 @@ def cite_cmd(
               help="Report cache status for each citation.")
 @click.option("--force", is_flag=True,
               help="Re-fetch even if already cached.")
+@click.option("--refresh-stale", is_flag=True,
+              help="Re-fetch only stale mutable content (statutes, regs, rules).")
+@click.option("--parallel", type=int, default=None,
+              help="Max concurrent fetches (default: 5). Use 1 for sequential.")
 def cache(
     citation: str | None,
     cache_file: str | None,
@@ -218,6 +222,8 @@ def cache(
     dry_run: bool,
     status: bool,
     force: bool,
+    refresh_stale: bool,
+    parallel: int | None,
 ):
     """Fetch citation content and cache locally.
 
@@ -273,41 +279,50 @@ def cache(
         _print_cache_status(citations, refs_path, resolve_local, read_meta, is_stale)
         return
 
-    # Dry-run or fetch mode
+    # Dry-run mode
+    if dry_run:
+        for cite in citations:
+            local = resolve_local(cite, refs_path)
+            if local and not force and not is_stale(cite, local):
+                click.echo(f"  skip  {cite.normalized:<30} (cached)")
+            else:
+                url = "(no URL)"
+                for s in cite.sources:
+                    if s.name != "local":
+                        url = s.url
+                        break
+                click.echo(f"  fetch {cite.normalized:<30} <- {url}")
+        return
+
+    # Fetch mode — use batch for multiple citations
+    from jetcite.cache import fetch_and_cache_batch_sync
+
     fetched = 0
-    skipped = 0
     failed = 0
 
-    for cite in citations:
-        local = resolve_local(cite, refs_path)
-        if local and not force and not is_stale(cite, local):
-            skipped += 1
-            if dry_run:
-                click.echo(f"  skip  {cite.normalized:<30} (cached)")
-            continue
-
-        if dry_run:
-            url = "(no URL)"
-            for s in cite.sources:
-                if s.name != "local":
-                    url = s.url
-                    break
-            click.echo(f"  fetch {cite.normalized:<30} <- {url}")
+    def _on_complete(cite, path):
+        nonlocal fetched, failed
+        if path:
+            fetched += 1
+            click.echo(f"  ok    {cite.normalized:<30} -> {path}", err=True)
         else:
-            cached = fetch_and_cache(cite, refs_dir=refs_path, force=force)
-            if cached:
-                fetched += 1
-                click.echo(f"  ok    {cite.normalized:<30} -> {cached}", err=True)
-            else:
-                failed += 1
-                click.echo(f"  FAIL  {cite.normalized}", err=True)
+            failed += 1
+            click.echo(f"  FAIL  {cite.normalized}", err=True)
 
-    if not dry_run:
-        click.echo(
-            f"\n{fetched} cached, {skipped} already cached, {failed} failed "
-            f"({len(citations)} total)",
-            err=True,
-        )
+    max_concurrent = parallel if parallel is not None else 5
+    results = fetch_and_cache_batch_sync(
+        citations, refs_dir=refs_path, max_concurrent=max_concurrent,
+        force=force, refresh_stale=refresh_stale, on_complete=_on_complete,
+    )
+
+    skipped = sum(1 for _, path in results if path and path.suffix == ".md") - fetched
+    # Recalculate: batch returns all results, including already-cached
+    cached_total = sum(1 for _, p in results if p is not None)
+    click.echo(
+        f"\n{fetched} fetched, {cached_total - fetched} already cached, {failed} failed "
+        f"({len(citations)} total)",
+        err=True,
+    )
 
 
 def _print_cache_status(citations, refs_path, resolve_local, read_meta, is_stale):
