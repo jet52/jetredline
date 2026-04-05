@@ -263,7 +263,7 @@ Store `DOC_TYPE` and reference it in conditional sections of Passes 1 and 5 and 
 
 ### Step 0.5: Determine Output Preferences
 
-**Web mode:** Do not ask for output preferences. Only the markdown analysis document is available — tracked-changes .docx requires CLI tools (Bash, docx skill, LibreOffice). State this briefly: "In this environment I can produce a markdown analysis report but not a tracked-changes .docx." Proceed unless the user objects.
+**Web mode:** Do not ask for output preferences. Only the markdown analysis document is available — tracked-changes .docx and the interactive citation review HTML both require CLI tools (Bash, Python, file system access). State this briefly: "In this environment I can produce a markdown analysis report but not a tracked-changes .docx or citation review page." Proceed unless the user objects.
 
 **CLI mode:** Default to producing **both** documents (tracked-changes .docx + analysis document) without asking. Only ask if the user explicitly specified a different preference in their invocation (e.g., "just the redline" or "analysis only").
 
@@ -288,7 +288,7 @@ If the user did specify a preference, honor it:
 8a. **Caption mismatches → edits.** Check the Pass 3B results table for any Caption Check mismatches. For each mismatch, generate a tracked-change edit correcting the case name in the draft to match the official caption, with a comment citing the source (e.g., "Official caption per 2023 ND 219: 'Tracey v. Tracey'"). Include these in the edits JSON alongside Pass 2/3A/5 edits.
 9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
 10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
-11. **Generate citation review HTML** (CLI mode only): After Pass 3 completes, generate an interactive citation review page for human verification:
+11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification:
 ```bash
 $VENV_PYTHON ~/.claude/skills/jetredline/cite_review.py \
   --opinion <opinion_md_path> \
@@ -912,7 +912,7 @@ The **Substantive Concerns** section varies by `DOC_TYPE`.
 –End Analysis–
 ```
 
-### Citation review HTML (CLI mode, always generated)
+### Citation review HTML (CLI and Cowork, always generated)
 
 After Pass 3 completes and the opinion markdown is available, generate an interactive citation review page:
 
@@ -926,8 +926,8 @@ $VENV_PYTHON ~/.claude/skills/jetredline/cite_review.py \
 
 This produces a self-contained HTML file with:
 - A sidebar listing every citation with verification status
-- A split main pane: draft paragraph (with citation highlighted) on top, the cited authority loaded in an iframe on bottom
-- Keyboard navigation (`j`/`k` to move, `v`/`f`/`s` to verify/flag/skip, `n` for notes)
+- A split main pane: draft paragraph (with citation highlighted) on top, cached source text rendered in readable serif font on bottom with a link bar to the original source
+- Keyboard navigation (`j`/`k` to move, `v`/`f`/`s` to verify/flag/skip, `Space`/`Enter` to verify and advance, `a` to toggle auto-advance, `h`/`l` to switch local/web view, `n` for notes, `?` for help)
 - LocalStorage persistence so review state survives browser restarts
 - An "Export JSON" button to save the review state
 
@@ -942,7 +942,7 @@ After all outputs are generated, present a clear summary to the user:
 > **Documents generated:**
 > - Tracked-changes .docx: `<filename>` *(if generated)*
 > - Analysis report: `<filename>` *(if generated)*
-> - Citation review: `<filename>` *(CLI mode only)*
+> - Citation review: `<filename>` *(CLI and Cowork only)*
 >
 > **Citation Verification (quality gate):**
 > Open `<cite-review-filename>` in your browser to verify each citation against its source. Keyboard: `j`/`k` to navigate, `v`/`f`/`s` to verify/flag/skip, `?` for all shortcuts.
