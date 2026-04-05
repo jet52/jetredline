@@ -91,10 +91,48 @@ def _find_paragraph(paragraphs: list[dict], cite_text: str) -> dict | None:
 # Opinion to HTML
 # ---------------------------------------------------------------------------
 
+# Convert markdown links [text](url) to HTML after escaping.
+# Matches the escaped form: [text](url) where brackets/parens are literal
+# (not escaped by html.escape).
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
+
+
+def _inline_links(text: str) -> str:
+    """Convert markdown [text](url) links in already-escaped HTML to <a> tags.
+
+    We run this on the raw text *before* html.escape so we can identify the
+    link structure, then rebuild with escaped parts.
+    """
+    def _replace(m: re.Match) -> str:
+        label = html.escape(m.group(1))
+        url = html.escape(m.group(2))
+        return f'<a class="draft-link" href="{url}" target="_blank" title="{url}">{label}</a>'
+    return _MD_LINK_RE.sub(_replace, text)
+
+
+def _escape_with_links(text: str) -> str:
+    """HTML-escape text but render markdown links as clickable <a> tags."""
+    # First convert links to placeholders, then escape the rest
+    parts = []
+    last = 0
+    for m in _MD_LINK_RE.finditer(text):
+        # Escape text before this link
+        parts.append(html.escape(text[last:m.start()]))
+        # Render link as HTML
+        label = html.escape(m.group(1))
+        url = html.escape(m.group(2))
+        parts.append(
+            f'<a class="draft-link" href="{url}" target="_blank" title="{url}">{label}</a>'
+        )
+        last = m.end()
+    parts.append(html.escape(text[last:]))
+    return "".join(parts)
+
+
 def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
     """Convert opinion text to HTML fragment with paragraph anchors."""
     if not paragraphs or paragraphs[0]["num"] is None:
-        return f'<div class="opinion-text">{html.escape(text)}</div>'
+        return f'<div class="opinion-text">{_escape_with_links(text)}</div>'
 
     parts = []
     # Header text before first paragraph marker
@@ -109,12 +147,12 @@ def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
         header = text[:first_match.start()].strip()
         if header:
             parts.append(
-                f'<div class="opinion-header">{html.escape(header)}</div>'
+                f'<div class="opinion-header">{_escape_with_links(header)}</div>'
             )
 
     for p in paragraphs:
         pid = f'para-{p["num"]}' if p["num"] is not None else "para-0"
-        escaped = html.escape(p["text"])
+        escaped = _escape_with_links(p["text"])
         parts.append(
             f'<div class="opinion-para" id="{pid}">'
             f'<span class="para-marker">[¶{p["num"]}]</span> '
@@ -239,8 +277,9 @@ _ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 
 
 # Domains whose pages can be loaded in an iframe (no X-Frame-Options block)
+# ndcourts.gov removed — cached markdown is always a better experience
 _IFRAME_OK_DOMAINS = frozenset({
-    "www.ndcourts.gov", "ndcourts.gov", "ndlegis.gov",
+    "ndlegis.gov",
 })
 
 # PDF.js CDN version
@@ -333,17 +372,25 @@ try {
 
 
 def _nd_direct_url(local_path: str | None) -> str | None:
-    """Derive a direct ndcourts.gov opinion URL from a local markdown path.
+    """Derive an ndcourts.gov search URL from a local markdown path.
 
-    If local_path matches the ND opinion pattern, returns e.g.
-    https://www.ndcourts.gov/supreme-court/opinion/2008ND228
+    If local_path matches the ND opinion pattern (e.g. 2017ND196.md),
+    returns the search URL that reliably finds the opinion on ndcourts.gov.
     """
     if not local_path:
         return None
     m = _ND_LOCAL_PATH_RE.search(local_path)
     if not m:
         return None
-    return f"https://www.ndcourts.gov/supreme-court/opinion/{m.group(1)}"
+    tag = m.group(1)  # e.g. "2017ND196"
+    year_m = re.match(r"(\d{4})ND(\d+)", tag)
+    if not year_m:
+        return None
+    return (
+        f"https://www.ndcourts.gov/supreme-court/opinions"
+        f"?cit1={year_m.group(1)}&citType=ND&cit2={year_m.group(2)}"
+        f"&pageSize=10&sortOrder=1"
+    )
 
 
 def _needs_pdfjs_viewer(url: str, pinpoint: str | None) -> bool:
@@ -559,7 +606,8 @@ _CSS = """\
   --flagged: #d68;
   --skipped: #888;
   --highlight: #5b8def22;
-  --cite-hl: #5b8def44;
+  --cite-hl: #e8b93166;
+  --cite-hl-border: #d4a017;
 }
 * { margin:0; padding:0; box-sizing:border-box; }
 body {
@@ -649,6 +697,7 @@ main { display:flex; flex:1; overflow:hidden; }
 .pane-hdr .ctitle { font-size:13px; font-weight:600; color:var(--text); }
 .pane-hdr .curl {
   font-size:11px; color:var(--accent); text-decoration:none;
+  max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .pane-hdr .curl:hover { text-decoration:underline; }
 
@@ -676,9 +725,20 @@ main { display:flex; flex:1; overflow:hidden; }
   color:var(--accent); font-weight:600;
   font-family:'SF Mono','Cascadia Code',monospace; font-size:12px;
 }
+.draft-link {
+  color:var(--text); text-decoration:none;
+  border-bottom:1px dotted var(--text-muted);
+}
+.draft-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
 .cite-hl {
-  background:var(--cite-hl); padding:1px 4px;
-  border-radius:3px; border-bottom:2px solid var(--accent);
+  background:var(--cite-hl); padding:2px 5px;
+  border-radius:3px; border-bottom:2px solid var(--cite-hl-border);
+  animation: cite-flash 0.6s ease-out;
+}
+@keyframes cite-flash {
+  0% { background:#e8b93100; }
+  30% { background:#e8b931aa; }
+  100% { background:var(--cite-hl); }
 }
 
 /* Resize handle */
@@ -729,32 +789,49 @@ main { display:flex; flex:1; overflow:hidden; }
   font-family:'SF Mono',monospace; z-index:10; cursor:pointer;
 }
 .local-toggle:hover { background:var(--accent-dim); color:#fff; }
+.source-link-bar {
+  display:flex; align-items:center; gap:8px;
+  padding:6px 16px; background:#f0f0ee; border-bottom:1px solid #d8d8d4;
+  flex-shrink:0; font-family:'SF Mono','Cascadia Code',monospace; font-size:11px;
+}
+.source-link-bar a {
+  color:#3366cc; text-decoration:none; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap;
+}
+.source-link-bar a:hover { text-decoration:underline; }
+.source-link-bar .ext-icon { font-size:13px; flex-shrink:0; }
 .local-ref-html {
-  flex:1; overflow-y:auto; padding:20px 28px;
-  font-family:'Charter','Georgia',serif; font-size:14px;
-  line-height:1.7; color:#222; background:#fafaf8;
+  flex:1; overflow-y:auto; padding:24px 36px;
+  font-family:'Charter','Georgia','Times New Roman',serif; font-size:17px;
+  line-height:1.85; color:#1a1a1a; background:#fdfdf8;
   margin:0;
 }
 .local-ref-html h1, .local-ref-html h2, .local-ref-html h3, .local-ref-html h4 {
-  color:#1a1a2e; margin:1.2em 0 0.4em; font-family:system-ui,sans-serif;
+  color:#1a1a2e; margin:1.4em 0 0.5em; font-family:system-ui,sans-serif;
 }
-.local-ref-html h1 { font-size:18px; }
-.local-ref-html h2 { font-size:16px; }
-.local-ref-html h3 { font-size:14px; }
-.local-ref-html p { margin:0.6em 0; }
+.local-ref-html h1 { font-size:22px; }
+.local-ref-html h2 { font-size:19px; }
+.local-ref-html h3 { font-size:17px; }
+.local-ref-html p { margin:0.7em 0; }
 .local-ref-html blockquote {
-  border-left:3px solid #c0c0d0; margin:0.8em 0; padding:4px 16px;
-  color:#444; background:#f0f0f4;
+  border-left:3px solid #b0b0c0; margin:1em 0; padding:6px 20px;
+  color:#333; background:#f4f4f0; font-size:16px;
 }
 .local-ref-html .para-anchor {
-  font-weight:700; color:#5b8def; scroll-margin-top:40px;
+  font-weight:700; color:#2255aa; scroll-margin-top:40px;
 }
 .local-ref-html .sec-anchor {
-  font-weight:600; color:#5b8def; scroll-margin-top:40px;
+  font-weight:600; color:#2255aa; scroll-margin-top:40px;
 }
 .local-ref-html .pinpoint-active {
-  background:#fde68a; padding:2px 6px; border-radius:3px;
-  outline:2px solid #e8b931; outline-offset:2px;
+  background:#fde68a; padding:3px 8px; border-radius:4px;
+  outline:2px solid #d4a017; outline-offset:3px;
+  animation: pinpoint-pulse 1.5s ease-in-out;
+}
+@keyframes pinpoint-pulse {
+  0% { outline-color:#d4a017; outline-offset:3px; }
+  50% { outline-color:#e8c840; outline-offset:6px; }
+  100% { outline-color:#d4a017; outline-offset:3px; }
 }
 .search-hint {
   position:absolute; bottom:8px; left:12px;
@@ -801,6 +878,10 @@ main { display:flex; flex:1; overflow:hidden; }
   flex-shrink:0;
 }
 .shortcuts span { display:flex; align-items:center; gap:4px; }
+#auto-advance-indicator {
+  font-size:10px; padding:2px 8px; border-radius:3px;
+  background:var(--accent-dim); color:var(--text); font-weight:600;
+}
 
 /* Help modal */
 .help-overlay {
@@ -830,6 +911,7 @@ _JS = """\
   const STORAGE_KEY = 'cite-review-' + __FILE_KEY__;
 
   let currentIdx = 0;
+  let autoAdvance = true;
   let state = loadState();
 
   function loadState() {
@@ -947,20 +1029,20 @@ _JS = """\
 
     // Helper: render local source HTML into the source pane
     function showLocal() {
+      srcBody.innerHTML = '';
+      // Source link bar at top
+      if (d.url) {
+        var bar = document.createElement('div');
+        bar.className = 'source-link-bar';
+        bar.innerHTML = '<span class="ext-icon">&#x1f517;</span>' +
+          '<a href="' + esc(d.url) + '" target="_blank">' +
+          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a>';
+        srcBody.appendChild(bar);
+      }
       var wrap = document.createElement('div');
       wrap.className = 'local-ref-html';
       wrap.innerHTML = sourceHtml;
-      srcBody.innerHTML = '';
       srcBody.appendChild(wrap);
-      // Overlay buttons — use appendChild to avoid destroying wrap
-      if (d.url) {
-        var link = document.createElement('a');
-        link.className = 'fallback-link';
-        link.href = d.url;
-        link.target = '_blank';
-        link.innerHTML = 'Open official source &#x2197;';
-        srcBody.appendChild(link);
-      }
       // Scroll to pinpoint anchor
       var target = null;
       if (d.pinpoint) {
@@ -980,26 +1062,26 @@ _JS = """\
 
     // Helper: render iframe/web view into the source pane
     function showIframe() {
+      var html = '';
+      if (d.url) {
+        html += '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
+          '<a href="' + esc(d.url) + '" target="_blank">' +
+          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>';
+      }
       if (d.viewer_path) {
         var viewerUrl = d.viewer_path;
         if (d.search_term) viewerUrl += '#search=' + encodeURIComponent(d.search_term);
-        srcBody.innerHTML =
-          '<iframe src="' + esc(viewerUrl) + '"></iframe>' +
+        html += '<iframe src="' + esc(viewerUrl) + '"></iframe>' +
           (d.search_term
             ? '<div class="search-hint">Searching: <code>' + esc(d.search_term) + '</code></div>'
-            : '') +
-          '<a class="fallback-link" href="' + esc(d.url) +
-          '" target="_blank">Open in new tab</a>';
+            : '');
       } else if (d.iframe_ok) {
-        srcBody.innerHTML =
-          '<iframe src="' + esc(d.url) + '"></iframe>' +
-          '<a class="fallback-link" href="' + esc(d.url) +
-          '" target="_blank">Open in new tab</a>';
+        html += '<iframe src="' + esc(d.url) + '"></iframe>';
       }
       if (sourceHtml) {
-        srcBody.innerHTML +=
-          '<span class="local-toggle" onclick="window._showLocal()">Local reference</span>';
+        html += '<span class="local-toggle" onclick="window._showLocal()">Local reference</span>';
       }
+      srcBody.innerHTML = html;
       // Detect iframe load failure and auto-switch to local
       var iframe = srcBody.querySelector('iframe');
       if (iframe && sourceHtml) {
@@ -1028,6 +1110,9 @@ _JS = """\
       showIframe();
     } else if (d.url) {
       srcBody.innerHTML =
+        '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
+        '<a href="' + esc(d.url) + '" target="_blank">' +
+        esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>' +
         '<div class="no-local">' +
         '<p>Source not cached locally</p>' +
         '<a class="open-tab-btn" href="' + esc(d.url) +
@@ -1051,7 +1136,7 @@ _JS = """\
     document.querySelector('.s-btn').classList.toggle('active', status === 'skipped');
   }
 
-  function setStatus(status) {
+  function setStatus(status, advance) {
     const cs = getCiteState(currentIdx);
     const newStatus = cs.status === status ? null : status;
     setCiteState(currentIdx, 'status', newStatus);
@@ -1061,6 +1146,11 @@ _JS = """\
     const dot = document.querySelectorAll('.cite-item')[currentIdx].querySelector('.dot');
     dot.className = 'dot' + (newStatus ? ' ' + newStatus : '');
     updateProgress();
+
+    // Auto-advance to next citation if enabled and status was set (not cleared)
+    if (advance && newStatus && autoAdvance && currentIdx < DATA.length - 1) {
+      setTimeout(function() { navigate(currentIdx + 1); }, 120);
+    }
   }
 
   function updateProgress() {
@@ -1083,18 +1173,27 @@ _JS = """\
     }
     if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); navigate(currentIdx + 1); }
     else if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); navigate(currentIdx - 1); }
-    else if (e.key === 'v') setStatus('verified');
-    else if (e.key === 'f') setStatus('flagged');
-    else if (e.key === 's') setStatus('skipped');
+    else if (e.key === 'v') setStatus('verified', true);
+    else if (e.key === 'f') setStatus('flagged', true);
+    else if (e.key === 's') setStatus('skipped', true);
+    else if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault(); setStatus('verified', true);
+    }
+    else if (e.key === 'a') {
+      autoAdvance = !autoAdvance;
+      updateAutoAdvanceIndicator();
+    }
+    else if (e.key === 'l') { if (window._showIframe) window._showIframe(); }
+    else if (e.key === 'h') { if (window._showLocal) window._showLocal(); }
     else if (e.key === 'n') { e.preventDefault(); document.getElementById('notes-input').focus(); }
     else if (e.key === '?') toggleHelp();
     else if (e.key === 'Escape') closeHelp();
   });
 
   // Button clicks
-  document.querySelector('.v-btn').addEventListener('click', () => setStatus('verified'));
-  document.querySelector('.f-btn').addEventListener('click', () => setStatus('flagged'));
-  document.querySelector('.s-btn').addEventListener('click', () => setStatus('skipped'));
+  document.querySelector('.v-btn').addEventListener('click', () => setStatus('verified', true));
+  document.querySelector('.f-btn').addEventListener('click', () => setStatus('flagged', true));
+  document.querySelector('.s-btn').addEventListener('click', () => setStatus('skipped', true));
 
   // Help modal
   function toggleHelp() {
@@ -1146,8 +1245,15 @@ _JS = """\
     a.click();
   };
 
+  // Auto-advance indicator
+  function updateAutoAdvanceIndicator() {
+    var el = document.getElementById('auto-advance-indicator');
+    if (el) el.textContent = autoAdvance ? 'auto-advance ON' : 'auto-advance OFF';
+  }
+
   // Init first citation
   navigate(0);
+  updateAutoAdvanceIndicator();
 })();
 """
 
@@ -1311,7 +1417,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
           <span class="ptitle">Source</span>
           <a class="curl" href="#" target="_blank"></a>
         </div>
-        <div class="src-body" style="flex:1;display:flex;flex-direction:column;position:relative;">
+        <div class="src-body" style="flex:1;display:flex;flex-direction:column;position:relative;min-height:0;overflow:hidden;">
           <div class="no-url">Select a citation</div>
         </div>
       </div>
@@ -1332,6 +1438,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         <span><span class="kbd">j</span>/<span class="kbd">&darr;</span> next</span>
         <span><span class="kbd">k</span>/<span class="kbd">&uarr;</span> prev</span>
         <span><span class="kbd">n</span> notes</span>
+        <span id="auto-advance-indicator" class="auto-advance-on"></span>
         <span><span class="kbd">?</span> help</span>
       </div>
     </div>
@@ -1346,6 +1453,10 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     <div class="row"><span class="k">v</span> Toggle verified</div>
     <div class="row"><span class="k">f</span> Toggle flagged</div>
     <div class="row"><span class="k">s</span> Toggle skipped</div>
+    <div class="row"><span class="k">Space / Enter</span> Verify + advance</div>
+    <div class="row"><span class="k">a</span> Toggle auto-advance</div>
+    <div class="row"><span class="k">h</span> Show local source</div>
+    <div class="row"><span class="k">l</span> Show web source</div>
     <div class="row"><span class="k">n</span> Focus notes</div>
     <div class="row"><span class="k">Esc</span> Blur notes / close help</div>
     <div class="row"><span class="k">?</span> Toggle this help</div>
