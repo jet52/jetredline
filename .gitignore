@@ -9,4 +9,5 @@ skills/jetredline/__pycache__/
 jetredline-skill*.zip
 package-lock.json
 test-data/
+TODO.md
 .tmp-*/
