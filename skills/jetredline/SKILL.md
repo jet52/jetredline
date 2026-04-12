@@ -633,7 +633,7 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 
 ### Pass 7: Dissent/Concurrence Cross-Check (Delegated to Subagent)
 
-When a dissent or concurrence is provided alongside the majority opinion, cross-check for fair characterization and responsiveness. This pass applies **only** when `DOC_TYPE == opinion` and a dissent or concurrence file was identified in Step 0.
+When a dissent or concurrence is provided alongside the majority opinion, cross-check for fair characterization and responsiveness. The aim is to ensure all opinions in a case fairly and accurately characterize other opinions, maintain constructive engagement on the substantive merits of the points of disagreement, and reveal to a discerning reader the crux of any disagreement between the opinions. This pass applies **only** when `DOC_TYPE == opinion` and a dissent or concurrence file was identified in Step 0.
 
 **Do not** read the dissent/concurrence into the main context. Delegate to a subagent to keep the separate document out of the main context window.
 
