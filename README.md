@@ -1,6 +1,6 @@
 # JetRedline
 
-Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court).
+Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court). Good practice to have standing instructions in your profile preferences that help ensure you get needed stress testing of arguments.  One approach: "When I argue against a position that knowledgeable experts would defend, answer as a smart expert who would still argue back. Lead with the counterarguments rather than with the agreement. Give a detailed response/steelman of the strongest arguments against my position and don't needlessly soften or backtrack."
 
 ## Caution: Privacy Settings Before Use
 
