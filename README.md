@@ -173,3 +173,14 @@ jetredline/
 | textstat     | Readability metrics            | Yes (installed by installer) |
 | jetcite      | Citation parsing and linking   | Bundled (vendored source)   |
 | docx (npm)   | New .docx creation from scratch| Only if not editing existing  |
+
+## Contributing
+
+On a fresh clone, activate the local pre-push sensitive-content check:
+
+```bash
+git config --local core.hooksPath .githooks
+```
+
+It scans commits being pushed for likely ND court dockets, confidential-case
+captions, and committed binaries. Bypass once with `git push --no-verify`.
