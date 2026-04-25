@@ -41,7 +41,6 @@ The analysis document includes the following sections (some vary by document typ
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI) or [Claude Desktop](https://claude.ai/download) with Cowork
 - Python 3.10+
 - Node.js 18+ (for creating new .docx from scratch; not needed for tracked-changes editing)
-- [LibreOffice](https://www.libreoffice.org/) (for document-to-PDF conversion; not needed for tracked-changes editing)
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 
 **Windows additional requirements:**
@@ -166,7 +165,6 @@ jetredline/
 | ------------ | ------------------------------ | ---------------------------- |
 | Python 3.10+ | PDF/XML processing             | Yes                          |
 | Node.js 18+  | New .docx creation from scratch| Only if not editing existing  |
-| LibreOffice  | Document-to-PDF conversion     | Only for PDF/image export    |
 | defusedxml   | Safe XML parsing               | Yes (installed by installer) |
 | pikepdf      | PDF manipulation               | Yes (installed by installer) |
 | splitmarks   | PDF bookmark splitting         | Bundled script (no install)  |

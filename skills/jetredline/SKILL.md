@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.0.1
+version: 4.0.2
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -22,41 +22,19 @@ Do not ask the user which mode to use — sense it from your available tools.
 At the start of each CLI session, set variables for platform-dependent paths. **Do not use `$(uname)` or other command substitution** — it triggers unnecessary permission prompts. Instead, check for platform-specific files directly:
 
 ```bash
-VENV_PYTHON=~/.claude/skills/jetredline/.venv/bin/python
-SOFFICE_DIR=""
-if [ -d /Applications/LibreOffice.app ]; then
-  SOFFICE="/Applications/LibreOffice.app/Contents/MacOS/soffice"
-  SOFFICE_DIR="/Applications/LibreOffice.app/Contents/MacOS"
-elif [ -f "/c/Program Files/LibreOffice/program/soffice.exe" ]; then
-  VENV_PYTHON=~/.claude/skills/jetredline/.venv/Scripts/python.exe
-  SOFFICE="/c/Program Files/LibreOffice/program/soffice.exe"
-  SOFFICE_DIR="/c/Program Files/LibreOffice/program"
-elif [ -f "/c/Program Files (x86)/LibreOffice/program/soffice.exe" ]; then
-  VENV_PYTHON=~/.claude/skills/jetredline/.venv/Scripts/python.exe
-  SOFFICE="/c/Program Files (x86)/LibreOffice/program/soffice.exe"
-  SOFFICE_DIR="/c/Program Files (x86)/LibreOffice/program"
+if [ -f ~/.claude/skills/jetredline/.venv/Scripts/python.exe ]; then
+  VENV_PYTHON=~/.claude/skills/jetredline/.venv/Scripts/python.exe   # Windows (Git Bash)
 else
-  # Linux or other — assume soffice is on PATH
-  SOFFICE="soffice"
+  VENV_PYTHON=~/.claude/skills/jetredline/.venv/bin/python            # macOS / Linux
 fi
 ```
 
 If running in **PowerShell** (Windows without Git Bash):
 ```powershell
 $VENV_PYTHON = "$HOME\.claude\skills\jetredline\.venv\Scripts\python.exe"
-if (Test-Path "C:\Program Files\LibreOffice\program\soffice.exe") {
-  $SOFFICE = "C:\Program Files\LibreOffice\program\soffice.exe"
-  $SOFFICE_DIR = "C:\Program Files\LibreOffice\program"
-} elseif (Test-Path "C:\Program Files (x86)\LibreOffice\program\soffice.exe") {
-  $SOFFICE = "C:\Program Files (x86)\LibreOffice\program\soffice.exe"
-  $SOFFICE_DIR = "C:\Program Files (x86)\LibreOffice\program"
-} else {
-  $SOFFICE = "soffice"
-  $SOFFICE_DIR = ""
-}
 ```
 
-Use `$VENV_PYTHON`, `$SOFFICE`, and `$SOFFICE_DIR` in all subsequent commands instead of hardcoded paths.
+Use `$VENV_PYTHON` in all subsequent commands instead of hardcoded paths.
 
 **Environment variable syntax** differs by shell:
 - Bash (macOS/Linux/Git Bash): `VAR=val command`
@@ -64,7 +42,7 @@ Use `$VENV_PYTHON`, `$SOFFICE`, and `$SOFFICE_DIR` in all subsequent commands in
 
 ## Skill and Docx Plugin Path Discovery
 
-**Web mode:** Skip the next five sections (Skill/Docx Paths, Python Environment, Node.js Environment, LibreOffice, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
+**Web mode:** Skip the next four sections (Skill/Docx Paths, Python Environment, Node.js Environment, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
 
 At the start of each CLI session, detect the skill directory and docx plugin layout. The docx plugin has different directory structures in Claude Code vs. Cowork.
 
@@ -104,7 +82,6 @@ Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all sub
 | Venv python | `$VENV_PYTHON` (see Python Environment below) |
 | splitmarks | `$SKILL_DIR/splitmarks.py` |
 | Node modules | `$SKILL_DIR/node_modules/` |
-| soffice (LibreOffice) | `$SOFFICE` (macOS: `/Applications/LibreOffice.app/Contents/MacOS/soffice`, Linux: `soffice`) |
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
 | Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
@@ -183,16 +160,7 @@ TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_SKILL $VENV_PYTHON script.py
 ```
 where `<TMPDIR>` is the literal path captured in Step 0 (e.g., `/path/to/cases/smith/.tmp-apple-walrus-quilt`).
 
-## LibreOffice (soffice)
-
-`soffice` may not be on PATH by default. **Always prepend the LibreOffice path when invoking soffice:**
-
-```bash
-PATH="$SOFFICE_DIR:$PATH" $SOFFICE --headless --convert-to pdf <input.docx>
-```
-where `$SOFFICE_DIR` was set in Platform Detection above.
-
-Note: `apply_edits.py` operates directly on .docx ZIP files and does not use LibreOffice or the docx plugin's pack/unpack scripts. LibreOffice is only needed for document-to-image/PDF conversion.
+Note: `apply_edits.py` operates directly on the .docx ZIP archive — pure Python (`zipfile` + `defusedxml`), no unpack/pack pipeline and no external converter.
 
 ## Workflow
 
@@ -906,7 +874,7 @@ The **Substantive Concerns** section varies by `DOC_TYPE`.
 [Significant style changes by category]
 
 ---
-*Generated by JetRedline v4.0.1 (2026-04-25)*
+*Generated by JetRedline v4.0.2 (2026-04-25)*
 *Claude skills crafted by Claude Opus 4.6 and Jerod Tufte (github.com/jet52)*
 
 –End Analysis–

@@ -61,36 +61,5 @@ if (Get-Command npm -ErrorAction SilentlyContinue) {
     exit 1
 }
 
-# --- Check external dependencies ---
-Write-Host ""
-$Warnings = 0
-
-$SofficePaths = @(
-    "C:\Program Files\LibreOffice\program\soffice.exe",
-    "C:\Program Files (x86)\LibreOffice\program\soffice.exe"
-)
-
-$Found = $false
-foreach ($p in $SofficePaths) {
-    if (Test-Path $p) {
-        $Found = $true
-        Write-Host "LibreOffice found at $p"
-        break
-    }
-}
-
-if (-not $Found) {
-    Write-Host "WARNING: LibreOffice not found" -ForegroundColor Yellow
-    Write-Host "  Required for document conversion. Install from https://www.libreoffice.org/"
-    $Warnings++
-}
-
-if ($Warnings -gt 0) {
-    Write-Host ""
-    Write-Host "$Warnings warning(s). Some features may be limited."
-} else {
-    Write-Host "All external dependencies found."
-}
-
 Write-Host ""
 Write-Host "Done."

@@ -51,24 +51,5 @@ else
     exit 1
 fi
 
-# --- Check external dependencies ---
-echo ""
-WARNINGS=0
-
-if ! mdfind "kMDItemFSName == 'LibreOffice.app'" 2>/dev/null | grep -q LibreOffice; then
-    if [ ! -d "/Applications/LibreOffice.app" ]; then
-        echo "WARNING: LibreOffice not found"
-        echo "  Required for document conversion. Install from https://www.libreoffice.org/"
-        WARNINGS=$((WARNINGS + 1))
-    fi
-fi
-
-if [ "$WARNINGS" -gt 0 ]; then
-    echo ""
-    echo "$WARNINGS warning(s). Some features may be limited."
-else
-    echo "All external dependencies found."
-fi
-
 echo ""
 echo "Done."
