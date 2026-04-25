@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check for skill/plugin updates against the latest GitHub release.
+"""Check for skill updates against the latest GitHub release.
 
 Shared across jet52 projects: jetmemo-skill, jetredline, jetbriefcheck, jetcite.
 Uses a weekly cache to avoid hitting the GitHub API on every invocation.
