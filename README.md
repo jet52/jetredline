@@ -166,7 +166,7 @@ jetredline/
 | Python 3.10+ | PDF/XML processing             | Yes                          |
 | Node.js 18+  | New .docx creation from scratch| Only if not editing existing  |
 | defusedxml   | Safe XML parsing               | Yes (installed by installer) |
-| pikepdf      | PDF manipulation               | Yes (installed by installer) |
+| pypdf        | PDF manipulation               | Yes (installed by installer) |
 | splitmarks   | PDF bookmark splitting         | Bundled script (no install)  |
 | textstat     | Readability metrics            | Yes (installed by installer) |
 | jetcite      | Citation parsing and linking   | Bundled (vendored source)   |

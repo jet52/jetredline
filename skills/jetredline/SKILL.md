@@ -99,8 +99,8 @@ The `~/refs/` directory contains a local repository of legal materials in markdo
 
 This skill has a persistent virtual environment. **Always use this venv python for all Python operations — never create a new venv in the working directory.**
 
-- **Pre-installed packages:** `defusedxml`, `httpx[socks]`, `pikepdf`, `textstat`
-- **Bundled scripts:** `splitmarks.py` (vendored; no install needed — `pikepdf` satisfies its only dependency)
+- **Pre-installed packages:** `defusedxml`, `httpx[socks]`, `pypdf`, `textstat`
+- **Bundled scripts:** `splitmarks.py` (vendored; no install needed — `pypdf` satisfies its only dependency)
 
 Set `$VENV_PYTHON` with a fallback for read-only filesystems (Cowork):
 
@@ -193,20 +193,19 @@ For PDF files **> 10 MB**, use `splitmarks` to split the PDF at its top-level bo
 # Preview what bookmarks exist
 $VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf --dry-run -vv
 
-# Split into individual files in an output directory and check for text layers
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v --check-text
+# Split into individual files in an output directory
+$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v
 ```
 
 **Recursive split:** After the initial split, check the resulting files. If any single file is still **> 10 MB** (typically a record bundle containing many individual record items), split it again into a subdirectory:
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v --check-text
+$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v
 ```
 This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
 
-**Image-scanned PDFs:** The `--check-text` flag runs `pdftotext` on each output file and warns about PDFs that appear to be image-scanned (low or no extractable text). If warnings appear:
-- Report the warnings to the user so they can consider running `ocrmypdf` on the affected files and re-running.
-- Tell subagents which files are image-scanned so they can fall back to reading the PDF directly with the Read tool instead of relying on `pdftotext`.
-- Subagents should proceed with available sources rather than stalling — image-scanned files may still be readable via the Read tool (which handles PDFs as images).
+**Image-scanned PDFs:** splitmarks does not check whether output PDFs have an extractable text layer. If a subagent tries to extract text from a split file and gets little or nothing back, the file is likely image-scanned. In that case:
+- The subagent should fall back to reading the PDF directly with the Read tool (which handles PDFs as images) rather than stalling.
+- Report the issue to the user so they can consider running `ocrmypdf` on the affected files and re-running.
 
 Pass the resulting file paths — and any image-scanned warnings — to the fact-checking and brief-matching subagents.
 
