@@ -31,6 +31,7 @@ class Citation:
     sources: list[Source] = field(default_factory=list)
     position: int = 0  # character offset in source text
     parallel_cites: list[str] = field(default_factory=list)  # normalized forms of parallel citations
+    antecedent_name: str | None = None  # best-effort case name governing the cite (heuristic; may be None)
 
     def to_dict(self) -> dict:
         """Convert to a plain dictionary suitable for JSON serialization."""
@@ -44,6 +45,8 @@ class Citation:
             d["pinpoint"] = self.pinpoint
         if self.parallel_cites:
             d["parallel_cites"] = self.parallel_cites
+        if self.antecedent_name:
+            d["antecedent_name"] = self.antecedent_name
         d["sources"] = [
             {"name": s.name, "url": s.url}
             | ({"verified": s.verified} if s.verified is not None else {})

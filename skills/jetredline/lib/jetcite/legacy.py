@@ -165,6 +165,7 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
         "url": url,
         "search_hint": search_hint(c, ct),
         "pinpoint": c.pinpoint,
+        "antecedent_name": c.antecedent_name,
     }
 
     rel = citation_path(c)

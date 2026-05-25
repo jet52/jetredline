@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from jetcite.casename import extract_antecedent_name
 from jetcite.models import Citation, CitationType
 from jetcite.patterns import get_matchers
 from jetcite.resolver import resolve_nd_opinion_urls
@@ -77,6 +78,33 @@ def _detect_parallel_citations(citations: list[Citation], text: str) -> None:
                 cite_b.sources.append(src)
 
 
+def _detect_antecedent_names(citations: list[Citation], text: str) -> None:
+    """Attach the governing case name to each CASE citation (best-effort).
+
+    For each case citation, look backward from its position (clamped to the end
+    of the previous citation so a name belonging to an earlier cite is not
+    captured) and record the preceding party/caption name. A citation in a
+    parallel group with no name of its own inherits the name from a parallel
+    that has one — handles "Name, <neutral>, <reporter>" where the name precedes
+    only the first cite.
+    """
+    case_cites = [c for c in citations if c.cite_type == CitationType.CASE]
+    prev_end = 0
+    for cite in case_cites:
+        cite.antecedent_name = extract_antecedent_name(text, cite.position, start=prev_end)
+        prev_end = cite.position + len(cite.raw_text)
+
+    by_norm = {c.normalized: c for c in case_cites}
+    for cite in case_cites:
+        if cite.antecedent_name or not cite.parallel_cites:
+            continue
+        for pc in cite.parallel_cites:
+            other = by_norm.get(pc)
+            if other and other.antecedent_name:
+                cite.antecedent_name = other.antecedent_name
+                break
+
+
 def _looks_like_pinpoint_or_empty(s: str) -> bool:
     """Check if a string looks like a pinpoint reference or is trivially empty."""
     import re
@@ -128,6 +156,9 @@ def scan_text(
 
     # Detect parallel citations
     _detect_parallel_citations(all_citations, text)
+
+    # Attach the governing case name to each case citation (best-effort)
+    _detect_antecedent_names(all_citations, text)
 
     # Resolve ND opinion URLs to direct PDF links
     if resolve:
