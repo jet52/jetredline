@@ -947,6 +947,7 @@ _JS = """\
       '<div class="dot' + (cs.status ? ' ' + cs.status : '') + '"></div>' +
       '<span class="lbl">' + escWithItalics(d.cite_text) + '</span>' +
       '<span class="typ">' + esc(d.cite_type) + '</span>';
+    if (d.antecedent_name) item.title = 'Case name in draft: ' + d.antecedent_name;
     item.addEventListener('click', () => navigate(i));
     listEl.appendChild(item);
   });
@@ -1350,6 +1351,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
             "normalized": c.get("normalized", c["cite_text"]),
+            "antecedent_name": c.get("antecedent_name"),
             "url": url or None,
             "iframe_ok": host in _IFRAME_OK_DOMAINS,
             "para_num": para["num"] if para else None,

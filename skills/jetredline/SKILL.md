@@ -252,7 +252,8 @@ If the user did specify a preference, honor it:
 6b. **Delegate Pass 7** (dissent/concurrence cross-check) to a subagent if a dissent or concurrence was identified in Step 0 and `DOC_TYPE == opinion` — see Pass 7 below
 7. **Pass 2 routing:** If the opinion has **more than 30 paragraphs**, delegate Pass 2 to a subagent — see "Delegated Pass 2" below. Otherwise, perform Pass 2 in main context. **Pass 5** (analytical rigor) is always performed in main context. Pass 2 (when not delegated) and Pass 5 can proceed in parallel with subagents.
 8. Collect subagent results from Passes 1, 3, 4, 6, 7, and (if delegated) Pass 2 — **use the `TaskOutput` tool**, not Bash `tail`
-8a. **Caption mismatches → edits.** Check the Pass 3B results table for any Caption Check mismatches. For each mismatch, generate a tracked-change edit correcting the case name in the draft to match the official caption, with a comment citing the source (e.g., "Official caption per 2023 ND 219: 'Tracey v. Tracey'"). Include these in the edits JSON alongside Pass 2/3A/5 edits.
+8a. **Caption mismatches → edits (closed-loop rule).** Check the Pass 3B results table for Caption Check mismatches. Generate a correcting tracked-change edit **only** when the *same* citation resolved to an official caption and the draft's name is a near-match typo of it (high `name_similarity`) — e.g., a comment "Official caption per 2023 ND 219: 'Tracey v. Tracey'". **Never** harmonize names across two *different* citations (different cite = presumptively different case), and do not auto-correct low-similarity or unresolved names — add a comment for human review instead. Include qualifying edits in the edits JSON alongside Pass 2/3A/5 edits. Likewise apply the **parallel-cite corrections** flagged in Step 1.5 — add a missing N.W.2d/N.W.3d parallel to a *full* cite, or fix a wrong one, using the `formatted` value from ndcourts-mcp.
+8b. **Treatment flags → comments.** If the Pass 3C overruling scan flagged any cited case for possible negative treatment, add a *comment* (not an edit) on each occurrence, quoting the citing context, for human review. Never auto-edit on a treatment signal.
 9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
 10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
 11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification:
@@ -314,6 +315,12 @@ The script operates directly on the .docx ZIP archive — no unpack/pack pipelin
 
 **9c. Check the output.** Parse the JSON summary from apply_edits.py. If any edits failed, report them.
 
+**9d. Citation hyperlinks (optional).** When the user asks for clickable / linked citations, add `hyperlink` edits to the same `edits.json` — one per citation, anchored to the citation text, using the verified URL (prefer ndcourts-mcp `absolute_url`, else the CourtListener URL, else the `url` from `cite_check.py`):
+```json
+{ "type": "hyperlink", "para": 12, "anchor": "2024 ND 45", "url": "https://www.ndcourts.gov/..." }
+```
+Hyperlinks are a **non-tracked formatting overlay** — they wrap existing text (no tracked change) and are skipped automatically if the anchor is already inside a link or a tracked change. Only link citations that **passed** verification; never link an unverified or flagged cite. Requires .docx output (not available in web/analysis-only mode).
+
 The agent's job is: collect edits into JSON (1 Write call), run one command (1 Bash call).
 
 **Web mode workflow:**
@@ -331,6 +338,26 @@ The agent's job is: collect edits into JSON (1 Write call), run one command (1 B
 12. Produce the analysis document as markdown in the conversation.
 
 **Context limits:** Without subagents, very long documents (50+ paragraphs) may approach context limits. If this occurs, prioritize: Pass 2 → Pass 5 → Pass 3A → Pass 1 → Pass 3B → Pass 4 → Pass 6 → Pass 7. Inform the user which passes were completed.
+
+## Legal-Research MCP Servers (ndcourts-mcp, CourtListener)
+
+Two optional MCP servers improve citation verification when connected. **They are augmentation, not replacement** — every check below degrades gracefully to the existing pipeline (`cite_check.py` + `~/refs/` + `WebFetch` + web search). Never fail or stall a task because an MCP server is absent or returns no data.
+
+**Availability:** Before relying on a server, check whether its tools are present in your tool set (e.g. an `ndcourts-mcp` tool such as `verify_citation`, or a CourtListener tool such as `verify_citations`). If a tool is not available, skip silently to the next tier.
+
+**Source precedence — apply at every case-citation check; fall through on a miss:**
+1. **ndcourts-mcp** (primary, North Dakota cases) — local ND opinion corpus. Deterministic, no network.
+2. **CourtListener MCP** (secondary) — case data ndcourts-mcp lacks: federal and out-of-state authorities, and ND opinions missing from the ND corpus.
+3. **Existing pipeline** (fallback) — `cite_check.py` / `~/refs/` / `WebFetch` / web search. Always available in CLI mode; the only path when no MCP server is connected.
+
+**Out of scope for both servers:** authoritative text of statutes, court rules, the constitution, and NDAC — these always resolve through the existing pipeline.
+
+**ndcourts-mcp tools and the fields used below:**
+- `verify_citation(query, expected_case_name=...)` → `found`, `canonical_case_name`, `formatted` (full Redbook cite), `cites_redbook`, `absolute_url`; when `expected_case_name` is supplied, also `name_matches` (bool) and `name_similarity` (0–1). Catches wrong volume/page/year and name drift.
+- `verify_quotation(citation, quote)` → `verbatim` (bool), `paragraph` (pinpoint ¶, generally 1997+), `differences` (word-level diff), `closest_text`. Typography-tolerant (curly/straight quotes, dashes, whitespace).
+- `detect_overruled_in_draft(draft_text)` → `flagged` (cited cases with possible negative/distinguished treatment, each with `treatment_entries` + citing context), `clear`, `unresolved`. **Advisory only.**
+
+**Cardinal caution:** ndcourts-mcp is a research aid, not an authoritative text; treatment signals and the `antecedent_name` heuristic are best-effort. Use them to *flag for human review*, never to auto-edit on the signal alone.
 
 ## Editing Instructions
 
@@ -429,7 +456,7 @@ When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (suba
 
 ### Pass 3: Citation Check (Delegated to Subagent)
 
-Pass 3 has two parts: (A) Bluebook format checking, done in the main context, and (B) substantive citation verification against local ND opinion files, delegated to a subagent.
+Pass 3 has three parts: (A) Bluebook format checking, in main context; (B) substantive citation verification, delegated to a subagent; and (C) a negative-treatment / overruling scan, in main context. Parts B and C use the ndcourts-mcp / CourtListener servers as the primary source when available — see "Legal-Research MCP Servers" above — and fall back to local files plus web verification otherwise.
 
 #### Part A: Format Check (Main Context)
 
@@ -468,8 +495,22 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 > - `local_path` / `local_exists`: path in `~/refs/` and whether it exists
 > - `url`: official source URL (always populated)
 > - `search_hint`: text to search for within the local file
+> - `antecedent_name`: the case name jetcite saw immediately before the cite (heuristic; may be null, and may include stray leading words) — seeds the case-name drift check in Step 1.5
 >
-> **Step 2: Verify each citation.** For each entry from the lookup plan:
+> **Step 1.5: Case citations — verify via ndcourts-mcp first (if the tools are available).** For each **case** citation only (statutes, rules, constitution, and admin code use Step 2):
+>
+> - **Existence + caption + name drift:** Call `verify_citation(<cite>, expected_case_name=<case name as written in the draft>)`. Use the draft's case name; if you don't have a clean one, derive it from the `antecedent_name` field — it is a heuristic, so strip leading signal words ("See", "In", "accord", etc.) and any prior-sentence fragment down to the `X v. Y` (or `In re X`) core. Record `canonical_case_name`, `formatted` (official caption + full Redbook cite), `name_matches`, and `name_similarity`.
+> - **Quote check:** If the draft quotes the case, call `verify_quotation(<cite>, <exact quoted text>)`; record `verbatim`, `paragraph` (the pinpoint ¶), and any `differences`.
+> - **Parallel cite (NDSC — required in full cites):** From the `cites_redbook` / `formatted` returned above (or `get_parallel_citations(<cite>)`), check the N.W.2d/N.W.3d parallel. In a **full** (first-reference) ND cite, a *missing* parallel is a defect — flag it to be added (no pin cite to the reporter); a parallel with the *wrong* volume/page should be corrected to match `formatted`. Do **not** add a parallel to short-form or *id.* cites.
+> - **Pinpoint ¶:** If the cite carries a pinpoint (¶ N) but the draft does not quote the case, call `get_pinpoint(<cite>, paragraph=N)`; confirm the ¶ exists and read its `text` for the substantive-support check. Flag a pinpoint to a ¶ that does not exist.
+> - **Not found in ndcourts-mcp** (federal, out-of-state, or absent from the ND corpus): if CourtListener `verify_citations` is available, try it next; otherwise fall through to Step 2.
+>
+> **Closed-loop case-name rule (prevents the Tracey/Tracy error):**
+> - Propose a spelling correction **only** when the *same* citation resolves and `name_matches` is false with **high `name_similarity`** (≥ 0.85) — that is the same case with a typo. Report the mismatch with `canonical_case_name` so main context can generate the correction.
+> - **Never** harmonize two citations that differ in *both* spelling **and** cite number (e.g., `Tracey v. Tracey, 2023 ND 219` vs. `Tracy v. Tracy, 2024 ND 195`) — different cites are presumptively different cases. Add a note, not a correction.
+> - Low `name_similarity` on a single cite signals a probable wrong cite or wrong name — flag for human review; do not auto-correct.
+>
+> **Step 2: Verify each citation** (all non-case citations, and any case citation Step 1.5 could not resolve). For each such entry from the lookup plan:
 >
 > 1. **Retrieve source text.**
 >    - If `local_exists` is `true`: use the Read tool on `local_path`. For NDCC sections, search for the `search_hint` within the chapter file. For ND opinions, locate the pinpoint paragraph (`[¶N]`).
@@ -484,7 +525,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > 3. **Existence check.** Does the cited provision/opinion actually exist? For statutes and rules, confirm the section number is valid.
 >
-> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/ND/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. For non-case citations (statutes, rules, etc.), mark as N/A.
+> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/ND/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. **Apply the same closed-loop rule as Step 1.5:** correct only same-cite typos; never harmonize two different citations. For non-case citations (statutes, rules, etc.), mark as N/A.
 >
 > 5. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
 >    - Does the source actually state or hold the legal principle attributed to it?
@@ -517,13 +558,27 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 > - Regulations: `~/refs/reg/NDAC/`, `~/refs/reg/CFR/`
 > - Court Rules: `~/refs/rule/{set}/` — e.g., `rule/ndrcivp/rule-56.md`
 
-**Web mode:** Skip local resolution — no `~/refs/` directory is available.
-1. Run `cite_check.py` with `--refs-dir /dev/null` (or skip the script entirely and use the URL patterns below).
-2. For each ND citation, use WebFetch on the URL from the lookup plan.
+**Web mode:** No shell, Python, or `~/refs/` — but the MCP servers, if connected, are the primary way to verify case citations here.
+1. **If ndcourts-mcp / CourtListener tools are available, use them first**, exactly as in Step 1.5 (verify_citation for caption/existence/name drift, verify_quotation for quotes); run Part C's `detect_overruled_in_draft` too. This closes the gap where case citations otherwise can't be verified without a filesystem.
+2. For ND citations the MCP servers don't cover, use WebFetch on the official URL (build it from the citation, or run `cite_check.py` if any shell is available).
 3. For ND case citations, use web search to locate the opinion on ndcourts.gov or Google Scholar.
 4. Verify quotes and substantive support as described above.
 5. If a source cannot be retrieved, mark as "Not verified — source unavailable."
 6. Note in the Citation Verification section: "Citations verified via URL lookup against official sources. Local reference files unavailable."
+
+#### Part C: Negative-Treatment / Overruling Scan (Main Context)
+
+A proofreading pass that flags cited cases later opinions may have overruled, superseded, abrogated, or distinguished. jetredline has no other "still good law?" check, so this is purely additive.
+
+**If the `detect_overruled_in_draft` tool is available** (ndcourts-mcp), call it once on the full draft text:
+- Pass the draft opinion/memo text as `draft_text`.
+- From the result, take `flagged` (each entry has the cited case, a treatment signal, and `treatment_entries` with the citing opinion and sentence-local context). `clear` and `unresolved` are informational.
+- For each flagged case, queue a **comment** (handled in Step 8b) on each occurrence in the draft, quoting the citing context and the citing opinion. **Never** convert a treatment signal into a tracked-change edit.
+- In the analysis document, add a short "Negative-treatment check" subsection: list flagged cases with their signal and citing opinion, and note that `unresolved` cites (federal, out-of-state, or not in the ND corpus) were **not** checked.
+
+**Caution:** Signals are sentence-local heuristics, not a verdict — a citing sentence may use a treatment word about a *different* case. Always present them as "possible negative treatment — verify," and read the cited opinion before relying on it. An absent flag is not assurance a case is good law.
+
+**If the tool is unavailable:** skip this part and note in the analysis document: "Automated negative-treatment check not run (ndcourts-mcp unavailable); citations were not screened for subsequent history." Do not attempt to substitute web search for a citator here.
 
 ### Pass 4: Fact Check (Delegated to Subagent)
 
@@ -669,6 +724,10 @@ For opinions: Does the court *apply* the standard it *stated*?
 For memos: Does the memo correctly identify the standard *and* apply it consistently in the recommendation?
 
 In multi-issue documents where each issue has a different standard, verify each standard is applied to the correct issue.
+
+#### Statutory-Construction Cross-Check (when ndcourts-mcp is available)
+
+When the draft construes an N.D.C.C. section or a court rule as a point of decision, call `find_opinions_construing(<authority>)` and scan the returned `results[].opinions` for ND opinions construing the same provision. Use it as an advisory aid: if a recent or obviously on-point construction is missing from the draft's analysis, note it for the author's consideration (do not assert it is controlling). Skip silently if the tool is unavailable. For a key *cited* precedent whose holding the draft leans on, `case_summary(<cite>)` (disposition + `syllabus_points`) can confirm what the case actually held — this aids the substantive-support assessment; it does **not** feed the draft's own Case Highlight, since the draft is not in the corpus.
 
 #### Readability Metrics (all doc types)
 

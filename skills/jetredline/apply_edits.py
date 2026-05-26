@@ -28,6 +28,12 @@ Edits JSON format:
             "para": 5,
             "anchor": "text to attach comment to",
             "comment": "the comment text"
+        },
+        {
+            "type": "hyperlink",
+            "para": 5,
+            "anchor": "454 N.W.2d 732",
+            "url": "https://www.ndcourts.gov/..."
         }
     ]
 
@@ -42,6 +48,15 @@ For "comment" edits:
     - "para" is the paragraph number.
     - "anchor" is the text the comment attaches to.
     - "comment" is the comment text.
+
+For "hyperlink" edits:
+    - "para" is the paragraph number (optional).
+    - "anchor" is the existing text to turn into a clickable link.
+    - "url" is the link target (external).
+    - This is NOT a tracked change — it wraps existing text in a hyperlink
+      (formatting overlay).  Only plain runs that are direct children of the
+      paragraph are linked; text already inside a hyperlink or a tracked
+      change is skipped.
 
 Exit codes:
     0  — success
@@ -915,6 +930,151 @@ def apply_comment(dom, edit, edit_index, next_id, comment_writer):
 
 
 # ---------------------------------------------------------------------------
+# Hyperlinks
+# ---------------------------------------------------------------------------
+
+HYPERLINK_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/"
+    "relationships/hyperlink"
+)
+
+
+def make_rel_id_generator(rels_dom):
+    """Return a callable yielding fresh rId strings unused in rels_dom."""
+    max_n = 0
+    for rel in rels_dom.getElementsByTagName("Relationship"):
+        rid = rel.getAttribute("Id")
+        if rid.startswith("rId"):
+            try:
+                max_n = max(max_n, int(rid[3:]))
+            except ValueError:
+                pass
+    state = {"n": max_n}
+
+    def next_rid():
+        state["n"] += 1
+        return f"rId{state['n']}"
+
+    return next_rid
+
+
+def add_hyperlink_relationship(rels_dom, rel_id, url):
+    """Append an external hyperlink Relationship to the rels DOM."""
+    root = rels_dom.documentElement
+    elem = rels_dom.createElementNS(root.namespaceURI, "Relationship")
+    elem.setAttribute("Id", rel_id)
+    elem.setAttribute("Type", HYPERLINK_REL_TYPE)
+    elem.setAttribute("Target", url)        # minidom escapes on serialize
+    elem.setAttribute("TargetMode", "External")
+    root.appendChild(elem)
+
+
+def _rpr_with_hyperlink_style(run):
+    """rPr string for a linked run: existing formatting plus the Hyperlink
+    character style (rStyle must come first in CT_RPr)."""
+    inner = ""
+    rPr_nodes = run.getElementsByTagName("w:rPr")
+    if rPr_nodes:
+        inner = "".join(
+            child.toxml()
+            for child in rPr_nodes[0].childNodes
+            if child.nodeType == child.ELEMENT_NODE
+            and child.tagName != "w:rStyle"
+        )
+    return f'<w:rPr><w:rStyle w:val="Hyperlink"/>{inner}</w:rPr>'
+
+
+def apply_hyperlink(dom, edit, edit_index, rel_id_gen, rels_dom):
+    """Wrap anchor text in a clickable external hyperlink (not tracked).
+
+    Only plain runs that are direct children of the paragraph are linked;
+    text already inside a hyperlink or a tracked change is left untouched.
+    """
+    url = edit.get("url")
+    anchor = edit.get("anchor") or edit.get("display")
+    para_num = edit.get("para")
+
+    if not url or not anchor:
+        return {"edit_index": edit_index, "status": "error",
+                "message": "hyperlink edit requires 'url' and 'anchor'"}
+
+    para = find_paragraph_containing(dom, anchor, para_num)
+    if para is None and para_num:
+        para = find_paragraph_by_number(dom, para_num)
+    if para is None:
+        return {"edit_index": edit_index, "status": "error",
+                "message": f"Could not find paragraph for anchor: {anchor[:80]}..."}
+
+    # Direct-child runs only — avoid nesting in existing hyperlinks/tracked changes.
+    text_map = []
+    offset = 0
+    for child in para.childNodes:
+        if child.nodeType == child.ELEMENT_NODE and child.tagName == "w:r":
+            rt = get_run_text(child)
+            if rt:
+                text_map.append((child, rt, offset, offset + len(rt)))
+                offset += len(rt)
+
+    full_text = "".join(item[1] for item in text_map)
+    match_start = full_text.find(anchor)
+    if match_start != -1:
+        match_end = match_start + len(anchor)
+    else:
+        norm_full = _normalize_for_search(full_text)
+        norm_anchor = _normalize_for_search(anchor)
+        match_start = norm_full.find(norm_anchor)
+        if match_start == -1:
+            return {"edit_index": edit_index, "status": "skipped",
+                    "message": (f"Anchor not found in plain runs (may already be "
+                                f"linked or inside a tracked change): {anchor[:80]}...")}
+        match_end = match_start + len(norm_anchor)
+
+    affected = []
+    for run, rt, r_start, r_end in text_map:
+        if r_end <= match_start or r_start >= match_end:
+            continue
+        affected.append((run, rt, max(0, match_start - r_start),
+                         min(len(rt), match_end - r_start)))
+
+    if not affected:
+        return {"edit_index": edit_index, "status": "skipped",
+                "message": f"No plain runs overlap anchor: {anchor[:80]}..."}
+
+    rel_id = rel_id_gen()
+    add_hyperlink_relationship(rels_dom, rel_id, url)
+
+    for run, rt, portion_start, portion_end in affected:
+        before_text = rt[:portion_start]
+        matched_text = rt[portion_start:portion_end]
+        after_text = rt[portion_end:]
+        rPr_nodes = run.getElementsByTagName("w:rPr")
+        rPr_xml = rPr_nodes[0].toxml() if rPr_nodes else ""
+
+        if before_text:
+            sp = ' xml:space="preserve"' if before_text != before_text.strip() else ""
+            dom_insert_before(
+                dom, run,
+                f'<w:r>{rPr_xml}<w:t{sp}>{_escape_xml(before_text)}</w:t></w:r>')
+
+        sp_m = ' xml:space="preserve"' if matched_text != matched_text.strip() else ""
+        dom_insert_before(
+            dom, run,
+            f'<w:hyperlink r:id="{rel_id}">'
+            f'<w:r>{_rpr_with_hyperlink_style(run)}'
+            f'<w:t{sp_m}>{_escape_xml(matched_text)}</w:t></w:r></w:hyperlink>')
+
+        if after_text:
+            sp = ' xml:space="preserve"' if after_text != after_text.strip() else ""
+            dom_insert_before(
+                dom, run,
+                f'<w:r>{rPr_xml}<w:t{sp}>{_escape_xml(after_text)}</w:t></w:r>')
+
+        run.parentNode.removeChild(run)
+
+    return {"edit_index": edit_index, "status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -995,6 +1155,7 @@ def main():
     ct_dom = defusedxml.minidom.parseString(zip_entries[ct_key])
 
     next_id = make_id_generator(doc_dom)
+    rel_id_gen = make_rel_id_generator(rels_dom)
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # ------------------------------------------------------------------
@@ -1012,6 +1173,7 @@ def main():
     # ------------------------------------------------------------------
     results = []
     errors = []
+    hyperlinks_added = False
 
     for i, edit in enumerate(edits):
         edit_type = edit.get("type", "replace")
@@ -1023,6 +1185,10 @@ def main():
             )
         elif edit_type == "comment":
             result = apply_comment(doc_dom, edit, i, next_id, comment_writer)
+        elif edit_type == "hyperlink":
+            result = apply_hyperlink(doc_dom, edit, i, rel_id_gen, rels_dom)
+            if result["status"] == "ok":
+                hyperlinks_added = True
         else:
             result = {
                 "edit_index": i,
@@ -1049,16 +1215,19 @@ def main():
             modified["word/people.xml"] = people_bytes
         # else: handled as 'added' below
 
-    # Comment entries (rels + ct are modified in place by CommentWriter)
+    # Comment entries (ct + comment parts are modified in place by CommentWriter)
     added = {}
     if comment_writer._dirty:
-        modified[rels_key] = serialize_dom_utf8(rels_dom)
         modified[ct_key] = serialize_dom_utf8(ct_dom)
         for name, data in comment_writer.get_entries().items():
             if name in zip_entries:
                 modified[name] = data
             else:
                 added[name] = data
+
+    # rels is modified in place by comments and/or hyperlinks
+    if comment_writer._dirty or hyperlinks_added:
+        modified[rels_key] = serialize_dom_utf8(rels_dom)
 
     # People.xml as new entry if it didn't exist
     if people_modified and "word/people.xml" not in zip_entries:
