@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.1.1
+version: 4.1.2
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -537,13 +537,21 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 >
 > 7. **Build the results table.** The Source Link column **must** use the full `url` value from the cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
 >
-> | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Source Link | Notes |
-> |---|----------|------|---------------|-------------|-----------|-------------|-------|
-> | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Matches / Mismatch: official is [X] / N/A | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
+> The **Via** column records the tier that actually produced the verification — `ndcourts-mcp`, `CourtListener`, `local` (a `~/refs/` file), `web` (WebFetch or web search), or `not found` — following the source precedence you applied in Steps 1.5 and 2. This is the *method*, not the Source Link (which is the canonical URL regardless of how the cite was checked). It is the provenance for any edit generated from this row, so record the tier that supplied the value you relied on.
+>
+> | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes |
+> |---|----------|------|---------------|-------------|-----------|-----|-------------|-------|
+> | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Matches / Mismatch: official is [X] / N/A | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | ndcourts-mcp / CourtListener / local / web / not found | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
 >
 > For locally-verified citations, still include the official URL from the lookup plan so readers can independently check the source. The URL was already computed — do not substitute or shorten it.
 >
 > 8. **Return** the completed table and a summary: [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] citations that may not support the stated proposition.
+>
+>    Then add a **lookup-methods tally for case citations** (roll up the Via column over opinions only — statutes, rules, constitution, and admin code resolve via local/web by design and are out of scope):
+>
+>    `Lookup methods (cases) — ndcourts-mcp: N | CourtListener: N | local: N | web: N | not found: N`
+>
+>    Followed by an **ND web-fallback note**: if every ND *case* was resolved via ndcourts-mcp or a local file, write "All ND cases via MCP/local." If any ND case fell through to the web, list those cites and the reason (e.g., "ndcourts-mcp not connected" or "MCP returned no match"). This makes any web fallback for ND opinions — and the confidence basis of edits drawn from it — explicit rather than silent. Carry this tally and note into the analysis document alongside the results table.
 >
 > **Error handling:**
 > - If `cite_check.py` fails or returns an error, report the error in the summary and proceed with manual verification using the URL patterns and local paths below.
