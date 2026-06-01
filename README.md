@@ -172,6 +172,10 @@ jetredline/
 | jetcite      | Citation parsing and linking   | Bundled (vendored source)   |
 | docx (npm)   | New .docx creation from scratch| Only if not editing existing  |
 
+### Network access in sandboxed environments
+
+jetcite resolves and verifies citations against official-source domains (ndcourts.gov, courtlistener.com, etc.). Sandboxed Claude environments (Cowork, Claude Code) block outbound traffic to non-allowlisted hosts, which silently degrades ND opinion links to a search URL rather than the direct PDF. Add the domains listed in [`skills/jetredline/lib/jetcite/NETWORK.md`](skills/jetredline/lib/jetcite/NETWORK.md) to the egress allowlist (Cowork: sandbox settings → **Allow network egress** → **Additional allowed domains**; Claude Code: `sandbox.network.allowedDomains`), then start a new session.
+
 ## Contributing
 
 On a fresh clone, activate the local pre-push sensitive-content check:

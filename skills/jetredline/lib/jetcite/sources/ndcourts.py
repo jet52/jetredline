@@ -4,12 +4,7 @@ from __future__ import annotations
 
 import re
 
-from jetcite._http import USER_AGENT as _USER_AGENT
-
-try:
-    import httpx
-except ImportError:  # pragma: no cover - exercised in sandboxes without httpx
-    httpx = None
+from jetcite._http import http_get
 
 
 def nd_opinion_url(year: str, number: str) -> str:
@@ -37,14 +32,8 @@ def resolve_nd_opinion_url(year: str, number: str) -> str | None:
     or None if the search returned no results or the request failed.
     """
     search_url = nd_opinion_url(year, number)
-    if httpx is None:
-        return None
-    try:
-        resp = httpx.get(search_url, follow_redirects=True, timeout=10.0,
-                         headers={"User-Agent": _USER_AGENT})
-        if resp.status_code >= 400:
-            return None
-    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
+    resp = http_get(search_url, timeout=10.0)
+    if resp is None or resp.status_code >= 400:
         return None
 
     m = _OPINION_ID_RE.search(resp.text)
@@ -66,17 +55,11 @@ def fetch_ndcourts(
     Returns (markdown_content, metadata_dict, original_pdf_bytes)
     or (None, {}, None) on failure.
     """
-    if httpx is None:
-        return None, {}, None
-    try:
-        resp = httpx.get(source_url, follow_redirects=True, timeout=timeout,
-                         headers={"User-Agent": _USER_AGENT})
-        if resp.status_code >= 400:
-            return None, {}, None
-    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
+    resp = http_get(source_url, timeout=timeout)
+    if resp is None or resp.status_code >= 400:
         return None, {}, None
 
-    content_type = resp.headers.get("content-type", "").split(";")[0].strip()
+    content_type = resp.content_type
     pdf_bytes = resp.content
 
     # If we got HTML (search page), try to extract the opinion ID and follow
@@ -85,12 +68,8 @@ def fetch_ndcourts(
         if not m:
             return None, {}, None
         direct_url = f"https://www.ndcourts.gov/supreme-court/opinions/{m.group(1)}"
-        try:
-            resp = httpx.get(direct_url, follow_redirects=True, timeout=timeout,
-                             headers={"User-Agent": _USER_AGENT})
-            if resp.status_code >= 400:
-                return None, {}, None
-        except (httpx.HTTPError, httpx.TimeoutException, ImportError):
+        resp = http_get(direct_url, timeout=timeout)
+        if resp is None or resp.status_code >= 400:
             return None, {}, None
         pdf_bytes = resp.content
 
