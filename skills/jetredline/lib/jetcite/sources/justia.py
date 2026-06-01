@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 
-import httpx
+from jetcite._http import USER_AGENT as _USER_AGENT
 
-_USER_AGENT = "jetcite/1.5 (legal-research-tool; https://github.com/jet52/jetcite)"
+try:
+    import httpx
+except ImportError:  # pragma: no cover - exercised in sandboxes without httpx
+    httpx = None
 
 
 def us_reports_url(volume: str, page: str) -> str:
@@ -24,12 +27,14 @@ def fetch_justia(
     Extracts opinion text from the case page.
     Returns (markdown_content, metadata_dict, raw_html) or (None, {}, None) on failure.
     """
+    if httpx is None:
+        return None, {}, None
     try:
         resp = httpx.get(source_url, follow_redirects=True, timeout=timeout,
                          headers={"User-Agent": _USER_AGENT})
         if resp.status_code >= 400:
             return None, {}, None
-    except (httpx.HTTPError, httpx.TimeoutException):
+    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
         return None, {}, None
 
     from bs4 import BeautifulSoup

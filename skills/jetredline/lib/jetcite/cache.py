@@ -13,12 +13,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
-
+from jetcite._http import USER_AGENT
 from jetcite.models import Citation, CitationType, Source
-
-USER_AGENT = "jetcite/1.5 (legal-research-tool; https://github.com/jet52/jetcite)"
 from jetcite.patterns.base import roman_to_int
+
+try:
+    import httpx
+except ImportError:  # pragma: no cover - exercised in sandboxes without httpx
+    httpx = None
 
 # Staleness thresholds in days — informational only, not auto-refetch
 STALENESS_DAYS = {
@@ -388,11 +390,13 @@ def _fetch_generic(
     Returns (markdown, metadata, original_bytes, original_content_type, http_headers)
     or (None, {}, None, None, None) on failure.
     """
+    if httpx is None:
+        return None, {}, None, None, None
     try:
         resp = httpx.get(source_url, follow_redirects=True, timeout=timeout,
                          headers={"User-Agent": USER_AGENT})
         resp.raise_for_status()
-    except (httpx.HTTPError, httpx.TimeoutException):
+    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
         return None, {}, None, None, None
 
     original_bytes = resp.content
@@ -430,6 +434,8 @@ def _try_conditional_fetch(
     if len(headers) == 1:
         return None
 
+    if httpx is None:
+        return None
     try:
         resp = httpx.get(source_url, follow_redirects=True, timeout=timeout,
                          headers=headers)
@@ -437,7 +443,7 @@ def _try_conditional_fetch(
             return None  # not modified
         resp.raise_for_status()
         return resp
-    except (httpx.HTTPError, httpx.TimeoutException):
+    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
         return None
 
 

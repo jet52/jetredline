@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import asyncio
 
-import httpx
-
 from jetcite.models import Citation, CitationType, Source
 
+try:
+    import httpx
+except ImportError:  # pragma: no cover - exercised in sandboxes without httpx
+    httpx = None
 
-async def _verify_url(client: httpx.AsyncClient, source: Source) -> None:
+
+async def _verify_url(client, source: Source) -> None:
     """Verify a single URL with an HTTP HEAD request."""
     try:
         resp = await client.head(source.url, follow_redirects=True, timeout=10.0)
         source.verified = resp.status_code < 400
-    except (httpx.HTTPError, httpx.TimeoutException):
+    except Exception:
         source.verified = False
 
 
@@ -35,6 +38,12 @@ async def verify_citations(
         rate_limit: Minimum seconds between requests.
     """
     verified_urls: dict[str, bool] = {}
+
+    if httpx is None:
+        for cite in citations:
+            for source in cite.sources:
+                source.verified = False
+        return
 
     async with httpx.AsyncClient() as client:
         for cite in citations:

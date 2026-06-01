@@ -6,7 +6,7 @@ from jetcite.models import Citation, CitationType, Source
 from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
 from jetcite.sources.courtlistener import courtlistener_neutral_url
-from jetcite.sources.ndcourts import nd_opinion_url, resolve_nd_opinion_url
+from jetcite.sources.ndcourts import nd_opinion_url
 
 # ND neutral: 2024 ND 156
 _ND_NEUTRAL = re.compile(
@@ -51,16 +51,13 @@ class NeutralCitationMatcher(BaseMatcher):
     def find_all(self, text: str) -> list[Citation]:
         results = []
 
-        # ND gets special treatment: resolve direct ndcourts.gov opinion URL
+        # ND opinions: start with the ndcourts.gov search URL. The direct
+        # opinion PDF URL is resolved later (network) by scanner.scan_text when
+        # resolve=True, so matching stays pure and offline-safe.
         for m in _ND_NEUTRAL.finditer(text):
             year, number = m.group(1), m.group(2)
             pinpoint = m.group(3)
-            sources = []
-            direct_url = resolve_nd_opinion_url(year, number)
-            if direct_url:
-                sources.append(Source("ndcourts", direct_url))
-            else:
-                sources.append(Source("ndcourts", nd_opinion_url(year, number)))
+            sources = [Source("ndcourts", nd_opinion_url(year, number))]
             sources.append(Source("courtlistener",
                                   courtlistener_neutral_url("ND", year, number)))
             results.append(Citation(

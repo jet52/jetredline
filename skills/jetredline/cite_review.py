@@ -280,6 +280,8 @@ _ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 # ndcourts.gov removed — cached markdown is always a better experience
 _IFRAME_OK_DOMAINS = frozenset({
     "ndlegis.gov",
+    "www.ndcourts.gov",
+    "ndcourts.gov",
 })
 
 # PDF.js CDN version

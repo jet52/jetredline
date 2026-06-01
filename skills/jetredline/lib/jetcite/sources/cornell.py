@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-import httpx
 from bs4 import BeautifulSoup
 
-_USER_AGENT = "jetcite/1.5 (legal-research-tool; https://github.com/jet52/jetcite)"
+from jetcite._http import USER_AGENT as _USER_AGENT
+
+try:
+    import httpx
+except ImportError:  # pragma: no cover - exercised in sandboxes without httpx
+    httpx = None
 
 # Rule set abbreviation -> LII URL path segment
 _RULE_PATHS = {
@@ -73,12 +77,14 @@ def fetch_cornell(
 
     Returns (markdown_content, metadata_dict, raw_html) or (None, {}, None).
     """
+    if httpx is None:
+        return None, {}, None
     try:
         resp = httpx.get(source_url, follow_redirects=True, timeout=timeout,
                          headers={"User-Agent": _USER_AGENT})
         if resp.status_code >= 400:
             return None, {}, None
-    except (httpx.HTTPError, httpx.TimeoutException):
+    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
         return None, {}, None
 
     raw_html = resp.text

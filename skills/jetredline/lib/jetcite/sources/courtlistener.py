@@ -23,9 +23,13 @@ import os
 import re
 from urllib.parse import quote
 
-import httpx
+from jetcite._http import USER_AGENT as _USER_AGENT
 
-_USER_AGENT = "jetcite/1.5 (legal-research-tool; https://github.com/jet52/jetcite)"
+try:
+    import httpx
+except ImportError:  # pragma: no cover - exercised in sandboxes without httpx
+    httpx = None
+
 _CL_BASE = "https://www.courtlistener.com"
 _LOOKUP_URL = f"{_CL_BASE}/api/rest/v4/citation-lookup/"
 _SEARCH_URL = f"{_CL_BASE}/api/rest/v4/search/"
@@ -255,6 +259,9 @@ def _fetch_via_citation_lookup(
     """
     headers = {"Authorization": f"Token {token}", "User-Agent": _USER_AGENT}
 
+    if httpx is None:
+        return None, {}, None
+
     # Step 1: Citation lookup
     try:
         resp = httpx.post(
@@ -266,7 +273,7 @@ def _fetch_via_citation_lookup(
         if resp.status_code >= 400:
             return None, {}, None
         results = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError):
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError, ImportError):
         return None, {}, None
 
     if not results:
@@ -332,13 +339,15 @@ def _get_sub_opinions(cluster_url: str, headers: dict, timeout: float) -> list:
     if not cluster_url.startswith("http"):
         cluster_url = f"{_CL_BASE}{cluster_url}"
 
+    if httpx is None:
+        return []
     try:
         resp = httpx.get(cluster_url, headers=headers, timeout=timeout)
         if resp.status_code >= 400:
             return []
         data = resp.json()
         return data.get("sub_opinions", [])
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError):
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError, ImportError):
         return []
 
 
@@ -353,12 +362,14 @@ def _fetch_opinion_text(opinion_url: str, headers: dict, timeout: float) -> tupl
     if not opinion_url.startswith("http"):
         opinion_url = f"{_CL_BASE}{opinion_url}"
 
+    if httpx is None:
+        return None, None
     try:
         resp = httpx.get(opinion_url, headers=headers, timeout=timeout)
         if resp.status_code >= 400:
             return None, None
         data = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError):
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError, ImportError):
         return None, None
 
     # Try HTML fields in preference order
@@ -391,6 +402,8 @@ def _fetch_via_search(
     """Fetch opinion from CourtListener search API (no auth needed)."""
     params = {"type": "o", "cite": cite_query}
 
+    if httpx is None:
+        return None, {}, None
     try:
         resp = httpx.get(
             _SEARCH_URL,
@@ -402,7 +415,7 @@ def _fetch_via_search(
         if resp.status_code >= 400:
             return None, {}, None
         data = resp.json()
-    except (httpx.HTTPError, httpx.TimeoutException, ValueError):
+    except (httpx.HTTPError, httpx.TimeoutException, ValueError, ImportError):
         return None, {}, None
 
     results = data.get("results", [])
@@ -460,12 +473,14 @@ def _fetch_via_scrape(
     timeout: float = 10.0,
 ) -> tuple[str | None, dict, str | None]:
     """Scrape opinion text by following a /c/ redirect URL."""
+    if httpx is None:
+        return None, {}, None
     try:
         resp = httpx.get(url, follow_redirects=True, timeout=timeout,
                          headers={"User-Agent": _USER_AGENT})
         if resp.status_code >= 400:
             return None, {}, None
-    except (httpx.HTTPError, httpx.TimeoutException):
+    except (httpx.HTTPError, httpx.TimeoutException, ImportError):
         return None, {}, None
 
     from bs4 import BeautifulSoup
