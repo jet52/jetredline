@@ -11,6 +11,7 @@ from cite_review import (
     _find_paragraph,
     _opinion_to_html,
     _split_paragraphs,
+    _via_key,
 )
 
 
@@ -229,6 +230,27 @@ class TestBuildHtml:
         result = _build_html("Test Case", citations_basic, paras, "test", sample_opinion)
         assert 'id="opinion-body"' in result
         assert 'id="para-1"' in result
+
+    def test_via_map_attaches_provenance(self, citations_basic, sample_opinion):
+        paras = _split_paragraphs(sample_opinion)
+        via_map = {
+            _via_key("2023 ND 219"): "ndcourts-mcp",   # matched by normalized
+            _via_key("445 u.s.  684"): "CourtListener",  # case/whitespace-insensitive
+        }
+        result = _build_html("Test Case", citations_basic, paras, "test",
+                             sample_opinion, via_map=via_map)
+        data = json.loads(
+            re.search(r"const DATA = (\[.*?\]);\s*\n", result, re.DOTALL).group(1))
+        assert data[0]["via"] == "ndcourts-mcp"
+        assert data[3]["via"] == "CourtListener"
+        assert data[1]["via"] is None  # statute not in the map
+
+    def test_no_via_map_leaves_via_none(self, citations_basic, sample_opinion):
+        paras = _split_paragraphs(sample_opinion)
+        result = _build_html("Test Case", citations_basic, paras, "test", sample_opinion)
+        data = json.loads(
+            re.search(r"const DATA = (\[.*?\]);\s*\n", result, re.DOTALL).group(1))
+        assert all(d["via"] is None for d in data)
         assert 'class="opinion-para"' in result
 
     def test_no_para_text_in_data(self, citations_basic, sample_opinion):

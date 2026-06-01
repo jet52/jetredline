@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.1.2
+version: 4.1.3
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -256,15 +256,16 @@ If the user did specify a preference, honor it:
 8b. **Treatment flags → comments.** If the Pass 3C overruling scan flagged any cited case for possible negative treatment, add a *comment* (not an edit) on each occurrence, quoting the citing context, for human review. Never auto-edit on a treatment signal.
 9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
 10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
-11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification:
+11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification. First write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndcourts-mcp", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "local"}` — then pass it with `--via-json` so each citation carries a provenance badge:
 ```bash
 $VENV_PYTHON ~/.claude/skills/jetredline/cite_review.py \
   --opinion <opinion_md_path> \
   --refs-dir ~/refs \
   --title "<case caption>" \
+  --via-json <TMPDIR>/via.json \
   --output <output_dir>/cite-review.html
 ```
-This produces a self-contained HTML file that displays each citation alongside the cited authority for visual confirmation. Tell the user the file is available and can be opened in a browser.
+Omit `--via-json` if Pass 3B did not run or produced no table. This produces a self-contained HTML file that displays each citation alongside the cited authority for visual confirmation. Tell the user the file is available and can be opened in a browser.
 
 **If the opinion is a .docx file:** use the docx skill's unpack workflow, then apply edits via `apply_edits.py`.
 
@@ -948,18 +949,19 @@ The **Substantive Concerns** section varies by `DOC_TYPE`.
 
 ### Citation review HTML (CLI and Cowork, always generated)
 
-After Pass 3 completes and the opinion markdown is available, generate an interactive citation review page:
+After Pass 3 completes and the opinion markdown is available, generate an interactive citation review page. Write a `via.json` mapping each citation to the tier from the Pass 3B **Via** column (`{"2024 ND 156": "ndcourts-mcp", …}`) and pass it with `--via-json` so the sidebar shows a per-citation provenance badge (ndcourts-mcp / CourtListener / local / web). Omit `--via-json` if Pass 3B did not run.
 
 ```bash
 $VENV_PYTHON ~/.claude/skills/jetredline/cite_review.py \
   --opinion <opinion_md_path> \
   --refs-dir ~/refs \
   --title "<case caption>" \
+  --via-json <TMPDIR>/via.json \
   --output <output_dir>/cite-review.html
 ```
 
 This produces a self-contained HTML file with:
-- A sidebar listing every citation with verification status
+- A sidebar listing every citation with verification status and its **Via** provenance badge (the tier that verified it)
 - A split main pane: draft paragraph (with citation highlighted) on top, cached source text rendered in readable serif font on bottom with a link bar to the original source
 - Keyboard navigation (`j`/`k` to move, `v`/`f`/`s` to verify/flag/skip, `Space`/`Enter` to verify and advance, `a` to toggle auto-advance, `h`/`l` to switch local/web view, `n` for notes, `?` for help)
 - LocalStorage persistence so review state survives browser restarts

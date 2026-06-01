@@ -676,6 +676,15 @@ main { display:flex; flex:1; overflow:hidden; }
 .cite-item .typ {
   font-size:10px; color:var(--text-muted); flex-shrink:0;
 }
+.cite-item .via {
+  font-size:9px; flex-shrink:0; padding:1px 5px; border-radius:3px;
+  border:1px solid var(--border); color:var(--text-muted);
+  text-transform:lowercase; letter-spacing:.02em;
+}
+/* MCP/local tiers are authoritative; web is the weaker fallback. Distinguished
+   by border weight + label text (not color alone) for colorblind safety. */
+.cite-item .via.mcp { border-color:var(--text-muted); font-weight:600; }
+.cite-item .via.web { border-style:dashed; }
 
 /* Content */
 .content { flex:1; display:flex; flex-direction:column; overflow:hidden; }
@@ -945,9 +954,12 @@ _JS = """\
     item.className = 'cite-item' + (i === 0 ? ' active' : '');
     item.dataset.idx = i;
     const cs = getCiteState(i);
+    const viaCls = d.via === 'web' ? ' web'
+      : (d.via === 'ndcourts-mcp' || d.via === 'CourtListener') ? ' mcp' : '';
     item.innerHTML =
       '<div class="dot' + (cs.status ? ' ' + cs.status : '') + '"></div>' +
       '<span class="lbl">' + escWithItalics(d.cite_text) + '</span>' +
+      (d.via ? '<span class="via' + viaCls + '" title="Verified via ' + esc(d.via) + '">' + esc(d.via) + '</span>' : '') +
       '<span class="typ">' + esc(d.cite_type) + '</span>';
     if (d.antecedent_name) item.title = 'Case name in draft: ' + d.antecedent_name;
     item.addEventListener('click', () => navigate(i));
@@ -1317,11 +1329,18 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
     return [c for c in citations if c.get("normalized") not in skip_norms]
 
 
+def _via_key(s: str) -> str:
+    """Normalize a citation string for matching against the via map."""
+    return " ".join((s or "").split()).casefold()
+
+
 def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 file_key: str, opinion_text: str,
-                viewers: dict[str, str] | None = None) -> str:
+                viewers: dict[str, str] | None = None,
+                via_map: dict[str, str] | None = None) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
+    via_map = via_map or {}
     # Build a de-duplicated map of local source HTML keyed by local_path.
     # Each citation references into this map by key, avoiding duplication.
     sources_map: dict[str, str] = {}  # local_path → rendered HTML
@@ -1349,10 +1368,12 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         search_term = _pinpoint_search_term(pinpoint) if pinpoint and viewer_path else ""
         lp = c.get("local_path")
         has_source = lp is not None and lp in sources_map
+        norm = c.get("normalized", c["cite_text"])
+        via = via_map.get(_via_key(norm)) or via_map.get(_via_key(c["cite_text"]))
         enriched.append({
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
-            "normalized": c.get("normalized", c["cite_text"]),
+            "normalized": norm,
             "antecedent_name": c.get("antecedent_name"),
             "url": url or None,
             "iframe_ok": host in _IFRAME_OK_DOMAINS,
@@ -1362,6 +1383,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "viewer_path": viewer_path,
             "search_term": search_term,
             "source_key": lp if has_source else None,
+            "via": via,
         })
 
     data_json = json.dumps(enriched, ensure_ascii=False)
@@ -1495,6 +1517,12 @@ def main():
                         help="Document title for the header")
     parser.add_argument("--local-only", action="store_true",
                         help="Skip web downloads; use local refs only")
+    parser.add_argument("--via-json",
+                        help="Path to a JSON object mapping a citation "
+                             "(normalized or as-written) to the tier that "
+                             "verified it (ndcourts-mcp / CourtListener / "
+                             "local / web / not found), from Pass 3B. Renders "
+                             "a per-citation 'via' provenance badge.")
     args = parser.parse_args()
 
     opinion_path = Path(args.opinion).expanduser()
@@ -1505,6 +1533,15 @@ def main():
     cite_json_path = Path(args.cite_json).expanduser() if args.cite_json else None
     citations = _load_citations(opinion_path, cite_json_path, args.refs_dir,
                                 local_only=args.local_only)
+
+    via_map: dict[str, str] = {}
+    if args.via_json:
+        try:
+            raw = json.loads(Path(args.via_json).expanduser().read_text(encoding="utf-8"))
+            via_map = {_via_key(k): v for k, v in raw.items() if v}
+        except (OSError, ValueError) as e:
+            print(f"Warning: could not read --via-json ({e}); "
+                  "rendering without via badges.", file=sys.stderr)
 
     if not citations:
         print("No citations found.", file=sys.stderr)
@@ -1530,7 +1567,8 @@ def main():
         local_only=args.local_only,
     )
 
-    html_str = _build_html(title, citations, paragraphs, file_key, text, viewers)
+    html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
+                           via_map=via_map)
 
     out.write_text(html_str, encoding="utf-8")
     n_viewers = len(viewers)
