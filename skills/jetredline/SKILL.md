@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.3.0
+version: 4.4.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -808,6 +808,11 @@ Parse the JSON output and incorporate the results into the analysis document (se
 - **Recommendation quality:** Are recommendations clearly stated? Is each recommendation supported by the analysis? Are alternative outcomes acknowledged?
 - **Analytical gaps:** Are there unstated assumptions? Logical fallacies? Missing steps in the reasoning chain?
 - **Standard of review:** Does the memo correctly identify and consistently apply the appropriate standard of review for each issue?
+- **Order-grounding check (did the memo read the order, or guess?):** Scan every statement about the **district court's ruling, findings, grounds of decision, or reasoning**. Flag two patterns:
+  1. **Uncited characterization** — a claim about what the district court held, found, or reasoned that carries **no pinpoint citation to the order/judgment** (e.g., "R38:2–9"). A bench memo's account of the ruling should be anchored to the order itself.
+  2. **Hedged reasoning** — phrases like "the district court *appears to* have," "*seems to* have," "*evidently*," or "*presumably*" applied to the lower court's reasoning. These usually mean the order was not read but inferred from the briefs.
+  
+  For each flag, note the ¶ and the suspect language. If source materials are available (Pass 4 ran on the order/record), check whether the order actually resolves the point and report the correct grounds with a pinpoint cite. Treat a cluster of these flags as a signal that the memo may have been drafted from the briefs without reading the order — say so explicitly in the analysis, since that is a serious bench-memo defect. (This is advisory: a properly preserved record gap is legitimate, but it should be stated as a gap, not hedged.)
 
 ## Output Format
 
