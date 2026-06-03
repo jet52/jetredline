@@ -6,12 +6,20 @@ JETCITE_DEST := skills/jetredline/lib/jetcite
 SPLITMARKS_SRC := ../splitmarks/splitmarks.py
 SPLITMARKS_DEST := skills/jetredline/splitmarks.py
 
-.PHONY: package clean install test test-structure test-unit vendor-jetcite vendor-splitmarks drift-check
+.PHONY: package clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks drift-check
 
 package: clean
 	cd skills && zip -r ../$(SKILL_ZIP) jetredline/ \
 		-x "jetredline/.venv/*" "jetredline/node_modules/*" \
 		   "jetredline/package-lock.json" "*/__pycache__/*"
+
+release: package
+	@VERSION=$$(cat skills/jetredline/VERSION) && \
+	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
+	git push origin main && \
+	git push origin "v$$VERSION" && \
+	gh release create "v$$VERSION" $(SKILL_ZIP) --title "v$$VERSION" --generate-notes && \
+	echo "Released v$$VERSION"
 
 clean:
 	rm -f $(SKILL_NAME)-skill-*.zip
