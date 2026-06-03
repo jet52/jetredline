@@ -3,8 +3,10 @@ VERSION := $(shell cat skills/jetredline/VERSION)
 SKILL_ZIP := $(SKILL_NAME)-skill-$(VERSION).zip
 JETCITE_SRC := ../jetcite/src/jetcite
 JETCITE_DEST := skills/jetredline/lib/jetcite
+SPLITMARKS_SRC := ../splitmarks/splitmarks.py
+SPLITMARKS_DEST := skills/jetredline/splitmarks.py
 
-.PHONY: package clean install test test-structure test-unit vendor-jetcite
+.PHONY: package clean install test test-structure test-unit vendor-jetcite vendor-splitmarks drift-check
 
 package: clean
 	cd skills && zip -r ../$(SKILL_ZIP) jetredline/ \
@@ -25,9 +27,24 @@ vendor-jetcite:
 	find $(JETCITE_DEST) -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@echo "Vendored jetcite from $(JETCITE_SRC)"
 
+vendor-splitmarks:
+	@test -f $(SPLITMARKS_SRC) || (echo "FAIL: splitmarks source not found at $(SPLITMARKS_SRC)" && exit 1)
+	cp $(SPLITMARKS_SRC) $(SPLITMARKS_DEST)
+	@echo "Vendored splitmarks from $(SPLITMARKS_SRC)"
+
+# Fail if the vendored splitmarks copy has drifted from its canonical source.
+# Tolerant of canonical being absent (e.g. on an install-only machine).
+drift-check:
+	@if [ -f $(SPLITMARKS_SRC) ]; then \
+	  cmp -s $(SPLITMARKS_SRC) $(SPLITMARKS_DEST) || { echo "DRIFT: $(SPLITMARKS_DEST) differs from canonical $(SPLITMARKS_SRC) — run 'make vendor-splitmarks'"; exit 1; }; \
+	  echo "splitmarks: in sync with canonical."; \
+	else \
+	  echo "splitmarks: canonical repo not present ($(SPLITMARKS_SRC)); skipping drift check."; \
+	fi
+
 test: test-structure test-unit
 
-test-structure:
+test-structure: drift-check
 	@echo "Validating skill structure..."
 	@test -f skills/jetredline/SKILL.md || (echo "FAIL: skills/jetredline/SKILL.md missing" && exit 1)
 	@test -d skills/jetredline/references || (echo "FAIL: skills/jetredline/references/ missing" && exit 1)
