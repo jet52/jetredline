@@ -1,12 +1,54 @@
 ---
 name: jetredline
-version: 4.2.0
+version: 4.3.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court), Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
 # JetRedline
 
 Edit draft judicial opinions and bench memos to improve grammar, clarity, conciseness, professional tone, citation accuracy, and analytical rigor. Produce a Word document with tracked changes and a companion analysis document.
+
+## Audit Mode (Caller Integration)
+
+Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a memo it just generated and feed the findings back into its own draft. When the caller's prompt says it is invoking jetredline in **audit mode**, this section *overrides* parts of the standard workflow below. Everything not overridden here is unchanged.
+
+**Detect audit mode** from the caller's prompt: it will say "audit mode" and supply a draft path, a pass list, and a request to return results rather than write files. When in audit mode:
+
+1. **Fixed settings** — do not ask, do not auto-detect:
+   - `DOC_TYPE = memo` (the caller only audits bench memos in this mode).
+   - Output = **analysis-only**. **Write no files** — no .docx, no `-ANALYSIS.md`, no `cite-review.html`. Return everything inline to the caller.
+   - The draft arrives as a **markdown file path** (or pasted text), not a .docx. Read it directly; skip Step 0's `.docx`/`.pdf` scan, the temp-dir setup, and the docx-plugin discovery.
+   - **Preserve markdown link syntax.** The memo arrives with record-citation hyperlinks (`[R45](url)`) and possibly authority links already in it. Never edit a URL, and when an edit touches linked text, keep the `[text](url)` wrapper intact.
+
+2. **Run inline.** Execute all selected passes inline in this context (as in Web mode) — do **not** delegate to Task subagents. The caller has already spawned you as a subagent.
+
+3. **Pass selection** — the caller supplies the list. The standard audit-mode selection is **passes 1, 2, 3C, 4, 5, 6**, with these adjustments:
+   - **Skip Pass 3A and Pass 3B** (Bluebook format + substantive citation verification). The caller owns citation verification separately; running it here duplicates work and can produce divergent tallies.
+   - **Keep Pass 3C** (negative-treatment / overruling scan via `detect_overruled_in_draft`). It is additive and cheap.
+   - **Pass 4** (fact-check) and **Pass 6** (brief-matching): run both. **Reuse the caller's existing `<file>.txt` extractions** — the caller will pass their paths; do **not** re-run `pdftotext` on PDFs that already have a `.txt`.
+   - **Pass 5** (analytical rigor): run all checks **except Readability Metrics** — skip `readability_metrics.py` entirely (not needed for the caller's internal audience).
+   - **Pass 1** (jurisdictional, memo variant) and **Pass 2** (style/grammar): run normally, inline.
+   - Pass 7 is N/A (memo).
+
+4. **Return contract** — return exactly two parts, in this order, and nothing else:
+
+   **Part 1 — Mechanical edits (JSON).** A fenced ` ```json ` block containing an array of *style/grammar* edits only — the direct `replace` edits from Pass 2. Each entry:
+   ```json
+   { "type": "replace", "para": 7, "old": "<exact text, full sentence for unique match>", "new": "<replacement>", "comment": "<rule, e.g. Redbook §11.3>", "source_pass": "style" }
+   ```
+   Include here **only** safe, mechanical Pass 2 replacements. Do **not** put analytical rewrites, restructuring proposals, or anything from Passes 1/3C/4/5/6 in this block. If a Pass 2 item is better expressed as a note than a direct substitution, route it to Part 2 instead.
+
+   **Part 2 — Substantive Concerns (markdown).** Everything that needs human (caller) judgment, grouped under these headings (omit a heading if it has no findings):
+   - `### Jurisdiction` — Pass 1 findings/warnings.
+   - `### Fact-Check` — Pass 4 discrepancy table (`¶ | Claim | Source | Result | Notes`).
+   - `### Brief Coverage` — Pass 6 table (`¶ | Argument | Party | Brief Source | Addressed | Notes`). This is the table the caller mines for omitted-argument remediation, so keep the `Party`, `Brief Source` (page range), and `Addressed` (Yes/Partial/No) columns precise.
+   - `### Analytical Rigor` — Pass 5 findings (internal consistency, standard-of-review application, memo checks: issue completeness, balance/steelman, recommendation support, analytical gaps). No readability section.
+   - `### Negative Treatment` — Pass 3C flagged cases (advisory; "verify").
+   - `### Style Notes` — any Pass 2 `comment`-type items not suitable as direct edits.
+
+   End Part 2 with a one-line summary: `Audit: N mechanical edits | brief gaps: A not-addressed, B partial | F fact discrepancies | T treatment flags`.
+
+The standard CLI/Web workflow, output documents, and Step 12 summary do not apply in audit mode — Parts 1 and 2 above are the entire deliverable.
 
 ## Environment Detection
 
