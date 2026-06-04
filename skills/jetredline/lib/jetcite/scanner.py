@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from jetcite.casename import extract_antecedent_name
+from jetcite.cleanup import preprocess_document_text
 from jetcite.models import Citation, CitationType
 from jetcite.patterns import get_matchers
 from jetcite.resolver import resolve_nd_opinion_urls
@@ -141,6 +142,12 @@ def scan_text(
     If resolve is True (default), resolves ndcourts.gov search URLs to
     direct opinion PDF URLs via HTTP.
     """
+    # Strip page furniture up front so a citation split across a page break
+    # rejoins, and so matcher positions stay aligned with the text the
+    # parallel/antecedent detectors below see. Idempotent with the same call
+    # inside each matcher's find_all.
+    text = preprocess_document_text(text)
+
     all_citations: list[Citation] = []
     seen: set[str] = set()
 

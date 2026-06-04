@@ -74,6 +74,82 @@ def _remove_page_numbers(lines: list[str]) -> list[str]:
     return new_lines
 
 
+# ── Input document preprocessing (before citation scanning) ───────
+#
+# Distinct from the opinion/statute cleanup below, which runs over *downloaded
+# authority text*. This runs over the *input document being scanned* so page
+# furniture (footers, running headers) sitting in the middle of a citation
+# that straddles a page break cannot be captured as part of the cite.
+# See TODO.md, "Plan: Page-break citation splice."
+
+
+def _identify_running_headers(lines: list[str]) -> set[int]:
+    """Identify running header/footer lines (repeated short boilerplate).
+
+    A line index is flagged when its stripped text repeats elsewhere in the
+    document and looks like furniture: an all-caps caption, a "Page N" footer,
+    or a bare number. Conservative by design — content that appears once is
+    never removed.
+    """
+    counts: dict[str, int] = {}
+    for line in lines:
+        s = line.strip()
+        if s:
+            counts[s] = counts.get(s, 0) + 1
+
+    headers: set[int] = set()
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s or counts[s] < 2 or len(s) > 60:
+            continue
+        if s.isupper() or re.match(r"(?i)^page\s+\d+", s) or re.match(r"^\d{1,4}$", s):
+            headers.add(i)
+    return headers
+
+
+def _strip_furniture_lines(lines: list[str], drop: set[int]) -> list[str]:
+    """Remove furniture lines and the blank lines hugging them.
+
+    Removing the furniture and its surrounding blanks closes the gap so a
+    citation split across a page break ("2025 ND" / footer / "127") rejoins
+    on a single line break, where the (newline-tolerant) cite patterns can
+    match it as one citation.
+    """
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        if i in drop:
+            while out and out[-1].strip() == "":
+                out.pop()
+            j = i + 1
+            while j < n and (j in drop or lines[j].strip() == ""):
+                j += 1
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def preprocess_document_text(text: str) -> str:
+    """Strip page furniture from a document before citation scanning.
+
+    Removes PDF page-number footers and running headers/footers, closing the
+    gap they leave so a citation split across a page break rejoins. Idempotent:
+    ``preprocess_document_text(preprocess_document_text(x))`` equals
+    ``preprocess_document_text(x)``, so callers may apply it more than once
+    (e.g. a matcher and the scanner) without disturbing match positions.
+    """
+    if not text or len(text.strip()) < 20:
+        return text
+    lines = text.split("\n")
+    drop = _identify_page_number_lines(lines) | _identify_running_headers(lines)
+    if drop:
+        lines = _strip_furniture_lines(lines, drop)
+    lines = _collapse_consecutive_blanks(lines)
+    return "\n".join(lines)
+
+
 def _collapse_consecutive_blanks(lines: list[str]) -> list[str]:
     """Collapse runs of multiple blank lines to at most one."""
     new_lines = []

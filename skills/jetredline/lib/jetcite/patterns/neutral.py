@@ -2,15 +2,24 @@
 
 import re
 
+from jetcite.cleanup import preprocess_document_text
 from jetcite.models import Citation, CitationType, Source
 from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
 from jetcite.sources.courtlistener import courtlistener_neutral_url
 from jetcite.sources.ndcourts import nd_opinion_url
 
+# Inter-token gap inside a single neutral citation: horizontal whitespace,
+# tolerating at most ONE line break (a soft wrap) but never a blank line. This
+# stops a number on the far side of a page/paragraph break — e.g. a page-number
+# footer — from being captured as the opinion number. Page furniture is stripped
+# upstream by preprocess_document_text; this is the defense-in-depth backstop.
+# See TODO.md, "Plan: Page-break citation splice."
+_WS = r'(?:[^\S\n]*\n[^\S\n]*|[^\S\n]+)'
+
 # ND neutral: 2024 ND 156
 _ND_NEUTRAL = re.compile(
-    r'([12]\d{3})\s+ND\s+(\d{1,3})'
+    r'([12]\d{3})' + _WS + r'ND' + _WS + r'(\d{1,3})'
     r'(?:,?\s*(?:¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)))?'  # optional pinpoint
 )
 
@@ -21,15 +30,15 @@ _OHIO_NEUTRAL = re.compile(r'(\d{4})-Ohio-(\d+)')
 _NM_NEUTRAL = re.compile(r'(\d{4})-(NM(?:SC|CA))-(\d+)')
 
 # Illinois: 2011 IL 102345 or 2011 IL App (1st) 101234
-_IL_NEUTRAL = re.compile(r'(\d{4})\s+IL(?:\s+App(?:\s+\([^)]+\))?)?\s+(\d+)')
+_IL_NEUTRAL = re.compile(r'(\d{4})' + _WS + r'IL(?:' + _WS + r'App(?:' + _WS + r'\([^)]+\))?)?' + _WS + r'(\d+)')
 
 # Standard neutral citations: YYYY {abbrev} NNN
 # Arkansas, Colorado, Guam, Maine, Montana, N. Mariana Is., Oklahoma,
 # South Dakota, Utah, Vermont, Wisconsin, Wyoming, Arizona, New Hampshire
 _STANDARD_NEUTRAL = re.compile(
-    r'([12]\d{3})\s+'
+    r'([12]\d{3})' + _WS +
     r'(Ark\.(?:\s+App\.)?|CO|Guam|ME|MT|MP|N\.H\.|OK|S\.D\.|UT(?:\s+App)?|VT|WI|WY|AZ)'
-    r'\s+(\d+)'
+    + _WS + r'(\d+)'
 )
 
 # North Carolina: 2021-NCSC-57 or 2021-NCCA-57
@@ -39,16 +48,20 @@ _NC_NEUTRAL = re.compile(r'(\d{4})-(NC(?:SC|CA))-(\d+)')
 _MS_NEUTRAL = re.compile(r'(\d{4})-((?:CA|CT|SA|KA|IA)-\d+-(?:SCT|COA))')
 
 # Pennsylvania: 1999 PA Super 1
-_PA_NEUTRAL = re.compile(r'(\d{4})\s+PA\s+(?:Super\s+)?(\d+)')
+_PA_NEUTRAL = re.compile(r'(\d{4})' + _WS + r'PA' + _WS + r'(?:Super' + _WS + r')?(\d+)')
 
 # Puerto Rico: 2015 TSPR 148
-_PR_NEUTRAL = re.compile(r'(\d{4})\s+TSPR\s+(\d+)')
+_PR_NEUTRAL = re.compile(r'(\d{4})' + _WS + r'TSPR' + _WS + r'(\d+)')
 
 # Louisiana: 93-2345 (La. 7/15/94) - more complex format, skip for now
 
 
 class NeutralCitationMatcher(BaseMatcher):
     def find_all(self, text: str) -> list[Citation]:
+        # Strip page furniture (footers, running headers) so a citation split
+        # across a page break rejoins before matching. Idempotent, so this is
+        # safe even when scan_text has already preprocessed the text.
+        text = preprocess_document_text(text)
         results = []
 
         # ND opinions: start with the ndcourts.gov search URL. The direct
