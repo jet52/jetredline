@@ -2,6 +2,19 @@
 
 Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from Justice Jerod Tufte (ND Supreme Court). Good practice to have standing instructions in your profile preferences that help ensure you get needed stress testing of arguments.  One approach: "When I argue against a position that knowledgeable experts would defend, answer as a smart expert who would still argue back. Lead with the counterarguments rather than with the agreement. Give a detailed response/steelman of the strongest arguments against my position and don't needlessly soften or backtrack."
 
+## Not an Official Court Product
+
+JetRedline is an independent, open-source project published by an individual in a
+personal capacity as legal-educational software, consistent with Rule 3.1 of the
+North Dakota Code of Judicial Conduct. It is not authorized, endorsed, or
+maintained by the North Dakota Supreme Court or the state court system, and is
+being developed without court staff, equipment, or resources. The embedded style
+preferences are personal preferences, not official court style. The tool edits
+documents you supply and runs locally; you are responsible for handling any
+confidential or draft material appropriately and for independently reviewing every
+proposed edit — especially citation and quotation checks — before adopting it. Its
+suggestions are machine-generated, are not authoritative, and are not legal advice.
+
 ## Caution: Privacy Settings Before Use
 
 <img width="541" height="137" alt="Screenshot 2026-03-07 at 15 31 25" src="https://github.com/user-attachments/assets/b552ef6a-0e66-41f1-91b8-21b02e49b76d" />
