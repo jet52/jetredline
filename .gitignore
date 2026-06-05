@@ -11,3 +11,12 @@ package-lock.json
 test-data/
 TODO.md
 .tmp-*/
+
+# Python build/test/lint artifacts (covers the vendored skills/jetredline/lib/jetcite
+# copy, whose upstream .gitignore does not carry over)
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
