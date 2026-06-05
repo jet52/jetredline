@@ -3,7 +3,7 @@
 ## Priority Order of Style Authorities
 
 1. Bryan Garner's *The Redbook: A Manual on Legal Style* (primary style authority)
-2. Opinions by Justice Jerod Tufte, North Dakota Supreme Court
+2. Opinions issued by the North Dakota Supreme Court within the last ten years
 3. Ross Guberman, *Point Taken: How to Write Like the World's Best Judges*
 4. Opinions of Justice Neil Gorsuch, Justice Elena Kagan, Justice Clarence Thomas
 
@@ -132,7 +132,7 @@ These checks apply when editing bench memos (`DOC_TYPE = memo`). They replace th
 
 ## Characteristics of Target Judicial Styles
 
-### Justice Tufte (ND Supreme Court)
+### Recent North Dakota Supreme Court opinions (last ten years)
 - Direct, economical prose. No wasted words.
 - Clear roadmapping: tells the reader where the opinion is going.
 - Careful attention to standard of review and its application.
