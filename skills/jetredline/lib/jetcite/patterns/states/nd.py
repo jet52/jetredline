@@ -60,6 +60,24 @@ _NDAC_REVERSE = re.compile(
     re.IGNORECASE,
 )
 
+# NDAC section written in prose with a forward "Section"/"Sec." cue:
+#   "Section 75-02-04.1-07(7) of the North Dakota Administrative Code"
+#   "Section 75-02-04.1-07"  (bare four-group number)
+# A fourth number group distinguishes NDAC (title-article-chapter-section)
+# from NDCC (title-chapter-section), so a four-group "Section" cite is NDAC.
+# The trailing "Administrative Code" cue is optional; the fourth group alone
+# is sufficient. The optional "(n)" is captured as a subsection pinpoint.
+_NDAC_SECTION_FWD = re.compile(
+    r'(?:[Ss]ection|[Ss]ec\.?)\s+'
+    r'(\d{1,2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)[^.\w]{1,2}'
+    r'(\d{2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)'
+    r'(?:\(([^)]+)\))?'
+    r'(?:[,\s]*(?:of\s+the\s+)?'
+    r'(?:North\s+Dakota\s+Admin(?:istrative)?\s+Code'
+    r'|N[\s.]*D[\s.]*A(?:dmin)*[.\s]*(?:Code|C))|\W|$)',
+    re.IGNORECASE,
+)
+
 # ---------------------------------------------------------------------------
 # ND Constitution: N.D. Const. art. I, § 20
 # ---------------------------------------------------------------------------
@@ -277,13 +295,31 @@ class NDMatcher(BaseMatcher):
         self._match_ndac(text, results)
         self._match_nd_const(text, results)
         self._match_nd_rules(text, results)
-        # Deduplicate: when two matches start at the same position,
-        # keep the one with the longer raw_text (more specific match).
+        # Deduplicate in two passes. First, when two matches start at the same
+        # position, keep the one with the longer raw_text (more specific match) —
+        # this drops, e.g., a truncated NDCC match in favor of the fuller NDAC one.
         by_pos: dict[int, Citation] = {}
         for cite in results:
             if cite.position not in by_pos or len(cite.raw_text) > len(by_pos[cite.position].raw_text):
                 by_pos[cite.position] = cite
-        return list(by_pos.values())
+        # Second, collapse overlapping matches that normalize to the SAME citation
+        # (one textual cite parsed two ways, e.g. a forward "Section X" match and a
+        # reverse "X, N.D.A.C." match), keeping the longer raw_text. Distinct cites
+        # have different normalized forms, and separate occurrences of one cite sit
+        # at non-overlapping positions, so both are preserved.
+        ordered = sorted(by_pos.values(), key=lambda c: (c.position, -len(c.raw_text)))
+        kept: list[Citation] = []
+        for cite in ordered:
+            start, end = cite.position, cite.position + len(cite.raw_text)
+            if any(
+                k.normalized == cite.normalized
+                and start < k.position + len(k.raw_text)
+                and k.position < end
+                for k in kept
+            ):
+                continue
+            kept.append(cite)
+        return kept
 
     def _match_ndcc(self, text: str, results: list[Citation]):
         for m in _NDCC_SECTION.finditer(text):
@@ -374,6 +410,21 @@ class NDMatcher(BaseMatcher):
                 jurisdiction="nd",
                 normalized=normalized,
                 components={"part1": p1, "part2": p2, "part3": p3, "part4": m.group(4)},
+                sources=[Source("ndlegis", ndac_url(p1, p2, p3))],
+                position=m.start(),
+            ))
+
+        for m in _NDAC_SECTION_FWD.finditer(text):
+            p1, p2, p3, p4 = m.group(1), m.group(2), m.group(3), m.group(4)
+            subsection = m.group(5)
+            normalized = f"N.D.A.C. § {p1}-{p2}-{p3}-{p4}"
+            results.append(Citation(
+                raw_text=m.group(0),
+                cite_type=CitationType.REGULATION,
+                jurisdiction="nd",
+                normalized=normalized,
+                components={"part1": p1, "part2": p2, "part3": p3, "part4": p4},
+                pinpoint=f"({subsection})" if subsection else None,
                 sources=[Source("ndlegis", ndac_url(p1, p2, p3))],
                 position=m.start(),
             ))
