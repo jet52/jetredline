@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.4.0
+version: 4.5.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -282,6 +282,35 @@ If the user did specify a preference, honor it:
 - If **analysis only**: Complete all editing passes and collect findings, produce only the analysis document in Step 10, skip Step 9 (.docx creation)
 
 **Note:** Even when producing analysis only, you must still perform all editing passes (1–7) to identify issues and generate findings for the analysis. You simply skip the final .docx assembly step.
+
+### Step 0.6: Review Scope & Run Announcement
+
+**Do not ask the user to choose a depth or scope of review.** jetredline runs the full pass suite by default. Never present a "what depth of redline" question or a checklist of passes. (The only sanctioned scoping questions remain the *doc type* question in Step 0.1, asked only when genuinely ambiguous, and nothing else.)
+
+**Announce the full run.** After detecting `DOC_TYPE` (Step 0.1) and before launching passes, state in one short paragraph: (a) that you're doing a complete review, (b) the passes that will run, (c) the deliverables, and (d) that the user can narrow the scope next time by saying so at invocation. Keep it to a few lines — do **not** turn it into a checklist or a question. Suggested form (trim passes that don't apply, e.g. omit dissent/concurrence cross-check when none is present):
+
+> I'll run a **complete review** — all of jetredline's passes:
+> • Jurisdiction & standard of review
+> • Line/copy editing — grammar, word choice, sentence structure, Redbook style
+> • Citations — existence, accurate quotation, correct Bluebook/Redbook form, and negative-treatment (overruling) scan
+> • Fact-checking against the record and briefs
+> • Analytical rigor — logical gaps, unsupported conclusions, missing steps
+> • Dissent/concurrence cross-check
+>
+> Deliverables: a **tracked-changes .docx** you can accept/reject in Word, plus a **companion analysis document** explaining each change.
+>
+> *Want something narrower next time? Just say so when you invoke — e.g.* "jetredline, citations only" *or* "light copy edit, don't touch my reasoning" *— and I'll limit the passes accordingly.*
+
+**Scope-keyword map (only when the user *volunteered* a narrower scope in their invocation).** Do not prompt for this; apply it only when the user's own words signal a narrower intent. Map their words to passes and run only those, plus the always-on jurisdictional check (Pass 1):
+
+| If the user says… | Run |
+|---|---|
+| "copy edit," "light edit," "proofread only," "style only" | Pass 2 |
+| "citations only," "check cites," "cite check" | Pass 3A–C |
+| "substance only," "analysis only," "rigor" | Passes 4, 5, 6, 7 |
+| "no substantive changes," "don't rewrite my reasoning" | Passes 2, 3; skip 5 |
+
+When you narrow the scope, say which passes you skipped and why, and adjust the announcement above to describe only the passes you will actually run. (Note: "analysis only" as a *scope* keyword means substantive passes; it is distinct from the *output* preference in Step 0.5, which governs which documents are produced. If the user's intent is ambiguous between the two, briefly confirm.)
 
 ### Steps 1–10: Core Workflow
 1. Read `references/style-guide.md`
