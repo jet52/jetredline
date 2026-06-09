@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.5.1
+version: 4.6.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -45,8 +45,9 @@ Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a 
    - `### Analytical Rigor` — Pass 5 findings (internal consistency, standard-of-review application, memo checks: issue completeness, balance/steelman, recommendation support, analytical gaps). No readability section.
    - `### Negative Treatment` — Pass 3C flagged cases (advisory; "verify").
    - `### Style Notes` — any Pass 2 `comment`-type items not suitable as direct edits.
+   - `### Coverage` — any source PDF not fully ingested (`not-ingested` or `OCR-low-confidence`): file, reason, and affected passes (4/6). Omit the heading if all inputs were fully ingested.
 
-   End Part 2 with a one-line summary: `Audit: N mechanical edits | brief gaps: A not-addressed, B partial | F fact discrepancies | T treatment flags`.
+   End Part 2 with a one-line summary: `Audit: N mechanical edits | brief gaps: A not-addressed, B partial | F fact discrepancies | T treatment flags | coverage: K of M inputs ingested`.
 
 The standard CLI/Web workflow, output documents, and Step 12 summary do not apply in audit mode — Parts 1 and 2 above are the entire deliverable.
 
@@ -245,11 +246,24 @@ $VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundl
 ```
 This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
 
-**Image-scanned PDFs:** splitmarks does not check whether output PDFs have an extractable text layer. If a subagent tries to extract text from a split file and gets little or nothing back, the file is likely image-scanned. In that case:
-- The subagent should fall back to reading the PDF directly with the Read tool (which handles PDFs as images) rather than stalling.
-- Report the issue to the user so they can consider running `ocrmypdf` on the affected files and re-running.
+**Image-scanned / image-only PDFs (detection + OCR recovery):** splitmarks does not check whether output PDFs have an extractable text layer, and court e-filing systems (e.g., C-Track) routinely produce raster-scanned briefs with no text layer at all. **Detect and recover such files — do not skip them.** A brief the court never read is not a footnote; treat an unreadable input as a coverage failure (Step 11), not a stall.
 
-Pass the resulting file paths — and any image-scanned warnings — to the fact-checking and brief-matching subagents.
+**Detection (two signals; either one ⇒ treat as image-only). Both tools are optional — degrade, don't error:**
+- `pdffonts <file>.pdf` reports **zero embedded fonts** (near-certain image-only). If `pdffonts` is not on the probe (see below), skip this signal and rely on the next one.
+- After `pdftotext`, the output stripped of form-feeds/whitespace has **< ~50 characters per page** (catches the one-form-feed-per-page case where the byte count is tiny but nonzero). If `pdftotext` itself is absent (no poppler at all), you cannot extract or detect via text — go straight to the Read-as-images rung, and if that is also unavailable, mark the file `not-ingested`.
+
+**OCR recovery ladder (CLI mode — escalate in order, stop at first success):**
+1. Probe tooling once and branch on what exists: `command -v pdffonts pdftotext ocrmypdf pdftoppm tesseract`. `pdffonts`/`pdftotext`/`pdftoppm` ship together in poppler (present or absent as a set); `ocrmypdf` and `tesseract` are separate. A missing tool just disables its rung — never a hard failure.
+2. **Preferred — ocrmypdf:** `ocrmypdf --skip-text --quiet <file>.pdf <file>.ocr.pdf` then `pdftotext <file>.ocr.pdf <file>.txt`. **Persist `<file>.ocr.pdf`** next to the original so re-runs need no re-OCR. (`--skip-text` is safe on pages that already carry text.)
+3. **Fallback — pdftoppm + tesseract:** if `ocrmypdf` is unavailable, `pdftoppm -r 300 -png <file>.pdf <TMPDIR>/page` then `tesseract` each page, concatenating output to `<file>.txt`.
+4. **Last resort — Read-as-images:** if no OCR binary is present, read the PDF directly with the Read tool (renders pages as images).
+5. **None available** (e.g., a Cowork/VM split with no OCR binaries and no Read access): record the file as **not ingested** — surface it, never silently skip.
+
+**OCR quality check:** after recovery, sample the recovered text. If it does not read as coherent legal prose — garbled, mostly non-words, or still near-empty — mark the file **OCR-low-confidence**. For coverage purposes (Step 11) this counts as *not fully ingested*, the same as not-ingested.
+
+Pass the resulting file paths — and each file's ingestion outcome (`ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method used) — to the fact-checking and brief-matching subagents, which must report it back (see Pass 4 / Pass 6) so the main context can reconcile coverage in Step 11.
+
+**Web mode (no Bash):** None of the shell tools above run. The Read tool renders a PDF's pages as images regardless of any text layer, so an image-only file is normally still readable — read it directly. The detection signals and OCR ladder do not apply. Only if the Read tool itself cannot render a file (corrupt, or too large to load) does it become `not-ingested`; track that outcome inline and feed it to Step 11 the same way (there are no subagents in web mode, so you hold the ingestion outcomes yourself).
 
 ### Step 0.1: Determine Document Type
 
@@ -684,7 +698,8 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with the following instructions and the extracted claims list:
 
 - For each PDF source file, extract text locally: `pdftotext <file>.pdf <file>.txt`
-- **Image-scanned fallback:** After extraction, check each `.txt` file size. If a multi-page PDF produces < 500 bytes of text, it is likely image-scanned. For those files, use the Read tool to read the PDF directly instead of grepping text. Note which files were image-scanned in the results.
+- **Image-only fallback (OCR-first):** Detect image-only files and recover them using the **detection + OCR recovery ladder in Step 0** (`pdffonts` / chars-per-page → ocrmypdf → pdftoppm+tesseract → Read-as-images). OCR yields a `.txt` that feeds the Grep steps below unchanged; persist any `<file>.ocr.pdf`. **Do not skip an image-only file** and do not treat "no text layer" as "unreviewable."
+- **Track ingestion per file.** For every source PDF, record its outcome — `ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method. You must return this (see the Ingestion Status table below).
 - Use Grep to search the extracted `.txt` files for passages relevant to each claim — **do not** read entire documents into context
 - For claims with cited record items, search those files first. Then search the remaining record-item files for corroborating or contradicting evidence.
 - For each claim, build a row:
@@ -694,6 +709,13 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 | [¶ ref] | [Factual assertion] | [Source with pinpoint cite] | Verified / Unverified / Discrepancy | [Explanation] |
 
 - Return the completed table with a summary line: [X] facts checked, [Y] verified, [Z] discrepancies, [W] unverified.
+- **Also return an Ingestion Status table** (one row per source PDF) so the main context can reconcile coverage in Step 11:
+
+| Source file | Pages | Ingestion | Method |
+|---|---|---|---|
+| [file.pdf] | [N] | ingested-text / OCR-recovered / OCR-low-confidence / image-read / not-ingested | [pdftotext / ocrmypdf / tesseract / Read / none] |
+
+  If any file is `not-ingested` or `OCR-low-confidence`, say so plainly in the summary — the facts that depended on it are unverified, not checked.
 
 **No source materials:** If the user does not provide source materials, skip delegation. Note this limitation in the analysis and flag any factual assertions that cannot be independently verified.
 
@@ -713,7 +735,7 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 >
 > For each brief, extract text locally: `pdftotext <file>.pdf <file>.txt`
 >
-> **Image-scanned fallback:** After extraction, check each `.txt` file size. If a multi-page brief produces < 500 bytes of text, it is likely image-scanned. For those files, use the Read tool to read the PDF directly instead of working from the text extraction. Note which briefs were image-scanned in the results.
+> **Image-only fallback (OCR-first):** Detect image-only briefs and recover them using the **detection + OCR recovery ladder in Step 0** (`pdffonts` / chars-per-page → ocrmypdf → pdftoppm+tesseract → Read-as-images). Persist any `<file>.ocr.pdf`. **Do not skip an image-only brief** — a brief that cannot be read means the court's coverage of that party's arguments is unverified, which you must report (Step 5 below), not bury.
 >
 > **Step 1:** Extract every distinct argument or contention from each party's brief. For each argument, record:
 > - The party (Appellant/Appellee/Petitioner/Respondent)
@@ -734,6 +756,14 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 > The ¶ column references where in the draft the argument is addressed (or "—" if not addressed).
 >
 > **Step 4:** Return the table and a summary: [X] arguments identified across [N] briefs. [Y] directly addressed. [Z] partially addressed. [W] not addressed.
+>
+> **Step 5:** Also return an **Ingestion Status** table (one row per brief) so the main context can reconcile coverage in Step 11:
+>
+> | Brief file | Pages | Ingestion | Method |
+> |---|---|---|---|
+> | [brief.pdf] | [N] | ingested-text / OCR-recovered / OCR-low-confidence / image-read / not-ingested | [pdftotext / ocrmypdf / tesseract / Read / none] |
+>
+> If a brief is `not-ingested` or `OCR-low-confidence`, state it in the summary and mark that party's arguments **coverage unverified** rather than implying they were checked against the draft.
 
 **No briefs available:** If no briefs were provided in Step 0, skip this pass entirely. Note in the analysis document: "No briefs provided — brief matching skipped."
 
@@ -849,6 +879,18 @@ Parse the JSON output and incorporate the results into the analysis document (se
   
   For each flag, note the ¶ and the suspect language. If source materials are available (Pass 4 ran on the order/record), check whether the order actually resolves the point and report the correct grounds with a pinpoint cite. Treat a cluster of these flags as a signal that the memo may have been drafted from the briefs without reading the order — say so explicitly in the analysis, since that is a serious bench-memo defect. (This is advisory: a properly preserved record gap is legitimate, but it should be stated as a gap, not hedged.)
 
+### Step 11: Coverage Reconciliation & Acknowledgment Gate
+
+Before producing any final output, reconcile the **inputs identified in Step 0** against the **inputs actually ingested** (from the Ingestion Status tables returned by Passes 4 and 6). An input counts as **not fully ingested** if its status is `not-ingested` **or** `OCR-low-confidence`. Always emit one ledger line:
+
+> **Inputs ingested: N of M.** [If N < M, list each miss: `Reply-Brief.pdf` (image-only; OCR-low-confidence), …]
+
+**Acknowledgment gate — fires only when N < M.** If any identified input was not fully ingested, do **not** present the run as complete. Name the file(s), the reason (no text layer / image-only / garbled OCR), and the affected passes (Pass 4 fact-check, Pass 6 brief-matching), then ask the user to acknowledge that coverage is incomplete before final outputs are produced. Use `AskUserQuestion` (CLI) or a direct question (Web). When N < M you must also render the `## ⚠ Source Materials Not Reviewed` section (see below) and use the incomplete-coverage form of the Step 12 header.
+
+> **This is an exceptional-condition gate, not a scope or depth question.** It is the *only* sanctioned interactive pause besides the Step 0.1 doc-type question. Do not generalize it, and never use it to offer pass selection. When N == M, skip it silently and proceed.
+
+**Audit mode:** do not prompt. Instead surface any not-fully-ingested input under a `### Coverage` heading in Part 2 and reflect it in the final summary line.
+
 ## Output Format
 
 **Web mode:** Produce only the analysis document as markdown in the conversation. The tracked-changes .docx section does not apply. The analysis document template and structure are the same.
@@ -888,6 +930,20 @@ The **Substantive Concerns** section varies by `DOC_TYPE`.
 
 **If DOC_TYPE is `memo`**, begin directly with Jurisdictional Notes.
 
+**Source-materials warning (conditional — render whenever Step 11 found N < M).** Immediately after the Case Highlight (opinion) or before Jurisdictional Notes (memo), insert the following. Omit the section entirely when every identified input was fully ingested:
+
+```
+## ⚠ Source Materials Not Reviewed
+
+One or more provided source files could not be fully read. Fact-check and brief-coverage findings below are **incomplete** for the listed material.
+
+| File | Reason | Passes affected | Remediation |
+|---|---|---|---|
+| [file.pdf] | image-only / no text layer (or OCR-low-confidence) | Pass 4, Pass 6 | OCR attempted (ocrmypdf) — failed / low-confidence; recommend manual review or re-OCR |
+
+**Inputs ingested: N of M.**
+```
+
 **Both document types continue with:**
 
 ```
@@ -906,7 +962,7 @@ The **Substantive Concerns** section varies by `DOC_TYPE`.
 |---|-------|-------------------|--------|-------|
 | [¶ ref] | [Factual assertion from document] | [Record doc, brief, or transcript with pinpoint cite] | Verified / Unverified / Discrepancy | [Explanation if discrepancy or unverified] |
 
-**Summary:** [X] facts checked. [Y] verified. [Z] discrepancies. [W] unverified.
+**Summary:** [X] facts checked. [Y] verified. [Z] discrepancies. [W] unverified. [If any source not fully ingested: "Coverage incomplete — [file] not reviewed; see ⚠ Source Materials Not Reviewed."]
 
 ## Brief Matching
 
@@ -914,7 +970,7 @@ The **Substantive Concerns** section varies by `DOC_TYPE`.
 |---|----------|-------|-------------|-----------|-------|
 | [¶ ref] | [Argument/contention] | [Appellant/Appellee] | [Brief, pp. X–Y] | Yes / Partial / No | [Explanation] |
 
-**Summary:** [X] arguments identified. [Y] directly addressed. [Z] partially addressed. [W] not addressed.
+**Summary:** [X] arguments identified. [Y] directly addressed. [Z] partially addressed. [W] not addressed. [If any brief not fully ingested: "Coverage incomplete — [brief] not reviewed; that party's arguments are unverified. See ⚠ Source Materials Not Reviewed."]
 
 [Or: "No briefs provided — brief matching skipped."]
 ```
@@ -1055,7 +1111,9 @@ Tell the user the citation review file is available and can be opened in any bro
 
 After all outputs are generated, present a clear summary to the user:
 
-> **JetRedline Complete**
+> **JetRedline Complete** — or, when Step 11 found N < M: **⚠ JetRedline Complete — Incomplete Coverage**
+>
+> **Inputs ingested: N of M.** *(when N < M, list each miss and the passes affected — Pass 4 fact-check, Pass 6 brief-matching)*
 >
 > **Documents generated:**
 > - Tracked-changes .docx: `<filename>` *(if generated)*
@@ -1065,7 +1123,7 @@ After all outputs are generated, present a clear summary to the user:
 > **Citation Verification (quality gate):**
 > Open `<cite-review-filename>` in your browser to verify each citation against its source. Keyboard: `j`/`k` to navigate, `v`/`f`/`s` to verify/flag/skip, `?` for all shortcuts.
 
-Always include this summary. Adapt the list to reflect which outputs were actually generated. The citation verification prompt is the most important part — it's a quality gate, not an optional extra.
+Always include this summary. Adapt the list to reflect which outputs were actually generated. When coverage is incomplete (Step 11, N < M), the ⚠ header and the **Inputs ingested** line are mandatory — do not report a clean completion over an unreviewed input. The citation verification prompt is the most important part — it's a quality gate, not an optional extra.
 
 ## Key Reminders
 
