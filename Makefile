@@ -6,23 +6,57 @@ JETCITE_DEST := skills/jetredline/lib/jetcite
 SPLITMARKS_SRC := ../splitmarks/splitmarks.py
 SPLITMARKS_DEST := skills/jetredline/splitmarks.py
 
-.PHONY: package clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks drift-check
+PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
+WEB_ZIP := $(SKILL_NAME)-web-$(VERSION).zip
 
-package: clean
+.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks drift-check
+
+# Public package targets clean first (so zip -r never updates a stale archive),
+# then delegate to a build-* recipe. package-all cleans once and builds all three
+# without the per-target clean clobbering siblings.
+package: clean build-skill
+package-plugin: clean build-plugin
+package-web: clean build-web
+package-all: clean build-skill build-plugin build-web
+
+# Standalone skill zip: jetredline/ at the archive root. For manual drops into
+# ~/.claude/skills/ — NOT a plugin (no manifest).
+build-skill:
 	cd skills && zip -r ../$(SKILL_ZIP) jetredline/ \
 		-x "jetredline/.venv/*" "jetredline/node_modules/*" \
 		   "jetredline/package-lock.json" "*/__pycache__/*"
 
-release: package
+# Plugin archive for Cowork/marketplace upload: manifest at root + the skill tree
+# it references via plugin.json's "skills": "./skills/jetredline".
+build-plugin:
+	zip -r $(PLUGIN_ZIP) .claude-plugin/plugin.json skills/jetredline/ \
+		-x "skills/jetredline/.venv/*" "skills/jetredline/node_modules/*" \
+		   "skills/jetredline/package-lock.json" "*/__pycache__/*"
+
+# Web / Projects bundle: model-facing content only. The Python scripts are inert
+# without Bash, so ship just SKILL.md + references + VERSION as uploadable knowledge.
+build-web:
+	zip -r $(WEB_ZIP) \
+		skills/jetredline/SKILL.md \
+		skills/jetredline/references/ \
+		skills/jetredline/VERSION \
+		-x "*/__pycache__/*"
+
+# NOTE: jet-hub installs by git clone of this repo's default branch, not from any
+# zip — so a release must push main. The zips are attached for direct uploads
+# (Cowork plugin upload, Projects web bundle, manual skill drop).
+release: package-all
 	@VERSION=$$(cat skills/jetredline/VERSION) && \
 	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
 	git push origin main && \
 	git push origin "v$$VERSION" && \
-	gh release create "v$$VERSION" $(SKILL_ZIP) --title "v$$VERSION" --generate-notes && \
+	gh release create "v$$VERSION" $(SKILL_ZIP) $(PLUGIN_ZIP) $(WEB_ZIP) --title "v$$VERSION" --generate-notes && \
 	echo "Released v$$VERSION"
 
+.PHONY: build-skill build-plugin build-web
+
 clean:
-	rm -f $(SKILL_NAME)-skill-*.zip
+	rm -f $(SKILL_NAME)-skill-*.zip $(SKILL_NAME)-plugin-*.zip $(SKILL_NAME)-web-*.zip
 
 install:
 	bash install.sh
