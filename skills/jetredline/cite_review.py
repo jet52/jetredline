@@ -320,8 +320,8 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
 _ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 
 
-# Domains whose pages can be loaded in an iframe (no X-Frame-Options block)
-# ndcourts.gov removed — cached markdown is always a better experience
+# Domains whose pages can be loaded in an iframe (no X-Frame-Options block).
+# Used only when no embedded text is available for the citation.
 _IFRAME_OK_DOMAINS = frozenset({
     "ndlegis.gov",
     "www.ndcourts.gov",
@@ -439,6 +439,9 @@ def _nd_direct_url(local_path: str | None) -> str | None:
     )
 
 
+_ND_OPINION_PDF_RE = re.compile(r"/supreme-court/opinions/\d+$")
+
+
 def _needs_pdfjs_viewer(url: str, pinpoint: str | None) -> bool:
     """Check if a citation URL should use the PDF.js viewer with search."""
     if not url or not pinpoint:
@@ -446,9 +449,11 @@ def _needs_pdfjs_viewer(url: str, pinpoint: str | None) -> bool:
     # Already has a named destination — browser handles it
     if "#nameddest=" in url:
         return False
-    # Only for ndcourts.gov opinion PDFs
-    host = urlparse(url).netloc
-    return host in ("www.ndcourts.gov", "ndcourts.gov")
+    # Only direct ndcourts.gov opinion PDFs — a search URL (?cit1=...) serves
+    # HTML, which would break the PDF.js viewer
+    parsed = urlparse(url)
+    return (parsed.netloc in ("www.ndcourts.gov", "ndcourts.gov")
+            and bool(_ND_OPINION_PDF_RE.search(parsed.path)))
 
 
 def _pinpoint_search_term(pinpoint: str | None) -> str:
@@ -820,6 +825,21 @@ main { display:flex; flex:1; overflow:hidden; }
   align-items:center; justify-content:center;
   color:var(--text-muted); font-size:13px; gap:16px;
 }
+.passage-box {
+  flex:1; overflow-y:auto; padding:20px 28px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size:15px; line-height:1.7;
+  background:#fdfcf8; color:#222;
+}
+.passage-box .passage-caption {
+  font-family:'SF Mono',monospace; font-size:11px;
+  color:#8a6d1a; background:#f5edd2; border:1px solid #e3d49a;
+  border-radius:4px; padding:6px 10px; margin-bottom:14px;
+}
+.passage-box blockquote {
+  margin:0; padding-left:14px; border-left:3px solid #d4a017;
+  white-space:pre-wrap;
+}
 .open-tab-btn {
   display:inline-block; padding:10px 20px;
   font-size:13px; color:#fff; background:var(--accent);
@@ -1159,6 +1179,22 @@ _JS = """\
         iframe.addEventListener('error', function() { clearTimeout(loadTimer); showLocal(); });
       }
     }
+    // Helper: render a Pass 3B verification passage into the source pane
+    function showPassage() {
+      var html = '';
+      if (d.url) {
+        html += '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
+          '<a href="' + esc(d.url) + '" target="_blank">' +
+          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>';
+      }
+      html += '<div class="passage-box">' +
+        '<div class="passage-caption">Passage retrieved during citation ' +
+        'verification' + (d.pinpoint ? ' (' + esc(d.pinpoint) + ')' : '') +
+        ' — full text not embedded</div>' +
+        '<blockquote>' + esc(d.passage) + '</blockquote></div>';
+      srcBody.innerHTML = html;
+    }
+
     // Expose for onclick
     window._showLocal = showLocal;
     window._showIframe = showIframe;
@@ -1172,9 +1208,12 @@ _JS = """\
       urlLink.textContent = sourceHtml ? 'local reference' : 'no URL available';
     }
 
-    // Choose primary view: local source preferred (instant), web as fallback
+    // Choose primary view: local source preferred (instant), then the
+    // verification passage, then web fallbacks
     if (sourceHtml) {
       showLocal();
+    } else if (d.passage) {
+      showPassage();
     } else if (d.viewer_path || d.iframe_ok) {
       showIframe();
     } else if (d.url) {
@@ -1388,10 +1427,41 @@ def _via_key(s: str) -> str:
     return " ".join((s or "").split()).casefold()
 
 
+def _find_passage(passages: list[dict], cite: str,
+                  pin_anchor: str | None, pin_page: str | None) -> str | None:
+    """Find a Pass 3B verification passage for a citation occurrence.
+
+    ``passages`` is a list of {"cite", "paragraph"|"page", "text"} objects
+    written by the Pass 3B subagent as it verifies pinpoints. Matching is by
+    citation (any short whitespace variance tolerated) plus the paragraph or
+    page number; a cite-level passage (no paragraph/page) matches when the
+    occurrence has no pinpoint either.
+    """
+    want_cite = _via_key(cite)
+    want_page = None
+    if pin_page:
+        m = re.search(r"\d+", pin_page)
+        want_page = m.group(0) if m else None
+    for p in passages:
+        if _via_key(str(p.get("cite", ""))) != want_cite:
+            continue
+        para = str(p.get("paragraph", "") or "")
+        page = str(p.get("page", "") or "")
+        if pin_anchor and para == pin_anchor:
+            return p.get("text")
+        if want_page and page == want_page:
+            return p.get("text")
+        if not pin_anchor and not want_page and not para and not page:
+            return p.get("text")
+    return None
+
+
 def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 file_key: str, opinion_text: str,
                 viewers: dict[str, str] | None = None,
-                via_map: dict[str, str] | None = None) -> str:
+                via_map: dict[str, str] | None = None,
+                sources_meta: dict[str, dict] | None = None,
+                passages: list[dict] | None = None) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
     via_map = via_map or {}
@@ -1414,6 +1484,9 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     pp_text = _preprocess_like_scanner(opinion_text)
     pp_paragraphs = _split_paragraphs(pp_text)
 
+    sources_meta = sources_meta or {}
+    passages = passages or []
+
     # Enrich citation entries
     enriched = []
     for c in citations:
@@ -1424,8 +1497,18 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         if para_num is None:
             para = _find_paragraph(paragraphs, c["cite_text"])
             para_num = para["num"] if para else None
+        norm = c.get("normalized", c["cite_text"])
+        parent_norm = c.get("parent_normalized")
         url = c.get("url") or ""
-        # For ND opinions with local refs, derive the direct URL
+        # ndlaw metadata: authoritative case name and the court's direct
+        # opinion URL, keyed by any citation form of the opinion.
+        meta = sources_meta.get(_via_key(norm)) or (
+            sources_meta.get(_via_key(parent_norm)) if parent_norm else None) or {}
+        case_name = meta.get("case_name")
+        if meta.get("url"):
+            url = meta["url"]
+        # Fallback for ND opinions with local refs but no direct URL:
+        # derive the ndcourts.gov search URL from the refs path
         lp = c.get("local_path") or c.get("parent_local_path")
         if lp and (not url or "?cit1=" in url):
             direct = _nd_direct_url(lp)
@@ -1445,20 +1528,28 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         elif pinpoint and "¶" in pinpoint:
             m = re.search(r"\d+", pinpoint)
             pin_anchor = m.group(0) if m else None
-        norm = c.get("normalized", c["cite_text"])
         via = via_map.get(_via_key(norm)) or via_map.get(_via_key(c["cite_text"]))
+        if not via and meta.get("via"):
+            via = meta["via"]
+        # Verification passage (Pass 3B ledger): the exact text the cite
+        # check relied on. Shown when no full source text is embedded.
+        passage = None
+        if not has_source:
+            passage = _find_passage(passages, parent_norm or norm,
+                                    pin_anchor, c.get("pin_page"))
         enriched.append({
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
             "normalized": norm,
             "antecedent_name": c.get("antecedent_name"),
+            "case_name": case_name,
             "url": url or None,
             "iframe_ok": host in _IFRAME_OK_DOMAINS,
             "para_num": para_num,
             "occurrence": occurrence,
             "position": c.get("position"),
             "is_repeat": bool(c.get("is_repeat")),
-            "parent_normalized": c.get("parent_normalized"),
+            "parent_normalized": parent_norm,
             "pin_warning": c.get("pin_warning"),
             "parallel_cite": c.get("parallel_cite"),
             "search_hint": c.get("search_hint", ""),
@@ -1467,6 +1558,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "viewer_path": viewer_path,
             "search_term": search_term,
             "source_key": lp if has_source else None,
+            "passage": passage,
             "via": via,
         })
 
@@ -1607,6 +1699,17 @@ def main():
                              "verified it (ndcourts-mcp / CourtListener / "
                              "local / web / not found), from Pass 3B. Renders "
                              "a per-citation 'via' provenance badge.")
+    parser.add_argument("--sources-meta",
+                        help="Path to ndlaw_export.py metadata JSON mapping "
+                             "a citation to case_name / direct opinion url / "
+                             "url_source / via. Supplies the court's direct "
+                             "PDF URL and authoritative captions.")
+    parser.add_argument("--passages-json",
+                        help="Path to a Pass 3B passages ledger: JSON array "
+                             "of {cite, paragraph|page, text} objects holding "
+                             "the exact text each pinpoint verification "
+                             "relied on. Shown in the source pane when no "
+                             "full text is embedded for the citation.")
     args = parser.parse_args()
 
     opinion_path = Path(args.opinion).expanduser()
@@ -1626,6 +1729,25 @@ def main():
         except (OSError, ValueError) as e:
             print(f"Warning: could not read --via-json ({e}); "
                   "rendering without via badges.", file=sys.stderr)
+
+    sources_meta: dict[str, dict] = {}
+    if args.sources_meta:
+        try:
+            raw = json.loads(Path(args.sources_meta).expanduser().read_text(encoding="utf-8"))
+            sources_meta = {_via_key(k): v for k, v in raw.items()
+                            if isinstance(v, dict)}
+        except (OSError, ValueError) as e:
+            print(f"Warning: could not read --sources-meta ({e}); "
+                  "rendering without ndlaw metadata.", file=sys.stderr)
+
+    passages: list[dict] = []
+    if args.passages_json:
+        try:
+            raw = json.loads(Path(args.passages_json).expanduser().read_text(encoding="utf-8"))
+            passages = [p for p in raw if isinstance(p, dict) and p.get("text")]
+        except (OSError, ValueError, TypeError) as e:
+            print(f"Warning: could not read --passages-json ({e}); "
+                  "rendering without verification passages.", file=sys.stderr)
 
     if not citations:
         print("No citations found.", file=sys.stderr)
@@ -1652,7 +1774,8 @@ def main():
     )
 
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
-                           via_map=via_map)
+                           via_map=via_map, sources_meta=sources_meta,
+                           passages=passages)
 
     out.write_text(html_str, encoding="utf-8")
     n_viewers = len(viewers)
