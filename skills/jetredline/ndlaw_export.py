@@ -342,8 +342,11 @@ def main():
         print(f"Backend unavailable: {exc}", file=sys.stderr)
         return 2
     if backend is None:
-        print("No ndlaw backend reachable (no opinions.db, no NDLAW_URL). "
-              "Falling through to existing refs cache.", file=sys.stderr)
+        print("No ndlaw backend reachable: no opinions.db found and no "
+              "server URL given. Pass --url https://<server>/mcp "
+              "(plus --auth user:pass if the server requires it), or set "
+              "NDLAW_URL/NDLAW_AUTH. Falling through to existing refs cache.",
+              file=sys.stderr)
         return 2
 
     refs_dir = Path(args.refs_dir)

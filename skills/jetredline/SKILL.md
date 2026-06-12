@@ -356,7 +356,13 @@ $VENV_PYTHON ~/.claude/skills/jetredline/ndlaw_export.py \
   --refs-dir ~/refs \
   --meta-out <TMPDIR>/sources.json
 ```
-    Exit 2 means no backend was reachable — skip `--sources-meta` below and fall through silently (never stall on this step). If exit 2 **and** ndcourts-mcp tools are available in-context, you may build a minimal `sources.json` by hand from one cheap `lookup_opinion` call per unique ND case (URL + case name only — do **not** pull opinion text through context).
+    Exit 2 means no backend was reachable (typical in Cowork, where neither the corpus DB nor `NDLAW_URL` exists). **Fall back to a scribe subagent riding the in-context MCP connection** — if ndcourts-mcp tools are available:
+
+    1. From the cite JSON, list the corpus-eligible authorities that still lack refs text: case entries (not `pin_cite`, not `is_repeat`) whose `normalized` is an ND neutral cite (`YYYY ND N`) or N.W.-family reporter cite, with `local_exists` false.
+    2. Launch **one** subagent (Task tool, `model: haiku`, subagent_type `general-purpose`) with that list and these instructions: for each citation, call `lookup_opinion(<cite>)` and record `case_name`, `url`, `url_source`, `date_filed`, and `citations`; then page through `get_opinion_text(<cite>, offset=..., limit=50000)` until `has_more` is false and **Write the concatenated text verbatim** (do not summarize, reformat, or strip the frontmatter block) to the refs path: `~/refs/opin/ND/<year>/<year>ND<n>.md` for `YYYY ND N`; `~/refs/opin/NW2d/<vol>/<page>.md` for `V N.W.2d P` (analogously `NW3d`, `NW`). Finally Write `<TMPDIR>/sources.json` mapping **every** citation form from `citations` to `{"case_name", "url", "url_source", "date_filed", "via": "ndlaw"}`, and return only a tally ("N exported, M not in corpus") — never opinion text.
+    3. The token cost stays inside the subagent's isolated context (and within the subscription); main context must never page opinion text through its own tool results just to embed it.
+
+    If MCP tools are also unavailable, skip `--sources-meta` below and fall through silently (never stall on this step) — or, at most, build a minimal `sources.json` from one cheap `lookup_opinion` call per unique ND case (URL + case name only) if a stray connection allows it.
 
     **11b. Generate the page.** Write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndcourts-mcp", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "local"}`:
 ```bash
@@ -1106,7 +1112,7 @@ One or more provided source files could not be fully read. Fact-check and brief-
 
 After Pass 3 completes and the opinion markdown is available, generate an interactive citation review page.
 
-First refresh ND authority text and direct URLs from the ndlaw corpus (zero token cost — the script talks to a local `opinions.db` or a deployed ndcourts-mcp instance directly; see Step 11a for backend selection):
+First refresh ND authority text and direct URLs from the ndlaw corpus (zero token cost — the script talks to a local `opinions.db` or a deployed ndcourts-mcp instance directly; on exit 2, fall back to the Haiku scribe subagent over the in-context MCP connection per Step 11a):
 
 ```bash
 $VENV_PYTHON ~/.claude/skills/jetredline/ndlaw_export.py \
