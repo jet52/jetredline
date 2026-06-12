@@ -732,8 +732,45 @@ main { display:flex; flex:1; overflow:hidden; }
 }
 /* MCP/local tiers are authoritative; web is the weaker fallback. Distinguished
    by border weight + label text (not color alone) for colorblind safety. */
-.cite-item .via.mcp { border-color:var(--text-muted); font-weight:600; }
-.cite-item .via.web { border-style:dashed; }
+.cite-item .via.mcp, .cite-group-hdr .via.mcp { border-color:var(--text-muted); font-weight:600; }
+.cite-item .via.web, .cite-group-hdr .via.web { border-style:dashed; }
+
+/* Authority group headers: one per cited case; occurrences nest below */
+.cite-group-hdr {
+  display:flex; align-items:baseline; gap:6px; cursor:pointer;
+  padding:9px 12px 5px; margin-top:6px;
+  border-top:1px solid var(--border);
+  font-size:11px;
+}
+.cite-group-hdr:first-child { border-top:none; margin-top:0; }
+.cite-group-hdr:hover { background:var(--surface-alt); }
+.cite-group-hdr .gname {
+  font-weight:600; color:var(--text);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.cite-group-hdr .gcite {
+  color:var(--text-muted); flex-shrink:0;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  max-width:40%;
+}
+.cite-group-hdr .via {
+  font-size:9px; flex-shrink:0; padding:1px 5px; border-radius:3px;
+  border:1px solid var(--border); color:var(--text-muted);
+  text-transform:lowercase; letter-spacing:.02em;
+}
+.cite-group-hdr .glink {
+  flex-shrink:0; color:var(--accent); text-decoration:none; font-size:12px;
+}
+.cite-group-hdr .gcount {
+  margin-left:auto; flex-shrink:0;
+  font-size:9px; color:var(--text-muted);
+  border:1px solid var(--border); border-radius:8px; padding:0 6px;
+}
+.cite-item { padding-left:26px; }
+.cite-item .ploc {
+  font-size:10px; color:var(--text-muted); flex-shrink:0;
+}
+.cite-item .pin-warn { color:var(--flagged); }
 
 /* Content */
 .content { flex:1; display:flex; flex-direction:column; overflow:hidden; }
@@ -1001,33 +1038,84 @@ _JS = """\
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch(e) {}
   }
 
+  // Review state is keyed by character position (stable across page
+  // regenerations); index is the fallback for entries without one.
+  function stateKey(idx) {
+    const d = DATA[idx];
+    return (d && d.position != null) ? 'p' + d.position : 'i' + idx;
+  }
+
   function getCiteState(idx) {
-    return state[idx] || { status: null, notes: '' };
+    return state[stateKey(idx)] || { status: null, notes: '' };
   }
 
   function setCiteState(idx, key, val) {
-    if (!state[idx]) state[idx] = { status: null, notes: '' };
-    state[idx][key] = val;
+    const k = stateKey(idx);
+    if (!state[k]) state[k] = { status: null, notes: '' };
+    state[k][key] = val;
     saveState();
   }
 
-  // Render sidebar
+  function citeItemEl(idx) {
+    return document.querySelector('.cite-item[data-idx="' + idx + '"]');
+  }
+
+  // Render sidebar grouped by authority: one header per cited case/
+  // authority, one row per occurrence (full cite, repeat, short form, Id.)
   const listEl = document.querySelector('.cite-list');
+  const groups = [];
+  const groupByKey = {};
   DATA.forEach((d, i) => {
-    const item = document.createElement('div');
-    item.className = 'cite-item' + (i === 0 ? ' active' : '');
-    item.dataset.idx = i;
-    const cs = getCiteState(i);
-    const viaCls = d.via === 'web' ? ' web'
-      : (d.via === 'ndcourts-mcp' || d.via === 'CourtListener') ? ' mcp' : '';
-    item.innerHTML =
-      '<div class="dot' + (cs.status ? ' ' + cs.status : '') + '"></div>' +
-      '<span class="lbl">' + escWithItalics(d.cite_text) + '</span>' +
-      (d.via ? '<span class="via' + viaCls + '" title="Verified via ' + esc(d.via) + '">' + esc(d.via) + '</span>' : '') +
-      '<span class="typ">' + esc(d.cite_type) + '</span>';
-    if (d.antecedent_name) item.title = 'Case name in draft: ' + d.antecedent_name;
-    item.addEventListener('click', () => navigate(i));
-    listEl.appendChild(item);
+    const key = d.authority || d.normalized || d.cite_text;
+    let g = groupByKey[key];
+    if (!g) {
+      g = { key: key, items: [], name: null, url: null, via: null,
+            parallel: null };
+      groupByKey[key] = g;
+      groups.push(g);
+    }
+    if (!g.name && d.case_name) g.name = d.case_name;
+    if (!g.name && d.antecedent_name) g.name = d.antecedent_name;
+    if (!g.url && d.url) g.url = d.url;
+    if (!g.via && d.via) g.via = d.via;
+    if (!g.parallel && d.parallel_cite && !d.is_repeat) g.parallel = d.parallel_cite;
+    g.items.push(i);
+  });
+
+  groups.forEach(g => {
+    const hdr = document.createElement('div');
+    hdr.className = 'cite-group-hdr';
+    const viaCls = g.via === 'web' ? ' web'
+      : (g.via === 'ndcourts-mcp' || g.via === 'CourtListener' || g.via === 'ndlaw') ? ' mcp' : '';
+    hdr.innerHTML =
+      '<span class="gname">' + escWithItalics(g.name || g.key) + '</span>' +
+      (g.name ? '<span class="gcite">' + esc(g.key) +
+        (g.parallel ? ', ' + esc(g.parallel) : '') + '</span>' : '') +
+      (g.via ? '<span class="via' + viaCls + '" title="Verified via ' + esc(g.via) + '">' + esc(g.via) + '</span>' : '') +
+      (g.url ? '<a class="glink" href="' + esc(g.url) + '" target="_blank" title="' + esc(g.url) + '">&#x2197;</a>' : '') +
+      '<span class="gcount">' + g.items.length + '</span>';
+    var glink = hdr.querySelector('.glink');
+    if (glink) glink.addEventListener('click', function(e) { e.stopPropagation(); });
+    hdr.addEventListener('click', () => navigate(g.items[0]));
+    listEl.appendChild(hdr);
+
+    g.items.forEach(i => {
+      const d = DATA[i];
+      const item = document.createElement('div');
+      item.className = 'cite-item' + (i === 0 ? ' active' : '');
+      item.dataset.idx = i;
+      const cs = getCiteState(i);
+      item.innerHTML =
+        '<div class="dot' + (cs.status ? ' ' + cs.status : '') + '"></div>' +
+        '<span class="lbl">' + escWithItalics(d.cite_text) +
+        (d.pin_warning ? ' <span class="pin-warn" title="' + esc(d.pin_warning) + '">&#x26a0;</span>' : '') +
+        '</span>' +
+        (d.para_num != null ? '<span class="ploc">&#xb6;' + d.para_num + '</span>' : '') +
+        '<span class="typ">' + esc(d.is_repeat ? 'repeat' : d.cite_type) + '</span>';
+      if (d.antecedent_name) item.title = 'Case name in draft: ' + d.antecedent_name;
+      item.addEventListener('click', () => navigate(i));
+      listEl.appendChild(item);
+    });
   });
 
   function esc(s) {
@@ -1059,10 +1147,12 @@ _JS = """\
     const d = DATA[idx];
     const cs = getCiteState(idx);
 
-    // Sidebar
-    document.querySelectorAll('.cite-item').forEach((el, i) => {
-      el.classList.toggle('active', i === idx);
-      if (i === idx) el.scrollIntoView({ block: 'nearest' });
+    // Sidebar (items are grouped by authority, so select by data-idx,
+    // not DOM order)
+    document.querySelectorAll('.cite-item').forEach(el => {
+      const isActive = Number(el.dataset.idx) === idx;
+      el.classList.toggle('active', isActive);
+      if (isActive) el.scrollIntoView({ block: 'nearest' });
     });
 
     // Draft pane header
@@ -1251,8 +1341,11 @@ _JS = """\
     updateButtons(newStatus);
 
     // Update sidebar dot
-    const dot = document.querySelectorAll('.cite-item')[currentIdx].querySelector('.dot');
-    dot.className = 'dot' + (newStatus ? ' ' + newStatus : '');
+    const itemEl = citeItemEl(currentIdx);
+    if (itemEl) {
+      itemEl.querySelector('.dot').className =
+        'dot' + (newStatus ? ' ' + newStatus : '');
+    }
     updateProgress();
 
     // Auto-advance to next citation if enabled and status was set (not cleared)
@@ -1371,7 +1464,7 @@ _SCT_RE = re.compile(r"S\.\s*Ct\.")
 _LED_RE = re.compile(r"L\.\s*Ed\.")
 
 
-def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
+def _dedup_parallel_citations(citations: list[dict]) -> tuple[list[dict], dict[str, str]]:
     """Remove secondary parallel citations from the list.
 
     Rules (type-based, no reliance on parallel_cite directionality):
@@ -1379,6 +1472,10 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
     - federal_reporter matching S.Ct. or L.Ed. → always drop
     - Any citation whose parallel_cite points to a primary already kept
       and the citation itself is a reporter (not neutral/U.S.) → drop
+
+    Returns (kept entries, alias map of dropped norm → its kept parallel
+    norm) so consumers can fold occurrences citing the dropped form into
+    the primary authority's group.
     """
     # Build a set of primary normalizations we want to keep
     primary_norms: set[str] = set()
@@ -1393,6 +1490,7 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
             primary_norms.add(norm)
 
     skip_norms: set[str] = set()
+    alias: dict[str, str] = {}
     for c in citations:
         norm = c.get("normalized", "")
         ct = c.get("cite_type", "")
@@ -1401,25 +1499,38 @@ def _dedup_parallel_citations(citations: list[dict]) -> list[dict]:
         # N.W.2d/3d parallel of a neutral cite → drop
         if ct == "regional_reporter" and _NW_RE.search(norm) and pc:
             skip_norms.add(norm)
+            alias[norm] = pc
             continue
 
         # S.Ct. → always drop (SCOTUS parallel)
         if ct == "federal_reporter" and _SCT_RE.search(norm):
             skip_norms.add(norm)
+            if pc:
+                alias[norm] = pc
             continue
 
         # L.Ed. → always drop (SCOTUS parallel)
         if ct == "federal_reporter" and _LED_RE.search(norm):
             skip_norms.add(norm)
+            if pc:
+                alias[norm] = pc
             continue
 
         # Old ND cases cited only by N.W.2d (no neutral) with no parallel
         # → keep (e.g., 543 N.W.2d 491 for pre-1997 ND cases)
 
+    # Collapse alias chains (dropped → dropped → kept)
+    for norm in list(alias):
+        target = alias[norm]
+        while target in alias:
+            target = alias[target]
+        alias[norm] = target
+
     removed = len(skip_norms)
     if removed:
         print(f"  Removed {removed} parallel citations", file=sys.stderr)
-    return [c for c in citations if c.get("normalized") not in skip_norms]
+    return ([c for c in citations if c.get("normalized") not in skip_norms],
+            alias)
 
 
 def _via_key(s: str) -> str:
@@ -1461,7 +1572,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 viewers: dict[str, str] | None = None,
                 via_map: dict[str, str] | None = None,
                 sources_meta: dict[str, dict] | None = None,
-                passages: list[dict] | None = None) -> str:
+                passages: list[dict] | None = None,
+                authority_alias: dict[str, str] | None = None) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
     via_map = via_map or {}
@@ -1486,6 +1598,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
 
     sources_meta = sources_meta or {}
     passages = passages or []
+    authority_alias = authority_alias or {}
 
     # Enrich citation entries
     enriched = []
@@ -1537,10 +1650,16 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         if not has_source:
             passage = _find_passage(passages, parent_norm or norm,
                                     pin_anchor, c.get("pin_page"))
+        # Authority grouping key: the first-occurrence cite this entry
+        # ultimately refers to, with dropped parallels folded into their
+        # kept primary form.
+        authority = parent_norm or norm
+        authority = authority_alias.get(authority, authority)
         enriched.append({
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
             "normalized": norm,
+            "authority": authority,
             "antecedent_name": c.get("antecedent_name"),
             "case_name": case_name,
             "url": url or None,
@@ -1753,7 +1872,7 @@ def main():
         print("No citations found.", file=sys.stderr)
         sys.exit(1)
 
-    citations = _dedup_parallel_citations(citations)
+    citations, authority_alias = _dedup_parallel_citations(citations)
 
     text = opinion_path.read_text(encoding="utf-8")
     paragraphs = _split_paragraphs(text)
@@ -1775,7 +1894,7 @@ def main():
 
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
                            via_map=via_map, sources_meta=sources_meta,
-                           passages=passages)
+                           passages=passages, authority_alias=authority_alias)
 
     out.write_text(html_str, encoding="utf-8")
     n_viewers = len(viewers)
