@@ -49,7 +49,9 @@ _PARA_NUM_RE = re.compile(
 def _split_paragraphs(text: str) -> list[dict]:
     """Split opinion text into paragraphs keyed by ¶ number.
 
-    Returns list of {"num": int|None, "text": str}.
+    Returns list of {"num": int|None, "text": str, "start": int, "end": int},
+    where start/end span the paragraph (marker included) in ``text`` so
+    character positions can be mapped to paragraphs.
     Supports both [¶ N] markers and numbered-list style (N.  text).
     """
     para_matches = list(_PARA_RE.finditer(text))
@@ -63,15 +65,51 @@ def _split_paragraphs(text: str) -> list[dict]:
         matches = para_matches
     else:
         # No markers at all — treat entire text as one block
-        return [{"num": None, "text": text.strip()}]
+        return [{"num": None, "text": text.strip(), "start": 0, "end": len(text)}]
 
     paragraphs = []
     for i, m in enumerate(matches):
         num = int(m.group(1))
         start = m.end()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        paragraphs.append({"num": num, "text": text[start:end].strip()})
+        paragraphs.append({"num": num, "text": text[start:end].strip(),
+                           "start": m.start(), "end": end})
     return paragraphs
+
+
+def _preprocess_like_scanner(text: str) -> str:
+    """Apply jetcite's document preprocessing, or identity if unavailable.
+
+    Citation positions in cite_check JSON index into
+    preprocess_document_text(text); paragraph spans must be computed on the
+    same text or position→paragraph mapping drifts.
+    """
+    try:
+        from jetcite.cleanup import preprocess_document_text
+    except ImportError:
+        lib = Path(__file__).parent / "lib"
+        if str(lib) not in sys.path:
+            sys.path.insert(0, str(lib))
+        try:
+            from jetcite.cleanup import preprocess_document_text
+        except ImportError:
+            return text
+    return preprocess_document_text(text)
+
+
+def _locate_occurrence(pp_paragraphs: list[dict], pp_text: str,
+                       position: int, cite_text: str) -> tuple[int | None, int]:
+    """Map a citation's character position to (paragraph num, occurrence index).
+
+    The occurrence index counts earlier appearances of cite_text within the
+    same paragraph, so the UI can highlight the exact instance even when the
+    identical string ("Id.", a repeated short cite) appears more than once.
+    """
+    for p in pp_paragraphs:
+        if p["start"] <= position < p["end"]:
+            segment = pp_text[p["start"]:position]
+            return p["num"], segment.count(cite_text) if cite_text else 0
+    return None, 0
 
 
 def _find_paragraph(paragraphs: list[dict], cite_text: str) -> dict | None:
@@ -209,6 +247,11 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
     # explicit caching step below needs web access.
     skill_dir = Path(__file__).parent
     sys.path.insert(0, str(skill_dir))
+    # The vendored jetcite must be importable before _disable_url_resolution
+    # touches jetcite modules (cite_check's own bootstrap runs too late).
+    lib_dir = skill_dir / "lib"
+    if str(lib_dir) not in sys.path:
+        sys.path.insert(1, str(lib_dir))
     try:
         saved = _disable_url_resolution()
 
@@ -240,6 +283,7 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
                 e for e in result
                 if not e.get("local_exists") and e.get("url")
                 and e.get("cite_type") in _CACHEABLE
+                and not e.get("is_repeat")
             ]
             if to_cache:
                 total = len(to_cache)
@@ -1016,7 +1060,10 @@ _JS = """\
       const paraEl = document.getElementById('para-' + d.para_num);
       if (paraEl) {
         paraEl.classList.add('active-para');
-        // Highlight the citation text
+        // Highlight the exact occurrence of the citation text. d.occurrence
+        // counts earlier appearances of the same string in this paragraph
+        // (repeated short cites, multiple Id.s); fall back to the first
+        // match if the nth isn't found in the rendered HTML.
         const escapedCite = esc(d.cite_text);
         const original = paraEl.innerHTML;
         const markerEnd = original.indexOf('</span>');
@@ -1024,10 +1071,18 @@ _JS = """\
           const cutpoint = markerEnd + 7;
           const before = original.slice(0, cutpoint);
           const after = original.slice(cutpoint);
-          paraEl.innerHTML = before + after.replace(
-            escapedCite,
-            '<span class="cite-hl">' + escapedCite + '</span>'
-          );
+          let at = -1, from = 0;
+          for (let n = 0; n <= (d.occurrence || 0); n++) {
+            at = after.indexOf(escapedCite, from);
+            if (at === -1) break;
+            from = at + escapedCite.length;
+          }
+          if (at === -1) at = after.indexOf(escapedCite);
+          if (at > -1) {
+            paraEl.innerHTML = before + after.slice(0, at) +
+              '<span class="cite-hl">' + escapedCite + '</span>' +
+              after.slice(at + escapedCite.length);
+          }
         }
         paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
@@ -1058,12 +1113,11 @@ _JS = """\
       wrap.className = 'local-ref-html';
       wrap.innerHTML = sourceHtml;
       srcBody.appendChild(wrap);
-      // Scroll to pinpoint anchor
+      // Scroll to pinpoint anchor (opinion ¶ only — page pinpoints like
+      // "at 363" have no [¶N] anchor and show the source from the top)
       var target = null;
-      if (d.pinpoint) {
-        // Opinion ¶ pinpoint
-        var pNum = (d.pinpoint.match(/\\d+/) || [''])[0];
-        if (pNum) target = wrap.querySelector('#pin-' + pNum);
+      if (d.pin_anchor) {
+        target = wrap.querySelector('#pin-' + d.pin_anchor);
       }
       if (!target && d.search_hint) {
         // Statute § section anchor
@@ -1343,21 +1397,36 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     via_map = via_map or {}
     # Build a de-duplicated map of local source HTML keyed by local_path.
     # Each citation references into this map by key, avoiding duplication.
+    # Pin/repeat entries carry no file of their own; their parent's path
+    # (parent_local_path) keys the same map.
     sources_map: dict[str, str] = {}  # local_path → rendered HTML
     for c in citations:
-        lp = c.get("local_path")
-        if lp and lp not in sources_map and c.get("local_exists"):
-            md = _read_local_markdown(lp)
-            if md:
-                sources_map[lp] = _md_to_html(md)
+        for lp, exists in ((c.get("local_path"), c.get("local_exists")),
+                           (c.get("parent_local_path"),
+                            c.get("parent_local_exists"))):
+            if lp and exists and lp not in sources_map:
+                md = _read_local_markdown(lp)
+                if md:
+                    sources_map[lp] = _md_to_html(md)
+
+    # Position→paragraph mapping happens on the same preprocessed text the
+    # scanner indexed; paragraph numbers are shared with the display split.
+    pp_text = _preprocess_like_scanner(opinion_text)
+    pp_paragraphs = _split_paragraphs(pp_text)
 
     # Enrich citation entries
     enriched = []
     for c in citations:
-        para = _find_paragraph(paragraphs, c["cite_text"])
+        para_num, occurrence = None, 0
+        if isinstance(c.get("position"), int):
+            para_num, occurrence = _locate_occurrence(
+                pp_paragraphs, pp_text, c["position"], c["cite_text"])
+        if para_num is None:
+            para = _find_paragraph(paragraphs, c["cite_text"])
+            para_num = para["num"] if para else None
         url = c.get("url") or ""
         # For ND opinions with local refs, derive the direct URL
-        lp = c.get("local_path")
+        lp = c.get("local_path") or c.get("parent_local_path")
         if lp and (not url or "?cit1=" in url):
             direct = _nd_direct_url(lp)
             if direct:
@@ -1366,8 +1435,16 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         pinpoint = c.get("pinpoint")
         viewer_path = viewers.get(url) if url else None
         search_term = _pinpoint_search_term(pinpoint) if pinpoint and viewer_path else ""
-        lp = c.get("local_path")
         has_source = lp is not None and lp in sources_map
+        # Anchor for scrolling the embedded source: opinion ¶ only — a page
+        # pinpoint ("at 363") has no [¶N] anchor in the markdown.
+        pin_anchor = None
+        if c.get("pin_paragraph"):
+            m = re.search(r"\d+", c["pin_paragraph"])
+            pin_anchor = m.group(0) if m else None
+        elif pinpoint and "¶" in pinpoint:
+            m = re.search(r"\d+", pinpoint)
+            pin_anchor = m.group(0) if m else None
         norm = c.get("normalized", c["cite_text"])
         via = via_map.get(_via_key(norm)) or via_map.get(_via_key(c["cite_text"]))
         enriched.append({
@@ -1377,9 +1454,16 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "antecedent_name": c.get("antecedent_name"),
             "url": url or None,
             "iframe_ok": host in _IFRAME_OK_DOMAINS,
-            "para_num": para["num"] if para else None,
+            "para_num": para_num,
+            "occurrence": occurrence,
+            "position": c.get("position"),
+            "is_repeat": bool(c.get("is_repeat")),
+            "parent_normalized": c.get("parent_normalized"),
+            "pin_warning": c.get("pin_warning"),
+            "parallel_cite": c.get("parallel_cite"),
             "search_hint": c.get("search_hint", ""),
             "pinpoint": pinpoint,
+            "pin_anchor": pin_anchor,
             "viewer_path": viewer_path,
             "search_term": search_term,
             "source_key": lp if has_source else None,
