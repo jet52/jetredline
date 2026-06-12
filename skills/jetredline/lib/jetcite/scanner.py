@@ -119,18 +119,28 @@ def _looks_like_pinpoint_or_empty(s: str) -> bool:
 def _name_keys(name: str) -> set[str]:
     """Lookup keys for a full cite's antecedent name (lowercased).
 
-    Keys: the whole name, the first party (text before " v. "), and the first
-    party's first word when it is a plausible surname (≥3 chars) — so a full
-    cite named "Goss Int'l Corp. v. Man Roland" answers to "goss".
+    Keys: the whole name, then for each party (either side of " v. ") the
+    party itself plus its first and last words when they are plausible
+    surnames (≥3 chars). "Goss Int'l Corp. v. Man Roland" answers to
+    "goss"; the second party matters for criminal captions — the Bluebook
+    short form of "State v. Gonzalez" is "Gonzalez" — and individual
+    parties shorten to the surname, i.e. the last word ("LaNora R.
+    Himmerick" → "himmerick"). False-positive control stays on the pin
+    side: a candidate must already look like a name and carry explicit
+    pin syntax before these keys are ever consulted.
     """
     import re
     keys = {name.lower()}
-    first_party = re.split(r"\s+v\.?\s", name, maxsplit=1)[0].strip().rstrip(",")
-    if first_party:
-        keys.add(first_party.lower())
-        first_word = first_party.split()[0].rstrip(".,").lower()
-        if len(first_word) >= 3:
-            keys.add(first_word)
+    for party in re.split(r"\s+v\.?\s", name, maxsplit=1):
+        party = party.strip().rstrip(",.")
+        if not party:
+            continue
+        keys.add(party.lower())
+        words = party.split()
+        for word in (words[0], words[-1]):
+            word = word.rstrip(".,").lower()
+            if len(word) >= 3:
+                keys.add(word)
     return keys
 
 
