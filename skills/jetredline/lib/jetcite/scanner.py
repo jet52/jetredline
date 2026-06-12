@@ -192,6 +192,38 @@ def _resolve_pin_cites(
                 best = c
         return best
 
+    def _is_neutral(c: Citation) -> bool:
+        comp = c.components
+        return "year" in comp and "number" in comp and "reporter" not in comp
+
+    def parallel_member_for(pin: Citation, parent: Citation, pos: int) -> Citation:
+        """Pick the parallel-group member whose pagination matches the pin.
+
+        A parallel pair ("2024 ND 4, ¶ 6, 1 N.W.3d 919") is one authority,
+        but the textually nearest member is the trailing reporter cite —
+        linking there hands the pin the reporter's sources instead of the
+        primary's. Bare Id. and ¶ pins are anchored in the medium-neutral
+        (or U.S. Reports) pagination, so they prefer that member; page pins
+        ("Id. at 921") reference reporter pagination, so they prefer a
+        reporter member (U.S. Reports first for SCOTUS pairs). Falls back
+        to the originally resolved parent.
+        """
+        if not parent.parallel_cites:
+            return parent
+        members = [parent]
+        for norm in parent.parallel_cites:
+            m = nearest_preceding(by_norm.get(norm, []), pos)
+            if m is not None:
+                members.append(m)
+        if pin.pin_page:
+            pool = [m for m in members if not _is_neutral(m)]
+            pool.sort(key=lambda m: 0 if m.components.get("reporter") == "U.S." else 1)
+        else:  # bare Id. or ¶ pin
+            pool = [m for m in members
+                    if _is_neutral(m) or m.components.get("reporter") == "U.S."]
+            pool.sort(key=lambda m: 0 if _is_neutral(m) else 1)
+        return pool[0] if pool else parent
+
     def ambiguous_string_cite(nearest: Citation, pos: int) -> bool:
         """True when the citation preceding ``pos`` sits in a string cite, so
         an Id. reference to it is ambiguous. Parallel pairs are one authority,
@@ -246,7 +278,7 @@ def _resolve_pin_cites(
             if parent is None:
                 continue  # unresolvable bare name — drop
             pin.antecedent_name = pin.components["name"]
-            _link_pin(pin, parent)
+            _link_pin(pin, parallel_member_for(pin, parent, start))
             resolved.append(pin)
 
         elif shape == "id":
@@ -263,7 +295,7 @@ def _resolve_pin_cites(
                 if ambiguous_string_cite(nearest_full, start):
                     resolved.append(pin)  # kept unresolved — ambiguous antecedent
                 else:
-                    _link_pin(pin, nearest_full)
+                    _link_pin(pin, parallel_member_for(pin, nearest_full, start))
                     resolved.append(pin)
             else:
                 # No preceding citation at all: explicit pin syntax is kept as
