@@ -357,3 +357,162 @@ class TestIframeOkDomains:
 
     def test_justia_blocked(self):
         assert "supreme.justia.com" not in _IFRAME_OK_DOMAINS
+
+
+# ---------------------------------------------------------------------------
+# Occurrence-level review (positions, grouping, ndlaw metadata, passages)
+# ---------------------------------------------------------------------------
+
+def _data(html_str):
+    m = re.search(r"const DATA = (\[.*?\]);\s*\n", html_str, re.DOTALL)
+    return json.loads(m.group(1))
+
+
+class TestOccurrenceReview:
+    OPINION = (
+        "[¶1] We held the statute unambiguous. Olson v. Estate of Olson, "
+        "2024 ND 156, ¶ 7, 10 N.W.3d 500.\n\n"
+        "[¶2] Later discussion. See Olson, 2024 ND 156, ¶ 12.\n\n"
+        "[¶3] Also 2024 ND 156 at ¶ 21. Then Id. ¶ 23. Id. ¶ 23.\n"
+    )
+
+    @pytest.fixture
+    def entries(self, tmp_path):
+        from cite_check import scan_opinion
+        return scan_opinion(self.OPINION, refs_dir=str(tmp_path),
+                            cache_missing=False)
+
+    def test_every_occurrence_is_an_entry(self, entries):
+        texts = [e["cite_text"] for e in entries]
+        assert "2024 ND 156, ¶ 12" in texts        # comma-form repeat
+        assert "2024 ND 156 at ¶ 21" in texts      # at-form repeat
+        assert texts.count("Id. ¶ 23") == 2        # both Id. occurrences
+
+    def test_positions_map_to_paragraphs_and_occurrences(self, entries, tmp_path):
+        from cite_review import _build_html, _split_paragraphs
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", entries, paras, "k", self.OPINION)
+        data = _data(html_str)
+        by_text = {}
+        for d in data:
+            by_text.setdefault(d["cite_text"], []).append(d)
+        assert by_text["2024 ND 156, ¶ 12"][0]["para_num"] == 2
+        ids = by_text["Id. ¶ 23"]
+        assert [d["para_num"] for d in ids] == [3, 3]
+        assert sorted(d["occurrence"] for d in ids) == [0, 1]
+
+    def test_repeats_and_pins_group_under_authority(self, entries):
+        from cite_review import _build_html, _dedup_parallel_citations, _split_paragraphs
+        kept, alias = _dedup_parallel_citations(entries)
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", kept, paras, "k", self.OPINION,
+                               authority_alias=alias)
+        data = _data(html_str)
+        authorities = {d["authority"] for d in data}
+        assert authorities == {"2024 ND 156"}
+
+    def test_parallel_alias_returned(self, entries):
+        from cite_review import _dedup_parallel_citations
+        kept, alias = _dedup_parallel_citations(entries)
+        assert alias.get("10 N.W.3d 500") == "2024 ND 156"
+        assert all(e["normalized"] != "10 N.W.3d 500" for e in kept)
+
+    def test_pin_inherits_parent_source(self, entries, tmp_path):
+        from cite_review import _build_html, _split_paragraphs
+        opin = tmp_path / "opin" / "ND" / "2024"
+        opin.mkdir(parents=True)
+        (opin / "2024ND156.md").write_text("[¶ 23] Cited text.", encoding="utf-8")
+        from cite_check import scan_opinion
+        entries = scan_opinion(self.OPINION, refs_dir=str(tmp_path),
+                               cache_missing=False)
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", entries, paras, "k", self.OPINION)
+        data = _data(html_str)
+        id_entries = [d for d in data if d["cite_text"] == "Id. ¶ 23"]
+        assert all(d["source_key"] for d in id_entries)
+        assert all(d["pin_anchor"] == "23" for d in id_entries)
+
+
+class TestSourcesMeta:
+    def test_direct_url_overrides_search_url(self, sample_opinion):
+        from cite_review import _build_html, _split_paragraphs, _via_key
+        entries = [{
+            "cite_text": "2023 ND 219", "cite_type": "neutral_cite",
+            "normalized": "2023 ND 219",
+            "url": ("https://www.ndcourts.gov/supreme-court/opinions"
+                    "?cit1=2023&citType=ND&cit2=219&pageSize=10&sortOrder=1"),
+        }]
+        meta = {_via_key("2023 ND 219"): {
+            "case_name": "Tracey v. Tracey",
+            "url": "https://www.ndcourts.gov/supreme-court/opinions/99999",
+            "url_source": "ndcourts.gov", "via": "ndlaw",
+        }}
+        paras = _split_paragraphs(sample_opinion)
+        html_str = _build_html("t", entries, paras, "k", sample_opinion,
+                               sources_meta=meta)
+        d = _data(html_str)[0]
+        assert d["url"] == "https://www.ndcourts.gov/supreme-court/opinions/99999"
+        assert d["case_name"] == "Tracey v. Tracey"
+        assert d["via"] == "ndlaw"
+
+    def test_via_json_outranks_meta_via(self, sample_opinion):
+        from cite_review import _build_html, _split_paragraphs, _via_key
+        entries = [{"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
+                    "normalized": "2023 ND 219", "url": None}]
+        meta = {_via_key("2023 ND 219"): {"via": "ndlaw"}}
+        via = {_via_key("2023 ND 219"): "ndcourts-mcp"}
+        paras = _split_paragraphs(sample_opinion)
+        html_str = _build_html("t", entries, paras, "k", sample_opinion,
+                               sources_meta=meta, via_map=via)
+        assert _data(html_str)[0]["via"] == "ndcourts-mcp"
+
+
+class TestPassages:
+    def test_passage_attached_by_page(self, sample_opinion):
+        from cite_review import _build_html, _split_paragraphs
+        entries = [{
+            "cite_text": "491 F.3d at 363", "cite_type": "pin_cite",
+            "normalized": "491 F.3d at 363",
+            "parent_normalized": "491 F.3d 355",
+            "pin_page": "363", "url": None,
+        }]
+        passages = [{"cite": "491 F.3d 355", "page": "363",
+                     "text": "The exact passage."}]
+        paras = _split_paragraphs(sample_opinion)
+        html_str = _build_html("t", entries, paras, "k", sample_opinion,
+                               passages=passages)
+        assert _data(html_str)[0]["passage"] == "The exact passage."
+
+    def test_no_passage_when_full_source_embedded(self, sample_opinion, tmp_path):
+        from cite_review import _build_html, _split_paragraphs
+        ref = tmp_path / "ref.md"
+        ref.write_text("[¶ 5] Full text here.", encoding="utf-8")
+        entries = [{
+            "cite_text": "2023 ND 219, ¶ 5", "cite_type": "neutral_cite",
+            "normalized": "2023 ND 219", "pinpoint": "¶ 5", "url": None,
+            "local_path": str(ref), "local_exists": True,
+        }]
+        passages = [{"cite": "2023 ND 219", "paragraph": "5", "text": "p"}]
+        paras = _split_paragraphs(sample_opinion)
+        html_str = _build_html("t", entries, paras, "k", sample_opinion,
+                               passages=passages)
+        d = _data(html_str)[0]
+        assert d["source_key"] and d["passage"] is None
+
+
+class TestPdfjsViewerGate:
+    def test_search_url_rejected(self):
+        from cite_review import _needs_pdfjs_viewer
+        url = ("https://www.ndcourts.gov/supreme-court/opinions"
+               "?cit1=2025&citType=ND&cit2=130&pageSize=10&sortOrder=1")
+        assert not _needs_pdfjs_viewer(url, "¶ 12")
+
+    def test_direct_opinion_url_accepted(self):
+        from cite_review import _needs_pdfjs_viewer
+        url = "https://www.ndcourts.gov/supreme-court/opinions/192393"
+        assert _needs_pdfjs_viewer(url, "¶ 12")
+
+    def test_no_pinpoint_rejected(self):
+        from cite_review import _needs_pdfjs_viewer
+        url = "https://www.ndcourts.gov/supreme-court/opinions/192393"
+        assert not _needs_pdfjs_viewer(url, None)
