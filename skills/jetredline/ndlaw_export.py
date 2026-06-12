@@ -39,7 +39,7 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).parent
 sys.path.insert(0, str(SKILL_DIR / "lib"))
 
-DEFAULT_DB = "/Users/jerod/code/ndcourts-mcp/opinions.db"
+DEFAULT_DB = "~/code/ndcourts-mcp/opinions.db"
 COURTLISTENER_BASE = "https://www.courtlistener.com"
 
 # Citations the ndlaw corpus can resolve: ND neutral cites and the
