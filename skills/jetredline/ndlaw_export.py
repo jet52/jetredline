@@ -326,7 +326,9 @@ def main():
     if not (args.opinion or args.cite_json or args.cites):
         ap.error("provide --opinion, --cite-json, or --cites")
 
-    args.refs_dir = str(Path(args.refs_dir).expanduser())
+    # Resolve to absolute: jetcite's local-source attach builds file:// URIs,
+    # which require absolute paths.
+    args.refs_dir = str(Path(args.refs_dir).expanduser().resolve())
     cites = _collect_cites(args)
     if not cites:
         print("No corpus-eligible ND citations found.", file=sys.stderr)

@@ -501,8 +501,82 @@ _MD_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 _MD_BLOCKQUOTE_LINE = re.compile(r"^>\s?(.*)", re.MULTILINE)
 
 
+_FM_KEY_RE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
+
+
+def _split_frontmatter(md: str) -> tuple[dict, str]:
+    """Split a leading YAML frontmatter block off corpus-exported markdown.
+
+    Parses only the simple subset the ndlaw corpus emits: top-level
+    ``key: value`` scalars (optionally double-quoted) and one-level lists
+    of scalars. Returns ({}, md) untouched when no block is present or a
+    line doesn't parse — never guesses.
+    """
+    lines = md.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return {}, md
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
+        return {}, md
+    meta: dict = {}
+    key = None
+    for raw in lines[1:end]:
+        item = raw.strip()
+        if not item:
+            continue
+        if item.startswith("- ") and key is not None and isinstance(meta.get(key), list):
+            meta[key].append(item[2:].strip().strip('"'))
+            continue
+        m = _FM_KEY_RE.match(item)
+        if not m:
+            return {}, md
+        key = m.group(1)
+        val = m.group(2).strip().strip('"')
+        # A bare "key:" introduces a list; a valued line is a scalar.
+        meta[key] = val if val else []
+    return meta, "\n".join(lines[end + 1:])
+
+
+def _frontmatter_card(meta: dict) -> str:
+    """Render parsed frontmatter as a metadata header card for the source pane."""
+    title = meta.get("title") or meta.get("title_full")
+    if not title:
+        return ""
+    parts = ['<div class="src-meta-card">',
+             f'<div class="src-meta-title">{html.escape(str(title))}</div>']
+    full = meta.get("title_full")
+    if full and full != title:
+        parts.append(f'<div class="src-meta-line">{html.escape(str(full))}</div>')
+    court_line = " · ".join(
+        str(v) for v in (meta.get("court"), meta.get("date_filed"),
+                         meta.get("docket_number")) if v)
+    if court_line:
+        parts.append(f'<div class="src-meta-line">{html.escape(court_line)}</div>')
+    cites = meta.get("citations")
+    if isinstance(cites, str):
+        cites = [cites] if cites else []
+    if cites:
+        parts.append('<div class="src-meta-line">'
+                     + html.escape(" · ".join(str(c) for c in cites)) + '</div>')
+    judges = meta.get("judges")
+    if judges:
+        parts.append('<div class="src-meta-line">Judges: '
+                     + html.escape(str(judges)) + '</div>')
+    parts.append('</div>')
+    return "\n".join(parts)
+
+
 def _md_to_html(md: str) -> str:
-    """Convert legal markdown to HTML with anchors for pinpoint navigation."""
+    """Convert legal markdown to HTML with anchors for pinpoint navigation.
+
+    A leading YAML frontmatter block (ndlaw corpus court-archive exports)
+    renders as a metadata header card instead of literal text.
+    """
+    frontmatter, md = _split_frontmatter(md)
     lines = md.split("\n")
     out: list[str] = []
     in_blockquote = False
@@ -579,7 +653,8 @@ def _md_to_html(md: str) -> str:
     if in_blockquote:
         out.append("</blockquote>")
 
-    return "\n".join(out)
+    card = _frontmatter_card(frontmatter)
+    return (card + "\n" if card else "") + "\n".join(out)
 
 
 def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path,
@@ -918,6 +993,17 @@ main { display:flex; flex:1; overflow:hidden; }
   line-height:1.85; color:#1a1a1a; background:#fdfdf8;
   margin:0;
 }
+.src-meta-card {
+  font-family:system-ui,sans-serif;
+  background:#f2f1e8; border:1px solid #ddd9c4; border-radius:6px;
+  padding:12px 16px; margin-bottom:20px;
+}
+.src-meta-card .src-meta-title {
+  font-size:16px; font-weight:650; color:#1a1a2e; margin-bottom:2px;
+}
+.src-meta-card .src-meta-line {
+  font-size:12px; color:#555; line-height:1.6;
+}
 .local-ref-html h1, .local-ref-html h2, .local-ref-html h3, .local-ref-html h4 {
   color:#1a1a2e; margin:1.4em 0 0.5em; font-family:system-ui,sans-serif;
 }
@@ -1230,8 +1316,10 @@ _JS = """\
         target = wrap.querySelector('#pin-' + d.pin_anchor);
       }
       if (!target && d.search_hint) {
-        // Statute § section anchor
-        target = wrap.querySelector('#sec-' + d.search_hint);
+        // Statute § section anchor. CSS.escape because case-cite hints
+        // contain spaces/dots that would make the selector invalid.
+        try { target = wrap.querySelector('#sec-' + CSS.escape(d.search_hint)); }
+        catch (e) { target = null; }
       }
       if (target) {
         target.classList.add('pinpoint-active');
@@ -1837,6 +1925,9 @@ def main():
         sys.exit(1)
 
     cite_json_path = Path(args.cite_json).expanduser() if args.cite_json else None
+    # Resolve to absolute: jetcite's local-source attach builds file:// URIs,
+    # which require absolute paths.
+    args.refs_dir = str(Path(args.refs_dir).expanduser().resolve())
     citations = _load_citations(opinion_path, cite_json_path, args.refs_dir,
                                 local_only=args.local_only)
 

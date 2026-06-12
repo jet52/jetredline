@@ -516,3 +516,66 @@ class TestPdfjsViewerGate:
         from cite_review import _needs_pdfjs_viewer
         url = "https://www.ndcourts.gov/supreme-court/opinions/192393"
         assert not _needs_pdfjs_viewer(url, None)
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter header card (pre-1997 court-archive corpus exports)
+# ---------------------------------------------------------------------------
+
+class TestFrontmatterCard:
+    FM_TEXT = (
+        '---\n'
+        'title: "State v. Himmerick"\n'
+        'title_full: "STATE of North Dakota v. LaNora R. HIMMERICK"\n'
+        'court: "North Dakota Supreme Court"\n'
+        'date_filed: 1993-04-27\n'
+        'citations:\n'
+        ' - "499 N.W.2d 568"\n'
+        ' - "1993 WL 129240"\n'
+        'judges: "Neumann, Vande Walle"\n'
+        'docket_number: "Cr. 920173"\n'
+        '---\n'
+        '\n'
+        'IN THE SUPREME COURT\n'
+        '\n'
+        'Opinion body text here.\n'
+    )
+
+    def test_split_frontmatter(self):
+        from cite_review import _split_frontmatter
+        meta, body = _split_frontmatter(self.FM_TEXT)
+        assert meta["title"] == "State v. Himmerick"
+        assert meta["citations"] == ["499 N.W.2d 568", "1993 WL 129240"]
+        assert meta["date_filed"] == "1993-04-27"
+        assert "---" not in body
+        assert "Opinion body text" in body
+
+    def test_card_rendered_not_raw(self):
+        from cite_review import _md_to_html
+        out = _md_to_html(self.FM_TEXT)
+        assert 'src-meta-card' in out
+        assert 'State v. Himmerick' in out
+        assert '499 N.W.2d 568 · 1993 WL 129240' in out
+        assert 'Judges: Neumann' in out
+        # the raw YAML must not leak into the rendered body
+        assert 'title_full:' not in out
+        assert '<p>\n---' not in out
+
+    def test_no_frontmatter_passthrough(self):
+        from cite_review import _md_to_html, _split_frontmatter
+        text = "IN THE SUPREME COURT\n\n[¶ 1] Body."
+        meta, body = _split_frontmatter(text)
+        assert meta == {} and body == text
+        assert 'src-meta-card' not in _md_to_html(text)
+
+    def test_malformed_frontmatter_left_untouched(self):
+        from cite_review import _split_frontmatter
+        text = "---\nnot yaml at all !!\n---\nBody."
+        meta, body = _split_frontmatter(text)
+        assert meta == {} and body == text
+
+    def test_unterminated_fence_left_untouched(self):
+        from cite_review import _split_frontmatter
+        text = "---\ntitle: x\nno closing fence"
+        meta, body = _split_frontmatter(text)
+        assert meta == {} and body == text
