@@ -193,6 +193,10 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
             entry["pin_page"] = c.pin_page
         if c.pin_paragraph:
             entry["pin_paragraph"] = c.pin_paragraph
+        if c.components.get("pinpoint_inherited"):
+            # Bare Id. — pinpoint adopted from the antecedent cite, not
+            # written by the drafter.
+            entry["pinpoint_inherited"] = True
 
     rel = citation_path(c)
     if rel is not None:

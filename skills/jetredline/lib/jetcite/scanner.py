@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from jetcite.casename import extract_antecedent_name
@@ -157,6 +158,43 @@ def _link_pin(pin: Citation, parent: Citation) -> None:
         "parent_position", parent.position)
 
 
+_PARA_PINPOINT_RE = re.compile(r"¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)")
+_PAGE_PINPOINT_RE = re.compile(r"(?:^|at\s+)(\d+(?:\s*[-–]\s*\d+)?)")
+
+
+def _inherit_pinpoint(pin: Citation, antecedent: Citation) -> None:
+    """A bare Id. adopts the antecedent's pinpoint.
+
+    Bluebook: "Id." with no pinpoint of its own means the same authority
+    at the same page or paragraph as the immediately preceding citation
+    ("2024 ND 4, ¶ 6 ... Id." pins ¶ 6). The inherited pinpoint is marked
+    in components so verification can distinguish it from one the drafter
+    wrote out.
+    """
+    if pin.pin_page or pin.pin_paragraph:
+        return
+    if antecedent.is_pin_cite:
+        para, page = antecedent.pin_paragraph, antecedent.pin_page
+    else:
+        para = page = None
+        pp = antecedent.pinpoint or ""
+        m = _PARA_PINPOINT_RE.search(pp)
+        if m:
+            para = m.group(1)
+        else:
+            m = _PAGE_PINPOINT_RE.search(pp.strip())
+            if m:
+                page = m.group(1)
+    if para:
+        pin.pin_paragraph = para
+        pin.pinpoint = f"¶ {para}"
+    elif page:
+        pin.pin_page = page
+        pin.pinpoint = f"at {page}"
+    if para or page:
+        pin.components["pinpoint_inherited"] = True
+
+
 def _resolve_pin_cites(
     pin_candidates: list[Citation],
     citations: list[Citation],
@@ -300,12 +338,20 @@ def _resolve_pin_cites(
                 # Chained Id. — inherit the prior pin's parent transitively.
                 if nearest_pin.parent_normalized is not None:
                     _link_pin(pin, nearest_pin)
+                    _inherit_pinpoint(pin, nearest_pin)
                 resolved.append(pin)
             elif nearest_full is not None:
                 if ambiguous_string_cite(nearest_full, start):
                     resolved.append(pin)  # kept unresolved — ambiguous antecedent
                 else:
-                    _link_pin(pin, parallel_member_for(pin, nearest_full, start))
+                    member = parallel_member_for(pin, nearest_full, start)
+                    _link_pin(pin, member)
+                    # Bare Id.: same pinpoint as the antecedent. The ¶
+                    # usually rides the parallel group's neutral member;
+                    # fall back to the textually nearest cite.
+                    _inherit_pinpoint(pin, member)
+                    if not (pin.pin_page or pin.pin_paragraph):
+                        _inherit_pinpoint(pin, nearest_full)
                     resolved.append(pin)
             else:
                 # No preceding citation at all: explicit pin syntax is kept as
