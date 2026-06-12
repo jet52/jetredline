@@ -76,10 +76,11 @@ def _citation_path(citation: Citation) -> Path | None:
 
     Returns None if the citation type/components don't map to a known path.
     """
-    # Pin cites never get their own refs files — they inherit the parent's
-    # sources. Without this guard a reporter pin's volume/reporter components
-    # would map to the parent's path and a fetch could overwrite it.
-    if citation.is_pin_cite:
+    # Pin cites and repeat occurrences never get their own refs files — they
+    # inherit the parent's sources. Without this guard a reporter pin's (or
+    # repeat's) volume/reporter components would map to the parent's path and
+    # a fetch could overwrite it.
+    if citation.is_pin_cite or citation.is_repeat:
         return None
 
     c = citation.components

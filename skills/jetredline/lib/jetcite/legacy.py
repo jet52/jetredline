@@ -174,7 +174,16 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
         "search_hint": search_hint(c, ct),
         "pinpoint": c.pinpoint,
         "antecedent_name": c.antecedent_name,
+        # Character offset into preprocess_document_text(text) — consumers
+        # mapping positions back to the document must preprocess identically.
+        "position": c.position,
     }
+
+    if c.is_repeat:
+        # Repeat occurrences carry no refs file of their own; consumers
+        # follow parent_normalized to the first-occurrence entry.
+        entry["is_repeat"] = True
+        entry["parent_normalized"] = c.parent_normalized
 
     if c.is_pin_cite:
         # Pin cites carry no refs file of their own; consumers follow
@@ -198,17 +207,27 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
 
 
 def add_parallel_info(entries: list[dict], citations: list[Citation]) -> None:
-    """Add parallel_cite and preferred fields to legacy entries."""
-    norm_to_entry = {e["normalized"]: e for e in entries}
+    """Add parallel_cite and preferred fields to legacy entries.
 
-    for cite in citations:
+    ``entries`` must be the element-wise conversion of ``citations``
+    (same order). Repeat occurrences get their own parallel_cite link —
+    occurrence-level data — but are excluded from the normalized-form map
+    and the preferred-source marking, which are authority-level concepts
+    that belong to the first occurrence.
+    """
+    norm_to_entry = {
+        e["normalized"]: e for e in entries
+        if not e.get("is_repeat") and e.get("cite_type") != PIN_CITE_TYPE
+    }
+
+    for entry, cite in zip(entries, citations):
         if not cite.parallel_cites:
-            continue
-        entry = norm_to_entry.get(cite.normalized)
-        if entry is None:
             continue
 
         entry["parallel_cite"] = cite.parallel_cites[0]
+
+        if cite.is_repeat or cite.is_pin_cite:
+            continue
 
         if entry.get("local_exists"):
             entry["preferred"] = True

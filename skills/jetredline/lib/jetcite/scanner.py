@@ -302,6 +302,7 @@ def scan_text(
     refs_dir: Path | None = None,
     resolve: bool = True,
     include_pin_cites: bool = False,
+    include_occurrences: bool = False,
 ) -> list[Citation]:
     """Scan text for all citations, deduplicated by normalized form.
 
@@ -320,6 +321,18 @@ def scan_text(
     ``parent_normalized`` (None when unresolved) and inheriting the parent's
     sources. Pin cites never enter dedup and never affect the full-citation
     entries; the default output is unchanged.
+
+    If include_occurrences is True, repeat full-form CASE citations — the
+    second and later appearances of a normalized form, e.g. a short cite
+    written out as "Olson, 2024 ND 156, ¶ 12" — are returned as additional
+    entries with ``is_repeat=True`` and ``parent_normalized`` linking back
+    to the first occurrence. Repeats inherit the parent's sources, never
+    resolve URLs or map to refs-cache files of their own, and never affect
+    the deduplicated entries; the default output is unchanged.
+
+    Citation positions index into ``preprocess_document_text(text)``, not
+    the raw input — consumers mapping positions back to the document must
+    preprocess identically.
     """
     # Strip page furniture up front so a citation split across a page break
     # rejoins, and so matcher positions stay aligned with the text the
@@ -328,6 +341,7 @@ def scan_text(
     text = preprocess_document_text(text)
 
     all_citations: list[Citation] = []
+    repeats: list[Citation] = []
     pin_candidates: list[Citation] = []
     seen: set[str] = set()
 
@@ -341,17 +355,39 @@ def scan_text(
             if cite.normalized not in seen:
                 seen.add(cite.normalized)
                 all_citations.append(cite)
+            elif include_occurrences and cite.cite_type == CitationType.CASE:
+                cite.is_repeat = True
+                repeats.append(cite)
 
     # Sort by position in source text
     all_citations.sort(key=lambda c: c.position)
 
-    # Detect parallel citations
+    # Detect parallel citations (authority-level: first occurrences only)
     _detect_parallel_citations(all_citations, text)
 
-    # Attach the governing case name to each case citation (best-effort)
-    _detect_antecedent_names(all_citations, text)
+    occurrences = all_citations
+    if repeats:
+        repeats.sort(key=lambda c: c.position)
+        first_by_norm: dict[str, Citation] = {}
+        for c in all_citations:
+            first_by_norm.setdefault(c.normalized, c)
+        for rep in repeats:
+            parent = first_by_norm.get(rep.normalized)
+            if parent is not None:
+                rep.parent_normalized = parent.normalized
+                rep.components["parent_position"] = parent.position
+        # Link adjacent repeat pairs ("2024 ND 156, ¶ 12, 10 N.W.3d 500")
+        # so consumers can fold a restated parallel into one occurrence.
+        _detect_parallel_citations(repeats, text)
+        occurrences = sorted(all_citations + repeats, key=lambda c: c.position)
 
-    # Resolve ND opinion URLs to direct PDF links
+    # Attach the governing case name to each case citation (best-effort).
+    # Run over the full occurrence list so the backward-search window for
+    # each cite is clamped at the true preceding citation.
+    _detect_antecedent_names(occurrences, text)
+
+    # Resolve ND opinion URLs to direct PDF links (first occurrences only;
+    # repeats inherit the resolved sources below)
     if resolve:
         resolve_nd_opinion_urls(all_citations)
 
@@ -359,12 +395,15 @@ def scan_text(
     if refs_dir is not None:
         _apply_cache(all_citations, refs_dir)
 
-    if include_pin_cites:
-        pins = _resolve_pin_cites(pin_candidates, all_citations, text)
-        _inherit_pin_sources(pins, all_citations)
-        return sorted(all_citations + pins, key=lambda c: c.position)
+    if repeats:
+        _inherit_pin_sources(repeats, all_citations)
 
-    return all_citations
+    if include_pin_cites:
+        pins = _resolve_pin_cites(pin_candidates, occurrences, text)
+        _inherit_pin_sources(pins, occurrences)
+        return sorted(occurrences + pins, key=lambda c: c.position)
+
+    return occurrences
 
 
 def lookup(

@@ -49,7 +49,8 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = False,
-                 include_pin_cites: bool = True) -> list[dict]:
+                 include_pin_cites: bool = True,
+                 include_occurrences: bool = True) -> list[dict]:
     """Scan opinion text for all citations. Returns legacy-format dicts.
 
     If cache_missing is True, fetches and caches all case citations that
@@ -62,17 +63,26 @@ def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = Fals
     file of their own ("pin_cite" is not in CASE_TYPES, so the cache loop
     skips them); verification reads the parent's cached opinion via
     parent_local_path / parent_local_exists.
+
+    Repeat full-form case cites — second and later appearances, e.g. a short
+    cite written out as "Olson, 2024 ND 156, ¶ 12" — appear as entries with
+    is_repeat=True linked to the first occurrence via parent_normalized, so
+    each proposition and pinpoint is individually verifiable. Like pins,
+    repeats carry no local file of their own and are skipped by the cache
+    loop; they get parent_local_path / parent_local_exists instead.
     """
     refs = Path(refs_dir).expanduser()
-    citations = scan_text(text, refs_dir=refs, include_pin_cites=include_pin_cites)
+    citations = scan_text(text, refs_dir=refs, include_pin_cites=include_pin_cites,
+                          include_occurrences=include_occurrences)
 
     entries = [to_legacy_dict(c, refs) for c in citations]
     add_parallel_info(entries, citations)
 
     if cache_missing:
-        norm_to_cite = {c.normalized: c for c in citations}
+        norm_to_cite = {c.normalized: c for c in citations if not c.is_repeat}
         for entry in entries:
             if (entry.get("cite_type") in CASE_TYPES
+                    and not entry.get("is_repeat")
                     and not entry.get("local_exists")
                     and entry.get("url")):
                 cite = norm_to_cite.get(entry["normalized"])
@@ -83,36 +93,42 @@ def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = Fals
                     entry["local_path"] = str(cached)
                     entry["local_exists"] = True
 
-    annotate_pin_cites(entries)
+    annotate_short_forms(entries)
     return entries
 
 
-def annotate_pin_cites(entries: list[dict]) -> None:
-    """Attach parent context to pin-cite entries.
+def annotate_short_forms(entries: list[dict]) -> None:
+    """Attach parent context to pin-cite and repeat-occurrence entries.
 
-    Resolved pins get ``parent_local_path``/``parent_local_exists`` copied
-    from the parent entry so Pass 3B reads the parent's cached opinion when
-    verifying the pin page/paragraph. Unresolved pins get ``pin_warning`` —
-    an explicit short form with no matching antecedent is a drafting defect
-    worth surfacing in the redline.
+    Resolved pins and repeats get ``parent_local_path``/``parent_local_exists``
+    copied from the first-occurrence entry so Pass 3B reads the parent's
+    cached opinion when verifying the page/paragraph. Unresolved pins get
+    ``pin_warning`` — an explicit short form with no matching antecedent is
+    a drafting defect worth surfacing in the redline.
     """
     by_norm = {}
     for e in entries:
-        if e["cite_type"] != "pin_cite":
+        if e["cite_type"] != "pin_cite" and not e.get("is_repeat"):
             by_norm.setdefault(e["normalized"], e)
     for e in entries:
-        if e["cite_type"] != "pin_cite":
+        is_pin = e["cite_type"] == "pin_cite"
+        if not is_pin and not e.get("is_repeat"):
             continue
         parent_norm = e.get("parent_normalized")
         if parent_norm is None:
-            e["pin_warning"] = (
-                "unresolved short form: no earlier full citation matches"
-            )
+            if is_pin:
+                e["pin_warning"] = (
+                    "unresolved short form: no earlier full citation matches"
+                )
             continue
         parent = by_norm.get(parent_norm)
         if parent is not None:
             e["parent_local_path"] = parent.get("local_path")
             e["parent_local_exists"] = parent.get("local_exists", False)
+
+
+# Backward-compatible alias (pre-occurrence name)
+annotate_pin_cites = annotate_short_forms
 
 
 # ---------------------------------------------------------------------------
