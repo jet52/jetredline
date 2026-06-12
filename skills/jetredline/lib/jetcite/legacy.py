@@ -45,6 +45,11 @@ AUTHORITY_TYPES = frozenset({
     "statute", "statute_chapter", "regulation", "constitution", "court_rule",
 })
 
+# Pin-cite short forms ("491 F.3d at 363", "Id. ¶ 14"). Deliberately NOT in
+# CASE_TYPES: consumer auto-cache loops must skip pins — they inherit the
+# parent's sources and never get their own refs files.
+PIN_CITE_TYPE = "pin_cite"
+
 
 def legacy_cite_type(c: Citation) -> str:
     """Map a jetcite Citation to a legacy cite_type string.
@@ -52,6 +57,9 @@ def legacy_cite_type(c: Citation) -> str:
     Uses CitationType, jurisdiction, and components to produce a generic
     classification string used for agent routing and display.
     """
+    if c.is_pin_cite:
+        return PIN_CITE_TYPE
+
     if c.cite_type == CitationType.CASE:
         # Neutral citations: have year+number, no reporter
         if "year" in c.components and "number" in c.components and "reporter" not in c.components:
@@ -167,6 +175,15 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
         "pinpoint": c.pinpoint,
         "antecedent_name": c.antecedent_name,
     }
+
+    if c.is_pin_cite:
+        # Pin cites carry no refs file of their own; consumers follow
+        # parent_normalized to the parent entry (None = unresolved short form).
+        entry["parent_normalized"] = c.parent_normalized
+        if c.pin_page:
+            entry["pin_page"] = c.pin_page
+        if c.pin_paragraph:
+            entry["pin_paragraph"] = c.pin_paragraph
 
     rel = citation_path(c)
     if rel is not None:

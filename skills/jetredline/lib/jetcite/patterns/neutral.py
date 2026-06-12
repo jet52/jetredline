@@ -18,9 +18,10 @@ from jetcite.sources.ndcourts import nd_opinion_url
 _WS = r'(?:[^\S\n]*\n[^\S\n]*|[^\S\n]+)'
 
 # ND neutral: 2024 ND 156
+# Pinpoint tail accepts both ", ¶ 12" and the Bluebook short form "at ¶ 12".
 _ND_NEUTRAL = re.compile(
     r'([12]\d{3})' + _WS + r'ND' + _WS + r'(\d{1,3})'
-    r'(?:,?\s*(?:¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)))?'  # optional pinpoint
+    r'(?:(?:,?\s*|\s+at\s+)(?:¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)))?'  # optional pinpoint
 )
 
 # Ohio: 2018-Ohio-3237

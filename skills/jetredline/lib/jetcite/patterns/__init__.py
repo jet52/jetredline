@@ -24,6 +24,7 @@ def _auto_register():
         federal_rules,
         federal_statutes,
         neutral,
+        pin_cites,
         regional,
     )
     from jetcite.patterns.states import nd  # noqa: F401

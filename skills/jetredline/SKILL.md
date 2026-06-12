@@ -588,6 +588,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 > - `url`: official source URL (always populated)
 > - `search_hint`: text to search for within the local file
 > - `antecedent_name`: the case name jetcite saw immediately before the cite (heuristic; may be null, and may include stray leading words) — seeds the case-name drift check in Step 1.5
+> - `cite_type: "pin_cite"` entries are Bluebook short forms in the draft (`491 F.3d at 363`, `Goss at 365`, `Niemeyer, ¶ 12`, `Id. ¶ 15`) back-referencing the full cite in `parent_normalized`, with the pinpoint in `pin_page`/`pin_paragraph`. Verify these against the **parent's** opinion (`parent_local_path` when `parent_local_exists`, else the parent entry's source): for ND cases call `get_pinpoint(<parent cite>, paragraph=N)`; for reporter pins confirm the page falls within the opinion's span. An entry carrying `pin_warning` is an **unresolved short form** — no earlier full cite in the draft matches it (digit-transposed volume, or an *id.* after an ambiguous string cite). Flag it as a probable drafting error; when `antecedent_name` is present (e.g. "Goss"), check whether the named case's actual volume/page was intended and propose that correction. Pin entries are excluded from `--cache` fetching by design.
 >
 > **Step 1.5: Case citations — verify via ndcourts-mcp first (if the tools are available).** For each **case** citation only (statutes, rules, constitution, and admin code use Step 2):
 >

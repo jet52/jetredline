@@ -48,14 +48,23 @@ except ImportError:
 # Public API
 # ---------------------------------------------------------------------------
 
-def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = False) -> list[dict]:
+def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = False,
+                 include_pin_cites: bool = True) -> list[dict]:
     """Scan opinion text for all citations. Returns legacy-format dicts.
 
     If cache_missing is True, fetches and caches all case citations that
     are not already in the local refs directory.
+
+    Pin-cite short forms ("491 F.3d at 363", "Goss at 365", "Id. ¶ 14")
+    appear as entries with cite_type "pin_cite", linked to their parent full
+    cite via parent_normalized (None = unresolved — e.g. a digit-transposed
+    volume; flagged with pin_warning for Pass 3B). Pin entries carry no local
+    file of their own ("pin_cite" is not in CASE_TYPES, so the cache loop
+    skips them); verification reads the parent's cached opinion via
+    parent_local_path / parent_local_exists.
     """
     refs = Path(refs_dir).expanduser()
-    citations = scan_text(text, refs_dir=refs)
+    citations = scan_text(text, refs_dir=refs, include_pin_cites=include_pin_cites)
 
     entries = [to_legacy_dict(c, refs) for c in citations]
     add_parallel_info(entries, citations)
@@ -74,7 +83,36 @@ def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = Fals
                     entry["local_path"] = str(cached)
                     entry["local_exists"] = True
 
+    annotate_pin_cites(entries)
     return entries
+
+
+def annotate_pin_cites(entries: list[dict]) -> None:
+    """Attach parent context to pin-cite entries.
+
+    Resolved pins get ``parent_local_path``/``parent_local_exists`` copied
+    from the parent entry so Pass 3B reads the parent's cached opinion when
+    verifying the pin page/paragraph. Unresolved pins get ``pin_warning`` —
+    an explicit short form with no matching antecedent is a drafting defect
+    worth surfacing in the redline.
+    """
+    by_norm = {}
+    for e in entries:
+        if e["cite_type"] != "pin_cite":
+            by_norm.setdefault(e["normalized"], e)
+    for e in entries:
+        if e["cite_type"] != "pin_cite":
+            continue
+        parent_norm = e.get("parent_normalized")
+        if parent_norm is None:
+            e["pin_warning"] = (
+                "unresolved short form: no earlier full citation matches"
+            )
+            continue
+        parent = by_norm.get(parent_norm)
+        if parent is not None:
+            e["parent_local_path"] = parent.get("local_path")
+            e["parent_local_exists"] = parent.get("local_exists", False)
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +130,10 @@ def main():
                         help="Output as JSON (default)")
     parser.add_argument("--cache", action="store_true",
                         help="Auto-fetch and cache missing case citations")
+    parser.add_argument("--pin-cites", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="Include pin-cite short forms linked to their "
+                             "parent cites (default: on; --no-pin-cites to disable)")
     args = parser.parse_args()
 
     if args.file:
@@ -100,15 +142,18 @@ def main():
             print(f"Error: file not found: {path}", file=sys.stderr)
             sys.exit(1)
         text = path.read_text(encoding="utf-8")
-        results = scan_opinion(text, refs_dir=args.refs_dir, cache_missing=args.cache)
+        results = scan_opinion(text, refs_dir=args.refs_dir, cache_missing=args.cache,
+                               include_pin_cites=args.pin_cites)
     else:
-        # stdin mode — one citation per line
+        # stdin mode — one citation per line. Pin-cite linking needs document
+        # context (the parent full cite), so single-line scans skip pins.
         results = []
         for line in sys.stdin:
             line = line.strip()
             if not line:
                 continue
-            found = scan_opinion(line, refs_dir=args.refs_dir, cache_missing=args.cache)
+            found = scan_opinion(line, refs_dir=args.refs_dir, cache_missing=args.cache,
+                                 include_pin_cites=False)
             results.extend(found)
 
     print(json.dumps(results, indent=2, ensure_ascii=False))
