@@ -135,19 +135,6 @@ def _find_paragraph(paragraphs: list[dict], cite_text: str) -> dict | None:
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)]+)\)")
 
 
-def _inline_links(text: str) -> str:
-    """Convert markdown [text](url) links in already-escaped HTML to <a> tags.
-
-    We run this on the raw text *before* html.escape so we can identify the
-    link structure, then rebuild with escaped parts.
-    """
-    def _replace(m: re.Match) -> str:
-        label = html.escape(m.group(1))
-        url = html.escape(m.group(2))
-        return f'<a class="draft-link" href="{url}" target="_blank" title="{url}">{label}</a>'
-    return _MD_LINK_RE.sub(_replace, text)
-
-
 def _escape_with_links(text: str) -> str:
     """HTML-escape text but render markdown links as clickable <a> tags."""
     # First convert links to placeholders, then escape the rest
@@ -173,16 +160,11 @@ def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
         return f'<div class="opinion-text">{_escape_with_links(text)}</div>'
 
     parts = []
-    # Header text before first paragraph marker
-    # Use whichever regex produced more matches (same logic as _split_paragraphs)
-    para_matches = list(_PARA_RE.finditer(text))
-    num_matches = list(_PARA_NUM_RE.finditer(text))
-    if num_matches and len(num_matches) > len(para_matches):
-        first_match = num_matches[0] if num_matches else None
-    else:
-        first_match = para_matches[0] if para_matches else None
-    if first_match and first_match.start() > 0:
-        header = text[:first_match.start()].strip()
+    # Header text before the first paragraph marker.  _split_paragraphs
+    # already chose the marker style and recorded the first marker's start.
+    first_start = paragraphs[0]["start"]
+    if first_start > 0:
+        header = text[:first_start].strip()
         if header:
             parts.append(
                 f'<div class="opinion-header">{_escape_with_links(header)}</div>'
@@ -265,15 +247,6 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
         if not local_only:
             from jetcite.cache import fetch_and_cache
             from jetcite import Citation
-            # Build Citation objects from the result entries for fetch_and_cache.
-            # Re-scan with resolution disabled to get Citation objects.
-            saved2 = _disable_url_resolution()
-            from jetcite import scan_text as _st
-            cite_objs = {
-                c.normalized: c
-                for c in _st(text, refs_dir=Path(refs_dir).expanduser())
-            }
-            _restore_url_resolution(saved2)
 
             _CACHEABLE = {
                 "neutral_cite", "us_supreme_court",
@@ -286,6 +259,17 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
                 and not e.get("is_repeat")
             ]
             if to_cache:
+                # Build Citation objects for fetch_and_cache by re-scanning
+                # with resolution disabled.  Only needed when something is
+                # actually missing — on a warm refs dir this scan is skipped.
+                saved2 = _disable_url_resolution()
+                from jetcite import scan_text as _st
+                cite_objs = {
+                    c.normalized: c
+                    for c in _st(text, refs_dir=Path(refs_dir).expanduser())
+                }
+                _restore_url_resolution(saved2)
+
                 total = len(to_cache)
                 print(f"  Caching {total} citation(s) to {refs_dir} ...",
                       file=sys.stderr)
