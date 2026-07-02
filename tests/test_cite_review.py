@@ -234,14 +234,14 @@ class TestBuildHtml:
     def test_via_map_attaches_provenance(self, citations_basic, sample_opinion):
         paras = _split_paragraphs(sample_opinion)
         via_map = {
-            _via_key("2023 ND 219"): "ndcourts-mcp",   # matched by normalized
+            _via_key("2023 ND 219"): "ndlaw",   # matched by normalized
             _via_key("445 u.s.  684"): "CourtListener",  # case/whitespace-insensitive
         }
         result = _build_html("Test Case", citations_basic, paras, "test",
                              sample_opinion, via_map=via_map)
         data = json.loads(
             re.search(r"const DATA = (\[.*?\]);\s*\n", result, re.DOTALL).group(1))
-        assert data[0]["via"] == "ndcourts-mcp"
+        assert data[0]["via"] == "ndlaw"
         assert data[3]["via"] == "CourtListener"
         assert data[1]["via"] is None  # statute not in the map
 
@@ -460,11 +460,11 @@ class TestSourcesMeta:
         entries = [{"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
                     "normalized": "2023 ND 219", "url": None}]
         meta = {_via_key("2023 ND 219"): {"via": "ndlaw"}}
-        via = {_via_key("2023 ND 219"): "ndcourts-mcp"}
+        via = {_via_key("2023 ND 219"): "ndlaw"}
         paras = _split_paragraphs(sample_opinion)
         html_str = _build_html("t", entries, paras, "k", sample_opinion,
                                sources_meta=meta, via_map=via)
-        assert _data(html_str)[0]["via"] == "ndcourts-mcp"
+        assert _data(html_str)[0]["via"] == "ndlaw"
 
 
 class TestPassages:

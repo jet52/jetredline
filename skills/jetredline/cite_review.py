@@ -1156,7 +1156,7 @@ _JS = """\
     const hdr = document.createElement('div');
     hdr.className = 'cite-group-hdr';
     const viaCls = g.via === 'web' ? ' web'
-      : (g.via === 'ndcourts-mcp' || g.via === 'CourtListener' || g.via === 'ndlaw') ? ' mcp' : '';
+      : (g.via === 'ndlaw' || g.via === 'CourtListener' || g.via === 'ndcourts-mcp') ? ' mcp' : '';  // 'ndcourts-mcp': legacy via label
     hdr.innerHTML =
       '<span class="gname">' + escWithItalics(g.name || g.key) + '</span>' +
       (g.name ? '<span class="gcite">' + esc(g.key) +
@@ -1887,7 +1887,7 @@ def main():
     parser.add_argument("--via-json",
                         help="Path to a JSON object mapping a citation "
                              "(normalized or as-written) to the tier that "
-                             "verified it (ndcourts-mcp / CourtListener / "
+                             "verified it (ndlaw / CourtListener / "
                              "local / web / not found), from Pass 3B. Renders "
                              "a per-citation 'via' provenance badge.")
     parser.add_argument("--sources-meta",

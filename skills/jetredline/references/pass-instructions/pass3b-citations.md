@@ -4,11 +4,11 @@ You are a jetredline subagent. The caller's prompt supplies: a numbered list of 
 
 ## Source precedence (apply at every case-citation check; fall through on a miss)
 
-1. **ndcourts-mcp** (primary, North Dakota cases) — local ND opinion corpus. Deterministic, no network. Check whether its tools (e.g. `verify_citation`) are present in your tool set; if not, skip silently to the next tier.
+1. **ndlaw** (primary, North Dakota cases) — local ND opinion corpus. Deterministic, no network. Check whether its tools (e.g. `verify_citation`) are present in your tool set; if not, skip silently to the next tier.
 2. **CourtListener MCP** (secondary) — federal and out-of-state authorities, and ND opinions missing from the ND corpus.
 3. **Existing pipeline** (fallback) — `cite_check.py` / `~/refs/` / WebFetch / web search. Always available in CLI mode.
 
-Statutes, court rules, the constitution, and NDAC always resolve through the existing pipeline (tier 3) — the MCP servers are out of scope for them. ndcourts-mcp is a research aid, not an authoritative text: use its signals to *flag for human review*, never to auto-edit on a signal alone. Never fail or stall because an MCP server is absent or returns no data.
+Statutes, court rules, the constitution, and NDAC always resolve through the existing pipeline (tier 3) — the MCP servers are out of scope for them. ndlaw is a research aid, not an authoritative text: use its signals to *flag for human review*, never to auto-edit on a signal alone. Never fail or stall because an MCP server is absent or returns no data.
 
 ## Step 1: Generate the lookup plan
 
@@ -27,7 +27,7 @@ This outputs a JSON array with one entry per citation found. Each entry includes
 - `cite_type: "pin_cite"` entries are Bluebook short forms in the draft (`491 F.3d at 363`, `Goss at 365`, `Niemeyer, ¶ 12`, `Id. ¶ 15`) back-referencing the full cite in `parent_normalized`, with the pinpoint in `pin_page`/`pin_paragraph`. Verify these against the **parent's** opinion (`parent_local_path` when `parent_local_exists`, else the parent entry's source): for ND cases call `get_pinpoint(<parent cite>, paragraph=N)`; for reporter pins confirm the page falls within the opinion's span. An entry carrying `pinpoint_inherited: true` is a **bare *Id.*** whose pinpoint was adopted from the antecedent cite (Bluebook: same authority, same page/paragraph) rather than written in the draft — verify the proposition against that ¶/page as usual, but attribute any mismatch to the *antecedent's* pinpoint, not to the *Id.* itself. An entry carrying `pin_warning` is an **unresolved short form** — no earlier full cite in the draft matches it (digit-transposed volume, or an *id.* after an ambiguous string cite). Flag it as a probable drafting error; when `antecedent_name` is present (e.g. "Goss"), check whether the named case's actual volume/page was intended and propose that correction. Pin entries are excluded from `--cache` fetching by design.
 - Entries with `is_repeat: true` are repeat full-form case cites — the second and later textual appearances of the same authority (e.g. a short cite written out as `Olson, 2024 ND 156, ¶ 12`), linked to the first occurrence via `parent_normalized` and carrying `parent_local_path`/`parent_local_exists` like pins. **Verify each repeat's own pinpoint** (each usually supports a different proposition) against the parent's opinion, but run the caption check and parallel-cite check only once, on the first occurrence. Repeats are excluded from `--cache` fetching by design.
 
-## Step 1.5: Case citations — verify via ndcourts-mcp first (if the tools are available)
+## Step 1.5: Case citations — verify via ndlaw first (if the tools are available)
 
 For each **case** citation only (statutes, rules, constitution, and admin code use Step 2):
 
@@ -35,7 +35,7 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 - **Quote check:** If the draft quotes the case, call `verify_quotation(<cite>, <exact quoted text>)`; record `verbatim`, `paragraph` (the pinpoint ¶), and any `differences`.
 - **Parallel cite (NDSC — required in full cites):** From the `cites_redbook` / `formatted` returned above (or `get_parallel_citations(<cite>)`), check the N.W.2d/N.W.3d parallel. In a **full** (first-reference) ND cite, a *missing* parallel is a defect — flag it to be added (no pin cite to the reporter); a parallel with the *wrong* volume/page should be corrected to match `formatted`. Do **not** add a parallel to short-form or *id.* cites.
 - **Pinpoint ¶:** If the cite carries a pinpoint (¶ N) but the draft does not quote the case, call `get_pinpoint(<cite>, paragraph=N)`; confirm the ¶ exists and read its `text` for the substantive-support check. Flag a pinpoint to a ¶ that does not exist.
-- **Not found in ndcourts-mcp** (federal, out-of-state, or absent from the ND corpus): if CourtListener `verify_citations` is available, try it next; otherwise fall through to Step 2.
+- **Not found in ndlaw** (federal, out-of-state, or absent from the ND corpus): if CourtListener `verify_citations` is available, try it next; otherwise fall through to Step 2.
 
 **Closed-loop case-name rule (prevents the Tracey/Tracy error):**
 - Propose a spelling correction **only** when the *same* citation resolves and `name_matches` is false with **high `name_similarity`** (≥ 0.85) — that is the same case with a typo. Report the mismatch with `canonical_case_name` so the caller can generate the correction.
@@ -71,11 +71,11 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 
 7. **Build the results table.** The Source Link column **must** use the full `url` value from the cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
 
-   The **Via** column records the tier that actually produced the verification — `ndcourts-mcp`, `CourtListener`, `local` (a `~/refs/` file), `web` (WebFetch or web search), or `not found` — following the source precedence you applied in Steps 1.5 and 2. This is the *method*, not the Source Link (which is the canonical URL regardless of how the cite was checked). It is the provenance for any edit generated from this row, so record the tier that supplied the value you relied on.
+   The **Via** column records the tier that actually produced the verification — `ndlaw`, `CourtListener`, `local` (a `~/refs/` file), `web` (WebFetch or web search), or `not found` — following the source precedence you applied in Steps 1.5 and 2. This is the *method*, not the Source Link (which is the canonical URL regardless of how the cite was checked). It is the provenance for any edit generated from this row, so record the tier that supplied the value you relied on.
 
    | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes |
    |---|----------|------|---------------|-------------|-----------|-----|-------------|-------|
-   | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Matches / Mismatch: official is [X] / N/A | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | ndcourts-mcp / CourtListener / local / web / not found | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
+   | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Matches / Mismatch: official is [X] / N/A | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | ndlaw / CourtListener / local / web / not found | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
 
    For locally-verified citations, still include the official URL from the lookup plan so readers can independently check the source. The URL was already computed — do not substitute or shorten it.
 
@@ -85,9 +85,9 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 
    Then add a **lookup-methods tally for case citations** (roll up the Via column over opinions only — statutes, rules, constitution, and admin code resolve via local/web by design and are out of scope):
 
-   `Lookup methods (cases) — ndcourts-mcp: N | CourtListener: N | local: N | web: N | not found: N`
+   `Lookup methods (cases) — ndlaw: N | CourtListener: N | local: N | web: N | not found: N`
 
-   Followed by an **ND web-fallback note**: if every ND *case* was resolved via ndcourts-mcp or a local file, write "All ND cases via MCP/local." If any ND case fell through to the web, list those cites and the reason (e.g., "ndcourts-mcp not connected" or "MCP returned no match"). This makes any web fallback for ND opinions — and the confidence basis of edits drawn from it — explicit rather than silent.
+   Followed by an **ND web-fallback note**: if every ND *case* was resolved via ndlaw or a local file, write "All ND cases via MCP/local." If any ND case fell through to the web, list those cites and the reason (e.g., "ndlaw not connected" or "MCP returned no match"). This makes any web fallback for ND opinions — and the confidence basis of edits drawn from it — explicit rather than silent.
 
 ## Error handling
 

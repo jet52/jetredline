@@ -2,13 +2,13 @@
 """Export ND opinion text and direct URLs from the ndlaw corpus into ~/refs.
 
 Refreshes the local refs cache from the authoritative ndlaw corpus
-(ndcourts-mcp) so the citation-review HTML embeds corpus text — and the
+(ndlaw) so the citation-review HTML embeds corpus text — and the
 court's direct opinion URL — instead of whatever an earlier web scrape
 left behind. Runs with zero model-context cost via one of two backends:
 
-  sqlite  — a local ndcourts-mcp opinions.db (--db, NDLAW_DB env, or the
+  sqlite  — a local ndlaw opinions.db (--db, NDLAW_DB env, or the
             default development path), read-only.
-  mcp     — a deployed ndcourts-mcp instance over Streamable HTTP with
+  mcp     — a deployed ndlaw instance over Streamable HTTP with
             Basic Auth (--url/NDLAW_URL, --auth/NDLAW_AUTH). The script
             speaks JSON-RPC directly; no LLM tokens are spent.
 
@@ -312,9 +312,9 @@ def main():
     ap.add_argument("--meta-out",
                     help="Write sources metadata JSON (normalized cite → "
                          "case_name/url/url_source/via) to this path")
-    ap.add_argument("--db", help=f"ndcourts-mcp opinions.db path "
+    ap.add_argument("--db", help=f"ndlaw opinions.db path "
                                  f"(or NDLAW_DB env; default {DEFAULT_DB})")
-    ap.add_argument("--url", help="Deployed ndcourts-mcp Streamable HTTP URL "
+    ap.add_argument("--url", help="Deployed ndlaw Streamable HTTP URL "
                                   "(or NDLAW_URL env)")
     ap.add_argument("--auth", help="Basic auth as user:pass or base64 token "
                                    "(or NDLAW_AUTH env)")
