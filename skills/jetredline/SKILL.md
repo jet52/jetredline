@@ -20,7 +20,7 @@ Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a 
    - The draft arrives as a **markdown file path** (or pasted text), not a .docx. Read it directly; skip Step 0's `.docx`/`.pdf` scan, the temp-dir setup, and the docx-plugin discovery.
    - **Preserve markdown link syntax.** The memo arrives with record-citation hyperlinks (`[R45](url)`) and possibly authority links already in it. Never edit a URL, and when an edit touches linked text, keep the `[text](url)` wrapper intact.
 
-2. **Run inline.** Execute all selected passes inline in this context (as in Web mode) — do **not** delegate to Task subagents. The caller has already spawned you as a subagent.
+2. **Run inline.** Execute all selected passes inline in this context (as in Web mode) — do **not** delegate to Task subagents. The caller has already spawned you as a subagent. For passes whose detailed instructions live in `references/pass-instructions/` (Pass 1, Pass 4, Pass 6), Read the matching file and apply it inline.
 
 3. **Pass selection** — the caller supplies the list. The standard audit-mode selection is **passes 1, 2, 3C, 4, 5, 6**, with these adjustments:
    - **Skip Pass 3A and Pass 3B** (Bluebook format + substantive citation verification). The caller owns citation verification separately; running it here duplicates work and can produce divergent tallies.
@@ -344,7 +344,7 @@ $VENV_PYTHON $SKILL_DIR/extract_text.py --input <draft.docx> --output <TMPDIR>/<
 6b. **Delegate Pass 7** (dissent/concurrence cross-check) to a subagent if a dissent or concurrence was identified in Step 0 and `DOC_TYPE == opinion` — see Pass 7 below
 7. **Pass 2 routing:** If the opinion has **more than 30 paragraphs**, delegate Pass 2 to a subagent — see "Delegated Pass 2" below. Otherwise, perform Pass 2 in main context. **Pass 5** (analytical rigor) is always performed in main context. Pass 2 (when not delegated) and Pass 5 can proceed in parallel with subagents.
 8. Collect subagent results from Passes 1, 3, 4, 6, 7, and (if delegated) Pass 2 — **use the `TaskOutput` tool**, not Bash `tail`
-8a. **Caption mismatches → edits (closed-loop rule).** Check the Pass 3B results table for Caption Check mismatches. Generate a correcting tracked-change edit **only** when the *same* citation resolved to an official caption and the draft's name is a near-match typo of it (high `name_similarity`) — e.g., a comment "Official caption per 2023 ND 219: 'Tracey v. Tracey'". **Never** harmonize names across two *different* citations (different cite = presumptively different case), and do not auto-correct low-similarity or unresolved names — add a comment for human review instead. Include qualifying edits in the edits JSON alongside Pass 2/3A/5 edits. Likewise apply the **parallel-cite corrections** flagged in Step 1.5 — add a missing N.W.2d/N.W.3d parallel to a *full* cite, or fix a wrong one, using the `formatted` value from ndcourts-mcp.
+8a. **Caption mismatches → edits (closed-loop rule).** Check the Pass 3B results table for Caption Check mismatches. Generate a correcting tracked-change edit **only** when the *same* citation resolved to an official caption and the draft's name is a near-match typo of it (high `name_similarity`) — e.g., a comment "Official caption per 2023 ND 219: 'Tracey v. Tracey'". **Never** harmonize names across two *different* citations (different cite = presumptively different case), and do not auto-correct low-similarity or unresolved names — add a comment for human review instead. Include qualifying edits in the edits JSON alongside Pass 2/3A/5 edits. Likewise apply the **parallel-cite corrections** flagged by Pass 3B's parallel-cite check — add a missing N.W.2d/N.W.3d parallel to a *full* cite, or fix a wrong one, using the `formatted` value from ndcourts-mcp.
 8b. **Treatment flags → comments.** If the Pass 3C overruling scan flagged any cited case for possible negative treatment, add a *comment* (not an edit) on each occurrence, quoting the citing context, for human review. Never auto-edit on a treatment signal.
 9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
 10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
@@ -452,6 +452,8 @@ The agent's job is: collect edits into JSON (1 Write call), run one command (1 B
 8. Perform Pass 6 (brief matching) inline if the user uploaded briefs.
 9. Perform Pass 7 (dissent cross-check) inline if the user uploaded a dissent/concurrence and `DOC_TYPE == opinion`.
 10. Perform Pass 5 inline.
+
+For each delegated pass performed inline (1, 3B, 4, 6, 7 — and 2's entry format), read its instruction file from project knowledge (`references/pass-instructions/passN-*.md`) and apply it, adapting CLI-only steps (shell commands, `~/refs/`, ledger files) per the pass's Web-mode note.
 11. Skip .docx assembly.
 12. Produce the analysis document as markdown in the conversation.
 
@@ -483,32 +485,13 @@ Adopt the persona of an experienced appellate attorney working for a state supre
 
 ### Pass 1: Jurisdictional Check (Delegated to Subagent)
 
-**Do not** read `references/nd-appellate-rules.md` into the main context. Delegate this pass to a subagent using the Task tool (subagent_type: `general-purpose`) with instructions that vary by `DOC_TYPE`.
+**Do not** read `references/nd-appellate-rules.md` or the pass-instruction file into the main context. Delegate to a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-#### If DOC_TYPE is `opinion` (default)
+> Read `~/.claude/skills/jetredline/references/pass-instructions/pass1-jurisdiction.md` and follow the **[opinion / memo]** variant. The draft is at `[path]`. Return only the concise findings summary those instructions specify.
 
-Provide the subagent with these instructions:
+**Returns:** a concise summary of jurisdictional, procedural-posture, or standard-of-review findings — or an explicit all-clear. The memo variant may instead return a warning that the memo should confirm appellate jurisdiction.
 
-- Read `~/.claude/skills/jetredline/references/nd-appellate-rules.md`
-- Read the draft opinion file (provide the path) — focus on the procedural-posture and standard-of-review sections
-- Verify: Was there a timely appeal under N.D.R.App.P. Rules 2.1, 2.2, 3, and 4?
-- Verify: Does the opinion correctly identify the procedural posture and standard of review?
-- Verify: Are court rules cited accurately? Check against https://www.ndcourts.gov/legal-resources/rules
-- Return **only** a concise summary of findings: any jurisdictional issues, procedural-posture errors, or standard-of-review problems. If no issues found, state that explicitly.
-
-#### If DOC_TYPE is `memo`
-
-Provide the subagent with these instructions:
-
-- Read `~/.claude/skills/jetredline/references/nd-appellate-rules.md`
-- Read the draft memo file (provide the path)
-- Check whether the memo addresses appealability: timeliness, subject-matter jurisdiction, and procedural prerequisites (e.g., OMB notification for claims against the state under N.D.C.C. § 32-12.2-04)
-- Check whether the parties' briefs (if available in the working directory) raise jurisdictional issues
-- If **neither** the memo nor the parties address appealability at all → return a **warning** that the memo should confirm appellate jurisdiction
-- If the memo does address appealability → verify the analysis against `nd-appellate-rules.md` as with opinions
-- Return a concise summary: any jurisdictional concerns or warnings. If the memo adequately addresses jurisdiction, state that explicitly.
-
-**Web mode:** Perform inline. Read `references/nd-appellate-rules.md` from project knowledge. If unavailable, use web search to find the relevant N.D.R.App.P. rules at ndcourts.gov. Analyze the document's procedural posture and standard of review. Report findings in the same format.
+**Web mode:** Perform inline. Read `references/pass-instructions/pass1-jurisdiction.md` and `references/nd-appellate-rules.md` from project knowledge and apply the matching variant. If the rules file is unavailable, use web search to find the relevant N.D.R.App.P. rules at ndcourts.gov. Report findings in the same format.
 
 ### Pass 2: Style and Grammar
 Apply in priority order. Full details in `references/style-guide.md`.
@@ -535,38 +518,11 @@ Apply in priority order. Full details in `references/style-guide.md`.
 
 #### Delegated Pass 2 (opinions over 30 paragraphs)
 
-When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable. Provide the subagent with:
+When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
 
-- The path to `references/style-guide.md` (instruct it to read this file)
-- The path to the draft opinion file (instruct it to read it)
-- The hard rules and style preferences listed above (copy them into the prompt so the subagent has them without needing additional context)
+> Read `~/.claude/skills/jetredline/references/pass-instructions/pass2-style.md` and follow it. The draft opinion is at `[path]`. Return only the structured entry list those instructions specify.
 
-**Subagent instructions:**
-
-> **Style and Grammar Edit — Pass 2**
->
-> Read the style guide at `~/.claude/skills/jetredline/references/style-guide.md` and the draft opinion at `[path]`.
->
-> Apply the style and grammar rules to the entire opinion. For each proposed edit, produce a structured entry:
->
-> ```
-> ¶ [paragraph number]
-> OLD: [exact original text — enough context to locate uniquely, typically the full sentence]
-> NEW: [replacement text]
-> REASON: [brief explanation — which rule applies]
-> ```
->
-> Group entries by paragraph order. Include only changes that improve the text — do not rewrite clear passages. Preserve the court's voice.
->
-> For issues that warrant a comment rather than a direct edit (e.g., possible restructuring, ambiguous meaning), use:
->
-> ```
-> ¶ [paragraph number]
-> COMMENT: [the note to attach as a comment in the document]
-> ANCHOR: [the word or phrase the comment should attach to]
-> ```
->
-> Return all entries as a single structured list. Do not produce any other output.
+**Returns:** a structured list of `¶ / OLD / NEW / REASON` edit entries and `¶ / COMMENT / ANCHOR` comment entries, in paragraph order.
 
 **In main context after collection:** Apply the returned edits mechanically when building the tracked-changes OOXML in step 9. Each `OLD`/`NEW` pair becomes a tracked deletion + tracked insertion. Each `COMMENT` entry becomes a document comment anchored to the specified text.
 
@@ -596,100 +552,14 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 - Whether the opinion quotes the source (and if so, the exact quoted text)
 - The signal used (none, *See*, *see also*, *cf.*, *but see*, *accord*, etc.)
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with the extracted citation list and the following instructions:
+**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> **ND Citation Verification**
->
-> You have a list of ND citations from a draft opinion. Verify each against local reference files and official online sources.
->
-> **Step 1: Generate the lookup plan.** Run the citation checker on the opinion file to get structured resolution data:
-> ```bash
-> python3 ~/.claude/skills/jetredline/cite_check.py --file <opinion_path> --refs-dir ~/refs --cache
-> ```
-> The `--cache` flag auto-fetches and caches any case citations (ND, federal, other states) not already in `~/refs/`. This builds the local cache progressively so future runs have more local hits.
->
-> This outputs a JSON array with one entry per citation found. Each entry includes:
-> - `cite_type`: neutral_cite, statute, statute_chapter, constitution, regulation, court_rule, regional_reporter, federal_reporter, us_supreme_court
-> - `local_path` / `local_exists`: path in `~/refs/` and whether it exists
-> - `url`: official source URL (always populated)
-> - `search_hint`: text to search for within the local file
-> - `antecedent_name`: the case name jetcite saw immediately before the cite (heuristic; may be null, and may include stray leading words) — seeds the case-name drift check in Step 1.5
-> - `cite_type: "pin_cite"` entries are Bluebook short forms in the draft (`491 F.3d at 363`, `Goss at 365`, `Niemeyer, ¶ 12`, `Id. ¶ 15`) back-referencing the full cite in `parent_normalized`, with the pinpoint in `pin_page`/`pin_paragraph`. Verify these against the **parent's** opinion (`parent_local_path` when `parent_local_exists`, else the parent entry's source): for ND cases call `get_pinpoint(<parent cite>, paragraph=N)`; for reporter pins confirm the page falls within the opinion's span. An entry carrying `pinpoint_inherited: true` is a **bare *Id.*** whose pinpoint was adopted from the antecedent cite (Bluebook: same authority, same page/paragraph) rather than written in the draft — verify the proposition against that ¶/page as usual, but attribute any mismatch to the *antecedent's* pinpoint, not to the *Id.* itself. An entry carrying `pin_warning` is an **unresolved short form** — no earlier full cite in the draft matches it (digit-transposed volume, or an *id.* after an ambiguous string cite). Flag it as a probable drafting error; when `antecedent_name` is present (e.g. "Goss"), check whether the named case's actual volume/page was intended and propose that correction. Pin entries are excluded from `--cache` fetching by design.
-> - Entries with `is_repeat: true` are repeat full-form case cites — the second and later textual appearances of the same authority (e.g. a short cite written out as `Olson, 2024 ND 156, ¶ 12`), linked to the first occurrence via `parent_normalized` and carrying `parent_local_path`/`parent_local_exists` like pins. **Verify each repeat's own pinpoint** (each usually supports a different proposition) against the parent's opinion, but run the caption check and parallel-cite check only once, on the first occurrence. Repeats are excluded from `--cache` fetching by design.
->
-> **Step 1.5: Case citations — verify via ndcourts-mcp first (if the tools are available).** For each **case** citation only (statutes, rules, constitution, and admin code use Step 2):
->
-> - **Existence + caption + name drift:** Call `verify_citation(<cite>, expected_case_name=<case name as written in the draft>)`. Use the draft's case name; if you don't have a clean one, derive it from the `antecedent_name` field — it is a heuristic, so strip leading signal words ("See", "In", "accord", etc.) and any prior-sentence fragment down to the `X v. Y` (or `In re X`) core. Record `canonical_case_name`, `formatted` (official caption + full Redbook cite), `name_matches`, and `name_similarity`.
-> - **Quote check:** If the draft quotes the case, call `verify_quotation(<cite>, <exact quoted text>)`; record `verbatim`, `paragraph` (the pinpoint ¶), and any `differences`.
-> - **Parallel cite (NDSC — required in full cites):** From the `cites_redbook` / `formatted` returned above (or `get_parallel_citations(<cite>)`), check the N.W.2d/N.W.3d parallel. In a **full** (first-reference) ND cite, a *missing* parallel is a defect — flag it to be added (no pin cite to the reporter); a parallel with the *wrong* volume/page should be corrected to match `formatted`. Do **not** add a parallel to short-form or *id.* cites.
-> - **Pinpoint ¶:** If the cite carries a pinpoint (¶ N) but the draft does not quote the case, call `get_pinpoint(<cite>, paragraph=N)`; confirm the ¶ exists and read its `text` for the substantive-support check. Flag a pinpoint to a ¶ that does not exist.
-> - **Not found in ndcourts-mcp** (federal, out-of-state, or absent from the ND corpus): if CourtListener `verify_citations` is available, try it next; otherwise fall through to Step 2.
->
-> **Closed-loop case-name rule (prevents the Tracey/Tracy error):**
-> - Propose a spelling correction **only** when the *same* citation resolves and `name_matches` is false with **high `name_similarity`** (≥ 0.85) — that is the same case with a typo. Report the mismatch with `canonical_case_name` so main context can generate the correction.
-> - **Never** harmonize two citations that differ in *both* spelling **and** cite number (e.g., `Tracey v. Tracey, 2023 ND 219` vs. `Tracy v. Tracy, 2024 ND 195`) — different cites are presumptively different cases. Add a note, not a correction.
-> - Low `name_similarity` on a single cite signals a probable wrong cite or wrong name — flag for human review; do not auto-correct.
->
-> **Step 2: Verify each citation** (all non-case citations, and any case citation Step 1.5 could not resolve). For each such entry from the lookup plan:
->
-> 1. **Retrieve source text.**
->    - If `local_exists` is `true`: use the Read tool on `local_path`. For NDCC sections, search for the `search_hint` within the chapter file. For ND opinions, locate the pinpoint paragraph (`[¶N]`).
->    - If `local_exists` is `false`: use WebFetch on the `url` to retrieve the source text. For PDF URLs (ndlegis.gov), note that WebFetch may not extract PDF content — mark as "URL only" and verify what you can.
->
-> 2. **If the opinion quotes the cited source:**
->    - Compare the quoted text against the source **character by character**.
->    - Flag any discrepancies (missing words, changed words, transpositions).
->    - Identify any bracketed alterations (`[word]`, `[W]ord` for capitalization changes, ellipses `...` or `. . .` for omissions).
->    - For each alteration, note whether the opinion includes an appropriate parenthetical (e.g., "(alteration in original)", "(cleaned up)", "(emphasis added)", "(omission)", "(quoting [Source])"). Under Bluebook Rule 5.2, alterations to quoted material must be indicated.
->    - Report the result as: **Quote verified** (exact match), **Quote verified with noted alterations** (brackets/ellipses present and properly parentheticized), or **Quote discrepancy** (unexplained differences).
->
-> 3. **Existence check.** Does the cited provision/opinion actually exist? For statutes and rules, confirm the section number is valid.
->
-> 4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/ND/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the main context can generate a correction. **Apply the same closed-loop rule as Step 1.5:** correct only same-cite typos; never harmonize two different citations. For non-case citations (statutes, rules, etc.), mark as N/A.
->
-> 5. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
->    - Does the source actually state or hold the legal principle attributed to it?
->    - Is the signal appropriate? (No signal = direct support; *See* = clearly supports; *see also* = additional support; *cf.* = analogous; *but see* = contrary)
->    - Is the proposition a fair characterization, or does it overstate/understate/distort the source?
->    - Report: **Supports** (the cite supports the proposition), **Partially supports** (some nuance lost or overstated), or **Does not support** (the cite does not stand for the stated proposition).
->
-> 6. **Currency check** (statutes, rules, admin code only). If the source text includes effective date or amendment information, flag if the cited version may not be current.
->
-> 7. **Build the results table.** The Source Link column **must** use the full `url` value from the cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
->
-> The **Via** column records the tier that actually produced the verification — `ndcourts-mcp`, `CourtListener`, `local` (a `~/refs/` file), `web` (WebFetch or web search), or `not found` — following the source precedence you applied in Steps 1.5 and 2. This is the *method*, not the Source Link (which is the canonical URL regardless of how the cite was checked). It is the provenance for any edit generated from this row, so record the tier that supplied the value you relied on.
->
-> | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes |
-> |---|----------|------|---------------|-------------|-----------|-----|-------------|-------|
-> | [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Matches / Mismatch: official is [X] / N/A | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | ndcourts-mcp / CourtListener / local / web / not found | [Markdown hyperlink: `[normalized](url)`] | [Explanation] |
->
-> For locally-verified citations, still include the official URL from the lookup plan so readers can independently check the source. The URL was already computed — do not substitute or shorten it.
->
-> 7a. **Write the passages ledger** (CLI/Cowork — skip in web mode). As you verify, accumulate every passage you actually read for a pinpoint or quote check — the `text` from `get_pinpoint`, the `closest_text` from `verify_quotation`, or the paragraph you read from a local/web source — and write them to `<TMPDIR>/passages.json` as a JSON array of `{"cite": "<parent full cite, normalized>", "paragraph": "<¶ number>" | "page": "<page number>", "text": "<the passage>"}`. One entry per distinct (cite, pinpoint) you checked; keep each passage to the cited paragraph (or the quoted page passage), not whole opinions. This ledger is embedded in the citation-review HTML so the human reviewer sees the exact text the verification relied on when no full source text is available.
->
-> 8. **Return** the completed table and a summary: [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] citations that may not support the stated proposition.
->
->    Then add a **lookup-methods tally for case citations** (roll up the Via column over opinions only — statutes, rules, constitution, and admin code resolve via local/web by design and are out of scope):
->
->    `Lookup methods (cases) — ndcourts-mcp: N | CourtListener: N | local: N | web: N | not found: N`
->
->    Followed by an **ND web-fallback note**: if every ND *case* was resolved via ndcourts-mcp or a local file, write "All ND cases via MCP/local." If any ND case fell through to the web, list those cites and the reason (e.g., "ndcourts-mcp not connected" or "MCP returned no match"). This makes any web fallback for ND opinions — and the confidence basis of edits drawn from it — explicit rather than silent. Carry this tally and note into the analysis document alongside the results table.
->
-> **Error handling:**
-> - If `cite_check.py` fails or returns an error, report the error in the summary and proceed with manual verification using the URL patterns and local paths below.
-> - If a local reference file does not exist for a citation, proceed with web verification only (WebFetch on the `url`). Do not stall or re-search for the file.
-> - If WebFetch also fails, mark the citation as **UNVERIFIED** in the results table with the reason (e.g., "Local file missing, URL unreachable").
-> - Always return partial results. A table with UNVERIFIED entries is better than no table. Never fail silently — every citation must appear in the output table with a status.
->
-> **Reference file paths (do not search — use directly):**
-> - Opinions: `~/refs/opin/{reporter}/` — e.g., `opin/ND/2024/2024ND156.md`, `opin/NW2d/585/351.md`
-> - Statutes: `~/refs/statute/NDCC/` (by title/chapter), `~/refs/statute/USC/`
-> - Constitution: `~/refs/cnst/ND/`, `~/refs/cnst/US/`
-> - Regulations: `~/refs/reg/NDAC/`, `~/refs/reg/CFR/`
-> - Court Rules: `~/refs/rule/{set}/` — e.g., `rule/ndrcivp/rule-56.md`
+> Read `~/.claude/skills/jetredline/references/pass-instructions/pass3b-citations.md` and follow it. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
+
+**Returns:** the results table (`¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes`), a summary line with counts by type, the lookup-methods tally for case citations (`ndcourts-mcp / CourtListener / local / web / not found`), and an ND web-fallback note. The subagent also writes `<TMPDIR>/passages.json` (the passages ledger embedded in the citation-review HTML). Carry the tally and note into the analysis document alongside the results table. The instructions enforce the closed-loop case-name rule (correct same-cite typos only; never harmonize different citations) — Step 8a depends on the resulting Caption Check column and `name_similarity` values.
 
 **Web mode:** No shell, Python, or `~/refs/` — but the MCP servers, if connected, are the primary way to verify case citations here.
-1. **If ndcourts-mcp / CourtListener tools are available, use them first**, exactly as in Step 1.5 (verify_citation for caption/existence/name drift, verify_quotation for quotes); run Part C's `detect_overruled_in_draft` too. This closes the gap where case citations otherwise can't be verified without a filesystem.
+1. **If ndcourts-mcp / CourtListener tools are available, use them first**, following Step 1.5 of `references/pass-instructions/pass3b-citations.md` (read it from project knowledge — verify_citation for caption/existence/name drift, verify_quotation for quotes); run Part C's `detect_overruled_in_draft` too. This closes the gap where case citations otherwise can't be verified without a filesystem.
 2. For ND citations the MCP servers don't cover, use WebFetch on the official URL (build it from the citation, or run `cite_check.py` if any shell is available).
 3. For ND case citations, use web search to locate the opinion on ndcourts.gov or Google Scholar.
 4. Verify quotes and substantive support as described above.
@@ -725,27 +595,11 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 
 **Claim-to-record mapping:** For each claim, also extract any record citations from the opinion text (e.g., "R 58," "App. 42," "Doc. 12," "Tr. 145"). Include these as a `Cited Records` column in the claims list passed to the subagent. This lets the subagent check the cited record items first, but the subagent should also search other record items — record citations in draft opinions are not always complete or accurate.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with the following instructions and the extracted claims list:
+**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-- For each PDF source file, extract text locally: `pdftotext <file>.pdf <file>.txt`
-- **Image-only fallback (OCR-first):** Detect image-only files and recover them using the **detection + OCR recovery ladder in Step 0** (`pdffonts` / chars-per-page → ocrmypdf → pdftoppm+tesseract → Read-as-images). OCR yields a `.txt` that feeds the Grep steps below unchanged; persist any `<file>.ocr.pdf`. **Do not skip an image-only file** and do not treat "no text layer" as "unreviewable."
-- **Track ingestion per file.** For every source PDF, record its outcome — `ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method. You must return this (see the Ingestion Status table below).
-- Use Grep to search the extracted `.txt` files for passages relevant to each claim — **do not** read entire documents into context
-- For claims with cited record items, search those files first. Then search the remaining record-item files for corroborating or contradicting evidence.
-- For each claim, build a row:
+> Read `~/.claude/skills/jetredline/references/pass-instructions/pass4-factcheck.md` and follow it. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
 
-| ¶ | Claim | Source Document(s) | Result | Notes |
-|---|-------|-------------------|--------|-------|
-| [¶ ref] | [Factual assertion] | [Source with pinpoint cite] | Verified / Unverified / Discrepancy | [Explanation] |
-
-- Return the completed table with a summary line: [X] facts checked, [Y] verified, [Z] discrepancies, [W] unverified.
-- **Also return an Ingestion Status table** (one row per source PDF) so the main context can reconcile coverage in Step 11:
-
-| Source file | Pages | Ingestion | Method |
-|---|---|---|---|
-| [file.pdf] | [N] | ingested-text / OCR-recovered / OCR-low-confidence / image-read / not-ingested | [pdftotext / ocrmypdf / tesseract / Read / none] |
-
-  If any file is `not-ingested` or `OCR-low-confidence`, say so plainly in the summary — the facts that depended on it are unverified, not checked.
+**Returns:** the fact-check results table (`¶ | Claim | Source Document(s) | Result | Notes`) with a summary line, plus an **Ingestion Status table** (one row per source PDF: `Source file | Pages | Ingestion | Method`) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder, so image-only files are recovered, not skipped; a `not-ingested` or `OCR-low-confidence` file means its dependent facts are unverified, and the subagent says so plainly.
 
 **No source materials:** If the user does not provide source materials, skip delegation. Note this limitation in the analysis and flag any factual assertions that cannot be independently verified.
 
@@ -757,47 +611,15 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 
 **Do not** read the briefs into the main context. Delegate to a subagent to keep PDF content out of the main context window.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with the path to the draft document and the brief file(s):
+**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> **Brief-Matching — Pass 6**
->
-> Read the draft document at `[path]` and the party briefs at `[brief paths]`.
->
-> For each brief, extract text locally: `pdftotext <file>.pdf <file>.txt`
->
-> **Image-only fallback (OCR-first):** Detect image-only briefs and recover them using the **detection + OCR recovery ladder in Step 0** (`pdffonts` / chars-per-page → ocrmypdf → pdftoppm+tesseract → Read-as-images). Persist any `<file>.ocr.pdf`. **Do not skip an image-only brief** — a brief that cannot be read means the court's coverage of that party's arguments is unverified, which you must report (Step 5 below), not bury.
->
-> **Step 1:** Extract every distinct argument or contention from each party's brief. For each argument, record:
-> - The party (Appellant/Appellee/Petitioner/Respondent)
-> - A one-sentence summary of the argument
-> - The brief and page range where the argument appears (e.g., "Appellant's Brief, pp. 12–15")
->
-> **Step 2:** For each argument, search the draft document for responsive discussion. An argument is "addressed" if the document engages with the substance of the contention — not merely mentioning the topic. Classify as:
-> - **Yes** — the document directly addresses the argument
-> - **Partial** — the document touches on the topic but does not fully engage (e.g., acknowledges without analysis)
-> - **No** — no responsive discussion found
->
-> **Step 3:** Build the results table:
->
-> | ¶ | Argument | Party | Brief Source | Addressed | Notes |
-> |---|----------|-------|-------------|-----------|-------|
-> | [¶ ref or "—"] | [Argument summary] | [Party] | [Brief, pp. X–Y] | Yes / Partial / No | [Where addressed, or what's missing] |
->
-> The ¶ column references where in the draft the argument is addressed (or "—" if not addressed).
->
-> **Step 4:** Return the table and a summary: [X] arguments identified across [N] briefs. [Y] directly addressed. [Z] partially addressed. [W] not addressed.
->
-> **Step 5:** Also return an **Ingestion Status** table (one row per brief) so the main context can reconcile coverage in Step 11:
->
-> | Brief file | Pages | Ingestion | Method |
-> |---|---|---|---|
-> | [brief.pdf] | [N] | ingested-text / OCR-recovered / OCR-low-confidence / image-read / not-ingested | [pdftotext / ocrmypdf / tesseract / Read / none] |
->
-> If a brief is `not-ingested` or `OCR-low-confidence`, state it in the summary and mark that party's arguments **coverage unverified** rather than implying they were checked against the draft.
+> Read `~/.claude/skills/jetredline/references/pass-instructions/pass6-brief-matching.md` and follow it. The draft document is at `[path]`; the party briefs are: [brief paths, each with its Step 0 ingestion outcome].
+
+**Returns:** the brief-matching table (`¶ | Argument | Party | Brief Source | Addressed | Notes` — Yes/Partial/No per argument, with brief page ranges) with a summary line, plus an **Ingestion Status table** (one row per brief) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder; an unreadable brief is reported as **coverage unverified** for that party, never silently skipped.
 
 **No briefs available:** If no briefs were provided in Step 0, skip this pass entirely. Note in the analysis document: "No briefs provided — brief matching skipped."
 
-**Web mode:** If the user uploaded briefs, perform inline — read the briefs directly and follow the same extraction and matching process. If no briefs were uploaded, note the limitation.
+**Web mode:** If the user uploaded briefs, perform inline — read the briefs directly and follow the extraction and matching process in `references/pass-instructions/pass6-brief-matching.md` (from project knowledge; the pdftotext/OCR steps do not apply). If no briefs were uploaded, note the limitation.
 
 ### Pass 7: Dissent/Concurrence Cross-Check (Delegated to Subagent)
 
@@ -805,37 +627,15 @@ When a dissent or concurrence is provided alongside the majority opinion, cross-
 
 **Do not** read the dissent/concurrence into the main context. Delegate to a subagent to keep the separate document out of the main context window.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with the paths to both documents:
+**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> **Dissent/Concurrence Cross-Check — Pass 7**
->
-> Read the majority opinion at `[majority path]` and the dissent/concurrence at `[dissent path]`.
->
-> **Step 1: Catalog dissent arguments.** For each distinct argument or criticism in the dissent/concurrence, record:
-> - The paragraph(s) where it appears
-> - A one-sentence summary
-> - Whether it criticizes the majority's reasoning, result, or both
->
-> **Step 2: Check majority responsiveness.** For each dissent argument:
-> - Does the majority acknowledge the criticism? (Yes / No)
-> - Does the majority respond substantively? (Yes / Partial / No)
-> - Is the majority's characterization of the dissent's position fair and accurate? (Yes / No / Partial — flag straw-man characterizations)
->
-> **Step 3: Check dissent fairness.** For each major argument in the majority:
-> - Does the dissent fairly characterize the majority's position? (Yes / No / Partial — flag straw-man characterizations)
-> - Does the dissent misquote or misrepresent the majority? Flag specific passages.
->
-> **Step 4: Build the results table:**
->
-> | ¶ Majority | ¶ Dissent | Argument | Fair Characterization? | Addressed? | Notes |
-> |-----------|-----------|----------|----------------------|------------|-------|
-> | [¶] | [¶] | [Criticism or argument] | Yes / No / Partial | Yes / No / Partial | [Explanation] |
->
-> **Step 5:** Return the table and a summary: [X] dissent arguments reviewed. [Y] fairly characterized by majority. [Z] potential straw-manning identified. [W] unaddressed criticisms. [V] instances where dissent mischaracterizes majority.
+> Read `~/.claude/skills/jetredline/references/pass-instructions/pass7-dissent-crosscheck.md` and follow it. The majority opinion is at `[majority path]`; the dissent/concurrence is at `[dissent path]`.
+
+**Returns:** the cross-check table (`¶ Majority | ¶ Dissent | Argument | Fair Characterization? | Addressed? | Notes`) and a summary counting dissent arguments reviewed, fair characterizations, potential straw-manning, unaddressed criticisms, and dissent mischaracterizations of the majority.
 
 **No dissent/concurrence available:** If no dissent or concurrence was identified in Step 0, or `DOC_TYPE != opinion`, skip this pass entirely.
 
-**Web mode:** If the user uploaded a dissent/concurrence alongside the majority, perform inline — read both documents directly and follow the same cross-check process. If no dissent was uploaded, note the limitation.
+**Web mode:** If the user uploaded a dissent/concurrence alongside the majority, perform inline — read both documents directly and follow the cross-check process in `references/pass-instructions/pass7-dissent-crosscheck.md` (from project knowledge). If no dissent was uploaded, note the limitation.
 
 ### Pass 5: Analytical Rigor
 
