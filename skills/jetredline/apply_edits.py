@@ -474,7 +474,8 @@ class CommentWriter:
             "/2011/relationships/people",
     }
 
-    def __init__(self, zip_entries, rels_dom, ct_dom, author, timestamp):
+    def __init__(self, zip_entries, rels_dom, ct_dom, author, timestamp,
+                 rel_id_gen):
         """Initialize comment writer with in-memory ZIP data.
 
         Args:
@@ -483,10 +484,13 @@ class CommentWriter:
             ct_dom: DOM for [Content_Types].xml (modified in place)
             author: author name for comments
             timestamp: ISO timestamp string
+            rel_id_gen: shared callable yielding fresh rId strings (must be
+                the same generator used for hyperlink relationships)
         """
         self._zip_entries = zip_entries
         self._rels_dom = rels_dom
         self._ct_dom = ct_dom
+        self._rel_id_gen = rel_id_gen
         self.author = author
         self.timestamp = timestamp
         self.initials = (
@@ -645,26 +649,24 @@ class CommentWriter:
             )
 
     def _ensure_relationships(self):
-        """Add relationship entries for comment + people files."""
+        """Add relationship entries for comment + people files.
+
+        Draws Ids from the shared rel-id generator so comment relationships
+        can never collide with hyperlink relationships added in the same
+        batch (a duplicate Relationship Id makes Word report the file as
+        unreadable).
+        """
         root = self._rels_dom.documentElement
         root_ns = root.namespaceURI or ""
 
         existing = set()
-        max_rid = 0
         for rel in self._rels_dom.getElementsByTagName("Relationship"):
             existing.add(rel.getAttribute("Type"))
-            rid = rel.getAttribute("Id")
-            if rid.startswith("rId"):
-                try:
-                    max_rid = max(max_rid, int(rid[3:]))
-                except ValueError:
-                    pass
 
         for target, rel_type in self._RELATIONSHIPS.items():
             if rel_type not in existing:
-                max_rid += 1
                 elem = self._rels_dom.createElementNS(root_ns, "Relationship")
-                elem.setAttribute("Id", f"rId{max_rid}")
+                elem.setAttribute("Id", self._rel_id_gen())
                 elem.setAttribute("Type", rel_type)
                 elem.setAttribute("Target", target)
                 root.appendChild(elem)
@@ -768,6 +770,17 @@ def apply_replace(dom, edit, edit_index, author, timestamp, next_id,
             "message": f"No runs overlap with matched text: {old_text[:80]}..."
         }
 
+    # Don't double-wrap tracked changes.  Check every affected run BEFORE
+    # mutating anything — bailing mid-loop would leave earlier runs already
+    # split/removed while reporting "skipped" (document untouched).
+    for run, _rt, _ps, _pe in affected_runs:
+        if run.parentNode.tagName in ("w:del", "w:ins"):
+            return {
+                "edit_index": edit_index,
+                "status": "skipped",
+                "message": f"Run already has tracked changes, skipping: {old_text[:80]}..."
+            }
+
     escaped_author = _escape_xml(author)
     first_change_elem = None
     last_change_elem = None
@@ -778,14 +791,6 @@ def apply_replace(dom, edit, edit_index, author, timestamp, next_id,
         after_text = rt[portion_end:]
 
         parent = run.parentNode
-
-        # Don't double-wrap tracked changes
-        if parent.tagName in ("w:del", "w:ins"):
-            return {
-                "edit_index": edit_index,
-                "status": "skipped",
-                "message": f"Run already has tracked changes, skipping: {old_text[:80]}..."
-            }
 
         # Clone the run's formatting
         rPr_nodes = run.getElementsByTagName("w:rPr")
@@ -1165,7 +1170,7 @@ def main():
         zip_entries.get("word/people.xml"), args.author
     )
     comment_writer = CommentWriter(
-        zip_entries, rels_dom, ct_dom, args.author, timestamp
+        zip_entries, rels_dom, ct_dom, args.author, timestamp, rel_id_gen
     )
 
     # ------------------------------------------------------------------
