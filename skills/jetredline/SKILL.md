@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.7.3
+version: 4.8.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -87,7 +87,7 @@ Use `$VENV_PYTHON` in all subsequent commands instead of hardcoded paths.
 
 **Web mode:** Skip the next four sections (Skill/Docx Paths, Python Environment, Node.js Environment, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
 
-At the start of each CLI session, detect the skill directory and docx plugin layout. The docx plugin has different directory structures in Claude Code vs. Cowork.
+At the start of each CLI session, detect the skill directory:
 
 ```bash
 # Detect skill directory
@@ -96,8 +96,12 @@ if [ -d "$HOME/.claude/skills/jetredline" ]; then
 elif [ -d "/mnt/.skills/skills/jetredline" ]; then
   SKILL_DIR="/mnt/.skills/skills/jetredline"
 fi
+```
 
-# Detect docx plugin location and layout
+**Docx plugin (conditional — usually not needed).** Reading a .docx draft uses `extract_text.py` and applying edits uses `apply_edits.py`; both operate directly on the .docx ZIP and need no plugin. The docx plugin is required **only** when creating a new .docx from scratch (plain-text/markdown input plus tracked-changes .docx output — the Step 9 alternative path). Run this discovery (and Step 2's docx-skill read) only when that path applies. The plugin has different directory structures in Claude Code vs. Cowork:
+
+```bash
+# Detect docx plugin location and layout (new-.docx creation path only)
 if [ -d "/mnt/.skills/skills/docx" ]; then
   DOCX_SKILL="/mnt/.skills/skills/docx"
   UNPACK_SCRIPT="$DOCX_SKILL/scripts/office/unpack.py"
@@ -114,15 +118,14 @@ else
 fi
 ```
 
-Use `$SKILL_DIR`, `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` in all subsequent commands.
+Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` exist only when the creation-path discovery above was run.
 
 | Resource | Path |
 |----------|------|
 | This skill | `$SKILL_DIR` |
-| Docx skill | `$DOCX_SKILL` (detected above) |
-| Unpack script | `$UNPACK_SCRIPT` (detected above) |
-| Pack script | `$PACK_SCRIPT` (detected above) |
+| Docx skill | `$DOCX_SKILL` (conditional — new-.docx creation only) |
 | Venv python | `$VENV_PYTHON` (see Python Environment below) |
+| Text extraction | `$SKILL_DIR/extract_text.py` |
 | splitmarks | `$SKILL_DIR/splitmarks.py` |
 | Node modules | `$SKILL_DIR/node_modules/` |
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
@@ -197,7 +200,7 @@ When running Node scripts that use `docx`, set `NODE_PATH` so Node can find the 
 NODE_PATH=~/.claude/skills/jetredline/node_modules node script.js
 ```
 
-When running docx skill scripts (always include TMPDIR — use the literal absolute path from Step 0):
+When running docx skill scripts (new-.docx creation path only; always include TMPDIR — use the literal absolute path from Step 0):
 ```bash
 TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_SKILL $VENV_PYTHON script.py
 ```
@@ -328,8 +331,12 @@ When you narrow the scope, say which passes you skipped and why, and adjust the 
 
 ### Steps 1–10: Core Workflow
 1. Read `references/style-guide.md`
-2. Read the docx skill: Read `SKILL.md` from `$DOCX_SKILL`. If `ooxml.md` exists as a separate file in that directory, read it too; otherwise the OOXML XML reference is embedded in `SKILL.md`. **Do not** read `docx-js.md`, `document.py`, or other files — they are executed by scripts and not needed in context.
-3. Read the draft opinion (from Step 0 or user-provided file/pasted text). **Count paragraphs** (¶ markers or logical paragraphs) to determine opinion length.
+2. **Docx skill (conditional — usually skip).** Only when the draft is *not* a .docx **and** a tracked-changes .docx will be produced (Step 9 must create one from scratch): run the docx-plugin discovery above, then Read `SKILL.md` from `$DOCX_SKILL` (and `ooxml.md` if it exists as a separate file; **do not** read `docx-js.md`, `document.py`, or other files). When the draft **is** a .docx, skip all of this — `extract_text.py` and `apply_edits.py` are self-contained.
+3. Read the draft opinion. **If the draft is a .docx**, first extract its text deterministically (zero model tokens — never transcribe a .docx by hand and never read raw OOXML into context):
+```bash
+$VENV_PYTHON $SKILL_DIR/extract_text.py --input <draft.docx> --output <TMPDIR>/<stem>.md
+```
+   Then Read the generated markdown — it is the `<opinion_md_path>` used by Pass 3 and Step 11. The script preserves literal ¶ markers, reconstructs Word automatic paragraph numbering (including style-based numbering like the chambers template's MainBody `[¶N]`), extracts footnotes as `[^N]` references, and resolves any existing tracked changes to the as-accepted view; its stderr summary reports those counts — if the input already carries tracked changes, mention that to the user. For pasted text or a markdown file, read it directly. **Count paragraphs** (¶ markers or logical paragraphs) to determine opinion length.
 4. **Delegate Pass 1** (jurisdictional check) to a subagent — see Pass 1 below
 5. **Delegate Pass 3** (citation verification) to a subagent — see Pass 3 below
 6. **Delegate Pass 4** (fact-checking) to a subagent if PDF materials were identified in Step 0 — see Pass 4 below
@@ -377,9 +384,9 @@ $VENV_PYTHON ~/.claude/skills/jetredline/cite_review.py \
 ```
 Omit `--via-json` if Pass 3B did not run or produced no table; omit `--sources-meta` if step 11a exported nothing; omit `--passages-json` if Pass 3B wrote no passages ledger. This produces a self-contained HTML file that lists **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — highlighting the exact occurrence in the draft pane and showing the cited authority (embedded text scrolled to the pinpoint ¶, or the Pass 3B verification passage) in the source pane. Tell the user the file is available and can be opened in a browser.
 
-**If the opinion is a .docx file:** use the docx skill's unpack workflow, then apply edits via `apply_edits.py`.
+**If the opinion is a .docx file:** its text was already extracted in step 3 via `extract_text.py`; apply edits directly to the **original** .docx with `apply_edits.py` (no unpack/pack, no docx plugin).
 
-**Single-session editing.** All tracked changes and comments must be applied in a single script execution against a single unpack. Do not unpack → edit → pack → unpack again. Multiple cycles cause ID collisions and orphaned artifacts. If retrying, start fresh from the original .docx.
+**Single-session editing.** All tracked changes and comments must be applied in a single `apply_edits.py` execution against the original .docx. Do not run apply_edits.py → edit its output → run it again on that output. Multiple cycles cause ID collisions and orphaned artifacts. If retrying, start fresh from the original .docx.
 
 **If the opinion is plain text or another format:** create a new .docx using the docx skill, with tracked-change markup showing all edits.
 
