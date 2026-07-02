@@ -29,7 +29,7 @@ suggestions are machine-generated, are not authoritative, and are not legal advi
 6. **Brief matching** — confirms the opinion or memo addresses every argument raised by the parties
 7. **Dissent/concurrence cross-check** — checks fair characterization and responsiveness between majority and separate writings
 
-Passes 1–7 run as parallel subagents where possible. After all passes complete, the pipeline collects results and produces up to two outputs: a tracked-changes .docx (Pass 2 edits become tracked insertions/deletions; other pass findings become document comments; `apply_edits.py` operates directly on the .docx ZIP archive with no unpack/pack pipeline) and a companion analysis document summarizing all findings. The analysis document is also saved as a markdown file in the working directory.
+Passes 1–7 run as parallel subagents where possible; each delegated pass reads its instructions from `references/pass-instructions/` rather than having them relayed through the main context. A .docx draft's text is extracted deterministically by `extract_text.py` (paragraph numbering reconstructed, footnotes preserved, tracked changes resolved to the as-accepted view) — never transcribed by the model. After all passes complete, the pipeline collects results and produces up to two outputs: a tracked-changes .docx (Pass 2 edits become tracked insertions/deletions; other pass findings become document comments; `apply_edits.py` operates directly on the .docx ZIP archive with no unpack/pack pipeline) and a companion analysis document summarizing all findings. The analysis document is also saved as a markdown file in the working directory.
 
 ## Analysis Document
 
@@ -152,18 +152,28 @@ jetredline/
 │       ├── package.json
 │       ├── requirements.txt
 │       ├── apply_edits.py          # Tracked-changes batch editor (direct ZIP)
+│       ├── extract_text.py         # .docx → markdown extraction (direct ZIP)
 │       ├── cite_check.py           # Citation checker (uses bundled jetcite)
 │       ├── cite_review.py          # Interactive citation review HTML generator
+│       ├── ndlaw_export.py         # ND opinion text/URL export from ndlaw corpus
 │       ├── lib/
 │       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)
 │       ├── check_update.py         # Version check on session start
+│       ├── provenance.py           # Model/version/date stamp for analysis documents
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.
 │       ├── splitmarks.py           # PDF bookmark splitter (bundled)
 │       ├── ooxml_fixup.py          # OOXML debugging tool (not in main pipeline)
 │       ├── ooxml_validate.py       # OOXML debugging tool (not in main pipeline)
 │       └── references/
 │           ├── nd-appellate-rules.md
-│           └── style-guide.md
+│           ├── style-guide.md
+│           └── pass-instructions/  # Delegated-pass instructions read by subagents
+│               ├── pass1-jurisdiction.md
+│               ├── pass2-style.md
+│               ├── pass3b-citations.md
+│               ├── pass4-factcheck.md
+│               ├── pass6-brief-matching.md
+│               └── pass7-dissent-crosscheck.md
 ├── install.sh
 ├── install.ps1
 ├── LICENSE

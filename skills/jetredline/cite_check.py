@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Citation Checker — thin wrapper around jetcite that outputs the legacy
-JSON schema expected by SKILL.md Pass 3B.
+JSON schema expected by Pass 3B
+(references/pass-instructions/pass3b-citations.md).
 
 Usage:
     python3 cite_check.py --file opinion.md
