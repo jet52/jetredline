@@ -9,6 +9,15 @@ from jetcite.sources.ndconst import nd_constitution_url
 from jetcite.sources.ndcourts import nd_court_rule_url, nd_local_rule_url
 from jetcite.sources.ndlegis import ndac_url, ndcc_chapter_url, ndcc_section_url
 
+# Inter-group separator inside an NDCC/NDAC section number: a single dash
+# (ASCII hyphen-minus, the Unicode hyphen/dash family, or a minus sign) flanked
+# by optional whitespace. Tolerating the whitespace lets a section number that
+# the court's PDF wraps across a line — e.g. "28-32-\n46" or "28-32- 46" — still
+# parse as one cite. Requiring an actual dash (not the old loose ``[^.\w]``) also
+# drops a latent false positive where a comma between numbers was read as a
+# separator. (Hardened 2026-06-20.)
+_SEP = r'\s*[-‐‑‒–—―−]\s*'
+
 # ---------------------------------------------------------------------------
 # NDCC Section: N.D.C.C. § 12.1-32-01
 # ---------------------------------------------------------------------------
@@ -17,8 +26,8 @@ _NDCC_SECTION = re.compile(
     r'(?:[^\s\d]{0,3}|[Ss]ection|[Ss]ec)\s{0,4})'
     r'|(?:(?:[Ss]ection|[Ss]ec\.?)\s+))'
     r'(\d{1,2})(?:\.(\d+))?'
-    r'[^.\w]{1,2}(\d{1,2})(?:\.(\d+))?'
-    r'[^.\w](\d{1,2})(?:\.(\d+))?'
+    rf'{_SEP}(\d{{1,2}})(?:\.(\d+))?'
+    rf'{_SEP}(\d{{1,2}})(?:\.(\d+))?'
     r'(?:\([^)]+\))?'
     r'(?:[,\s]*(?:of\s+the\s+)?'
     r'(?:North\s+Dakota\s+Century\s+Code|N[\s.]*D[\s.]*C(?:ent)*[.\s]*C(?:ode)*)|\W|$)',
@@ -31,7 +40,7 @@ _NDCC_CHAPTER = re.compile(
     r'(?:ch\.|ch|chapter)\s+)'
     r'|(?:(?<!C\.\s)(?<!\w)(?:[Cc]hapter|[Cc]h\.?)\s+))'
     r'(\d{1,2})(?:\.(\d+))?'
-    r'[^.\w]{1,2}(\d{1,2})(?:\.(\d+))?',
+    rf'{_SEP}(\d{{1,2}})(?:\.(\d+))?',
     re.IGNORECASE,
 )
 
@@ -40,21 +49,21 @@ _NDCC_CHAPTER = re.compile(
 # ---------------------------------------------------------------------------
 _NDAC_SECTION = re.compile(
     r'N[\s.]*D[\s.]*A(?:dmin)*[.\s]*(?:Code|C|Rules|R)*[,.\s]*[^\s\d]{0,3}\s*'
-    r'(\d{1,2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)[^.\w]{1,2}'
-    r'(\d{2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)',
+    rf'(\d{{1,2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}'
+    rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)',
     re.IGNORECASE,
 )
 
 _NDAC_CHAPTER = re.compile(
     r'N[\s.]*D[\s.]*A(?:dmin)*[.\s]*(?:Code|C|Rules|R)*[,.\s]{0,2}'
     r'(?:Ch\.|ch\.|Ch|ch)\s*'
-    r'(\d{1,2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)',
+    rf'(\d{{1,2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)',
     re.IGNORECASE,
 )
 
 _NDAC_REVERSE = re.compile(
-    r'(\d{2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)[^.\w]{1,2}'
-    r'(\d{2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)'
+    rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}'
+    rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)'
     r'(?:(?:\([a-z\d]*\))*|\D)(?:,\s{0,3})'
     r'N[\s.]*D[\s.]*A(?:dmin)*[.\s]*(?:Code|C|Rules|R)*',
     re.IGNORECASE,
@@ -69,8 +78,8 @@ _NDAC_REVERSE = re.compile(
 # is sufficient. The optional "(n)" is captured as a subsection pinpoint.
 _NDAC_SECTION_FWD = re.compile(
     r'(?:[Ss]ection|[Ss]ec\.?)\s+'
-    r'(\d{1,2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)[^.\w]{1,2}'
-    r'(\d{2}(?:\.\d+)?)[^.\w]{1,2}(\d{2}(?:\.\d+)?)'
+    rf'(\d{{1,2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}'
+    rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)'
     r'(?:\(([^)]+)\))?'
     r'(?:[,\s]*(?:of\s+the\s+)?'
     r'(?:North\s+Dakota\s+Admin(?:istrative)?\s+Code'

@@ -35,10 +35,12 @@ _PARA = r"¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)"
 # "491 F.3d 355" (bare page, no "at") cannot match.
 _FED_PIN = re.compile(r"\b(\d+)\s+F\.\s?(2d|3d|4th)\s+at\s+" + _PAGE)
 _F_SUPP_PIN = re.compile(r"\b(\d+)\s+F\.\s?Supp\.(?:\s?(2d|3d))?\s+at\s+" + _PAGE)
-_US_PIN = re.compile(r"\b(\d+)\s+U\.S\.\s+at\s+" + _PAGE)
+_US_PIN = re.compile(r"\b(\d+)\s+U\.\s?S\.\s+at\s+" + _PAGE)
 _S_CT_PIN = re.compile(r"\b(\d+)\s+S\.\s?Ct\.\s+at\s+" + _PAGE)
+# Two-letter reporters tolerate West's spaced house style ("N. W. 2d at 100");
+# _normalize_regional compacts the captured reporter.
 _REGIONAL_PIN = re.compile(
-    r"\b(\d+)\s+(N\.W\.|N\.E\.|S\.E\.|S\.W\.|So\.|A\.|P\.)\s?([23]d)?\s+at\s+" + _PAGE
+    r"\b(\d+)\s+(N\.\s?W\.|N\.\s?E\.|S\.\s?E\.|S\.\s?W\.|So\.|A\.|P\.)\s?([23]d)?\s+at\s+" + _PAGE
 )
 
 # Neutral "at ¶" short form. The full-cite pattern in neutral.py also accepts
@@ -75,6 +77,7 @@ _LOWER_ID_SIGNALS = ("(", "see", "see, e.g.,", "e.g.,", "cf.", "accord",
 
 def _normalize_regional(reporter: str, series: str | None) -> str:
     """Match the full-cite reporter conventions: N.W.3d (no space), So. 3d."""
+    reporter = re.sub(r"\.\s+", ".", reporter)   # "N. W." (West style) -> "N.W."
     if not series:
         return reporter
     if reporter == "So.":

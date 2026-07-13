@@ -26,6 +26,10 @@ resolving to the direct opinion **PDF URL**.
 | `www.ecfr.gov` | `www.ecfr.gov` | C.F.R. section links |
 | `ndlegis.gov` | `ndlegis.gov` | NDCC, NDAC |
 | `ndconst.org` | `ndconst.org` | ND Constitution |
+| `www.azleg.gov` | `www.azleg.gov` | A.R.S. statutes, Arizona Constitution |
+| `apps.azsos.gov` | `apps.azsos.gov` | A.A.C. chapter PDFs |
+| `www.azcourts.gov` | `www.azcourts.gov` | Arizona court rules index |
+| `www.legis.iowa.gov` | `www.legis.iowa.gov` | Iowa Code, Iowa Admin. Code, Iowa Court Rules, Iowa Constitution |
 | `constitutioncenter.org` | `constitutioncenter.org` | U.S. Constitution |
 
 **Minimum:** add `*.ndcourts.gov`. It is the only host needed for the default

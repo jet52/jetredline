@@ -35,10 +35,13 @@ _IL_NEUTRAL = re.compile(r'(\d{4})' + _WS + r'IL(?:' + _WS + r'App(?:' + _WS + r
 
 # Standard neutral citations: YYYY {abbrev} NNN
 # Arkansas, Colorado, Guam, Maine, Montana, N. Mariana Is., Oklahoma,
-# South Dakota, Utah, Vermont, Wisconsin, Wyoming, Arizona, New Hampshire
+# South Dakota, Utah, Vermont, Wisconsin, Wyoming, New Hampshire
+# NOTE: Arizona is deliberately absent — it has not adopted a medium-neutral
+# citation, so "YYYY AZ NNN" never occurs in real text and only invites false
+# positives. Arizona statutes/constitution are handled in patterns/states/az.py.
 _STANDARD_NEUTRAL = re.compile(
     r'([12]\d{3})' + _WS +
-    r'(Ark\.(?:\s+App\.)?|CO|Guam|ME|MT|MP|N\.H\.|OK|S\.D\.|UT(?:\s+App)?|VT|WI|WY|AZ)'
+    r'(Ark\.(?:\s+App\.)?|CO|Guam|ME|MT|MP|N\.H\.|OK|S\.D\.|UT(?:\s+App)?|VT|WI|WY)'
     + _WS + r'(\d+)'
 )
 
@@ -175,7 +178,7 @@ class NeutralCitationMatcher(BaseMatcher):
             # Map abbreviation to jurisdiction
             jur_map = {
                 "CO": "co", "ME": "me", "MT": "mt", "OK": "ok",
-                "VT": "vt", "WI": "wi", "WY": "wy", "AZ": "az",
+                "VT": "vt", "WI": "wi", "WY": "wy",
                 "Guam": "gu", "MP": "mp", "N.H.": "nh",
             }
             # Handle Ark., S.D., UT variants

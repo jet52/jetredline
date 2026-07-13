@@ -27,7 +27,7 @@ def _auto_register():
         pin_cites,
         regional,
     )
-    from jetcite.patterns.states import nd  # noqa: F401
+    from jetcite.patterns.states import az, ia, nd  # noqa: F401
 
 
 _auto_register()

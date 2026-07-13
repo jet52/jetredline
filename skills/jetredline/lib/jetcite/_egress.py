@@ -26,6 +26,10 @@ EGRESS_ALLOWLIST: dict[str, str] = {
     "www.ecfr.gov": "C.F.R. section links",
     "ndlegis.gov": "NDCC, NDAC",
     "ndconst.org": "ND Constitution",
+    "www.azleg.gov": "A.R.S. statutes, Arizona Constitution",
+    "apps.azsos.gov": "A.A.C. chapter PDFs",
+    "www.azcourts.gov": "Arizona court rules index",
+    "www.legis.iowa.gov": "Iowa Code, Iowa Admin. Code, Iowa Court Rules, Iowa Constitution",
     "constitutioncenter.org": "U.S. Constitution",
 }
 

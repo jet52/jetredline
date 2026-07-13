@@ -8,8 +8,8 @@ from jetcite.patterns.base import BaseMatcher
 from jetcite.sources.courtlistener import courtlistener_url
 from jetcite.sources.justia import us_reports_url
 
-# U.S. Reports: 505 U.S. 377
-_US_REPORTS = re.compile(r'(\d+)\s+U\.S\.\s+(\d+)')
+# U.S. Reports: 505 U.S. 377 (also West's spaced "260 U. S. 22")
+_US_REPORTS = re.compile(r'(\d+)\s+U\.\s?S\.\s+(\d+)')
 
 # Federal Reporter, modern series (mandatory): 491 F.3d 355, 731 F.2d 909, 12 F.4th 100
 _FEDERAL = re.compile(r'(\d+)\s+F\.\s?(2d|3d|4th)\s+(\d+)')

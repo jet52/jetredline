@@ -22,30 +22,33 @@ def _add(pattern: str, reporter_template: str, has_edition: bool = True):
 # Making the series mandatory prevents the regex engine from backtracking on
 # inputs like "491 F.3d at 363" or "409 So. 3d at 188" and producing a
 # truncated phantom citation ("491 F. 3", "409 So. 3").
-_add(r'(\d+)\s+N\.W\.\s?([23]d)\s+(\d+)', "N.W.{ed}", True)
+# Two-letter abbreviations tolerate an internal space/newline ("N. W. 2d"):
+# West's bound-volume house style prints them spaced; normalized output stays
+# compact.
+_add(r'(\d+)\s+N\.\s?W\.\s?([23]d)\s+(\d+)', "N.W.{ed}", True)
 _add(r'(\d+)\s+A\.([23]d)\s+(\d+)', "A.{ed}", True)
-_add(r'(\d+)\s+N\.E\.\s?([23]d)\s+(\d+)', "N.E.{ed}", True)
-_add(r'(\d+)\s+S\.E\.\s?(2d)\s+(\d+)', "S.E.{ed}", True)
+_add(r'(\d+)\s+N\.\s?E\.\s?([23]d)\s+(\d+)', "N.E.{ed}", True)
+_add(r'(\d+)\s+S\.\s?E\.\s?(2d)\s+(\d+)', "S.E.{ed}", True)
 _add(r'(\d+)\s+So\.\s?([23]d)\s+(\d+)', "So. {ed}", True)
-_add(r'(\d+)\s+S\.W\.\s?([23]d)\s+(\d+)', "S.W.{ed}", True)
+_add(r'(\d+)\s+S\.\s?W\.\s?([23]d)\s+(\d+)', "S.W.{ed}", True)
 _add(r'(\d+)\s+P\.([23]d)\s+(\d+)', "P.{ed}", True)
 
 # First series (no edition group)
 # Negative lookahead prevents matching "300 So. 2" when the actual text is "300 So. 2d 100"
-_add(r'(\d+)\s+N\.W\.\s+(\d+)(?!d\b)', "N.W.", False)
-_add(r'(\d+)\s+N\.E\.\s+(\d+)(?!d\b)', "N.E.", False)
+_add(r'(\d+)\s+N\.\s?W\.\s+(\d+)(?!d\b)', "N.W.", False)
+_add(r'(\d+)\s+N\.\s?E\.\s+(\d+)(?!d\b)', "N.E.", False)
 _add(r'(\d+)\s+A\.\s+(\d+)(?!d\b)', "A.", False)
 _add(r'(\d+)\s+P\.\s+(\d+)(?!d\b)', "P.", False)
-_add(r'(\d+)\s+S\.E\.\s+(\d+)(?!d\b)', "S.E.", False)
+_add(r'(\d+)\s+S\.\s?E\.\s+(\d+)(?!d\b)', "S.E.", False)
 _add(r'(\d+)\s+So\.\s+(\d+)(?!d\b)', "So.", False)
-_add(r'(\d+)\s+S\.W\.\s+(\d+)(?!d\b)', "S.W.", False)
+_add(r'(\d+)\s+S\.\s?W\.\s+(\d+)(?!d\b)', "S.W.", False)
 
 # State-specific reporters (modern series only — first series for these
 # reporters is rare in ND practice and not currently supported).
 _add(r'(\d+)\s+Cal\.\s?(2d|3d|4th|5th)\s+(\d+)', "Cal. {ed}", True)
 _add(r'(\d+)\s+Cal\.\s?Rptr\.\s?(2d|3d)\s+(\d+)', "Cal. Rptr. {ed}", True)
-_add(r'(\d+)\s+N\.Y\.([23]d)\s+(\d+)', "N.Y.{ed}", True)
-_add(r'(\d+)\s+N\.Y\.S\.([23]d)\s+(\d+)', "N.Y.S.{ed}", True)
+_add(r'(\d+)\s+N\.\s?Y\.([23]d)\s+(\d+)', "N.Y.{ed}", True)
+_add(r'(\d+)\s+N\.\s?Y\.\s?S\.([23]d)\s+(\d+)', "N.Y.S.{ed}", True)
 _add(r'(\d+)\s+Ohio\s+St\.\s?([23]d)\s+(\d+)', "Ohio St. {ed}", True)
 _add(r'(\d+)\s+Ill\.\s?(2d)\s+(\d+)', "Ill. {ed}", True)
 _add(r'(\d+)\s+Ill\.\s?Dec\.\s+(\d+)', "Ill. Dec.", False)
@@ -54,7 +57,9 @@ _add(r'(\d+)\s+Wash\.\s?App\.\s?(2d)\s+(\d+)', "Wash. App. {ed}", True)
 
 # North Dakota Reports: 50 N.D. 123 (volumes 1-79, published 1890-1953)
 # Use a negative lookahead to avoid matching "N.D.C." (NDCC) or "N.D.A." (NDAC)
-_add(r'(\d{1,3})\s+N\.D\.\s+(?!C|A)(\d+)', "N.D.", False)
+# ("N. D." spaced form per West house style; the lookahead still blocks the
+# spaced "N. D. C. C." statute form because the page must be a digit run)
+_add(r'(\d{1,3})\s+N\.\s?D\.\s+(?!C|A)(\d+)', "N.D.", False)
 
 # Malformed NW2d fallback (case-insensitive)
 _add(r'(\d+)\s+(?:NW\.?\s?2d|N\.W2d)\s+(\d+)', "N.W.2d", False)
@@ -62,7 +67,7 @@ _add(r'(\d+)\s+(?:NW\.?\s?2d|N\.W2d)\s+(\d+)', "N.W.2d", False)
 # Other state reporters (no edition)
 _STATE_REPORTERS = re.compile(
     r'(\d+)\s+'
-    r'(Conn\.|Ga\.|Haw\.|Kan\.|Mass\.|Md\.|Mich\.|N\.C\.|N\.J\.|Neb\.|Or\.|Pa\.|S\.C\.|Va\.)'
+    r'(Ariz\.(?:\s+App\.)?|Conn\.|Ga\.|Haw\.|Kan\.|Mass\.|Md\.|Mich\.|N\.C\.|N\.J\.|Neb\.|Or\.|Pa\.|S\.C\.|Va\.)'
     r'\s+(\d+)'
 )
 
