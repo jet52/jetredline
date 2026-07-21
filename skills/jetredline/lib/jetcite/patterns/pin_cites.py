@@ -11,6 +11,8 @@ split on the volume 'd' suffix"):
                                  casename.extract_antecedent_name in scanner)
   Shape 3 — bare-name pin:       Goss at 363; Niemeyer, ¶ 12
   Id. forms:                     Id.; Id. at 363; id. ¶ 14; *Id.* at 5
+  Rule pins:                     Rule 60(b) (bare — attributed to a rule
+                                 set by the marker ladder in scanner)
 
 Matching alone does not make a citation entry: candidates carry
 ``is_pin_cite=True`` and are linked to their parent full cite by
@@ -64,6 +66,22 @@ _ID_PIN = re.compile(
     r"(?:\s+at\s+(?:¶¶?\s*(?P<para_at>\d+(?:\s*[-–]\s*\d+)?)"
     r"|(?P<page>\d+(?:\s*[-–]\s*\d+)?))"
     r"|[,\s]+¶¶?\s*(?P<para>\d+(?:\s*[-–]\s*\d+)?))?"
+)
+
+# Bare "Rule N(x)" short forms — the rules analogue of the bare-name case
+# pin. The full-cite matchers require a rule-set marker in the same cite;
+# a later "Under Rule 60(b), relief requires ..." matches nothing there.
+# These are CANDIDATES ONLY: scanner._resolve_pin_cites attributes each to
+# a rule set via the marker ladder (trailing marker → nearest preceding
+# marker → sole set among the document's full cites) and drops the
+# unattributable ones. "Rules 12 and 56" (plural) deliberately does not
+# match — conjunction handling is punted until a real document needs it.
+# Subdivision components are 1-2 digits or 1-4 letters, so a year
+# "(2007)" or a prose parenthetical never reads as a subdivision.
+_RULE_PIN = re.compile(
+    r"\b[Rr]ule\s+(\d{1,4}(?:\.\d{1,2}){0,2})"
+    r"((?:\((?:\d{1,2}|[A-Za-z]{1,4})\))*)"
+    r"(?!\d)(?!\.\d)(?![A-Za-z])"
 )
 
 # Sentence-context guard for a bare capitalized "Id.": the preceding
@@ -188,6 +206,26 @@ class PinCiteMatcher(BaseMatcher):
                 m.group(0), m.start(),
                 components={"shape": "id"},
                 pin_page=page, pin_paragraph=para,
+            ))
+
+        # Bare "Rule N(x)" candidates. cite_type is COURT_RULE (unlike case
+        # pins): a resolved rule pin refers to a rule, and consumer cache
+        # loops must treat it as one. The scanner drops any candidate the
+        # attribution ladder cannot assign to a rule set.
+        for m in _RULE_PIN.finditer(text):
+            subdivision = m.group(2) or None
+            components = {"shape": "rule_pin", "rule": m.group(1)}
+            if subdivision:
+                components["subdivision"] = subdivision
+            results.append(Citation(
+                raw_text=m.group(0),
+                cite_type=CitationType.COURT_RULE,
+                jurisdiction="",
+                normalized=_collapse(m.group(0)),
+                components=components,
+                pinpoint=subdivision,
+                position=m.start(),
+                is_pin_cite=True,
             ))
 
         # Shape 3 — bare-name candidates. Suppress any that overlap a

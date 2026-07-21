@@ -64,7 +64,7 @@ _NDAC_CHAPTER = re.compile(
 _NDAC_REVERSE = re.compile(
     rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}'
     rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)'
-    r'(?:(?:\([a-z\d]*\))*|\D)(?:,\s{0,3})'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])(?:,\s{0,3})'
     r'N[\s.]*D[\s.]*A(?:dmin)*[.\s]*(?:Code|C|Rules|R)*',
     re.IGNORECASE,
 )
@@ -108,9 +108,12 @@ _ND_CONST_LONG = re.compile(
 # ---------------------------------------------------------------------------
 
 # N.D.R.Ct. 3-part: Rule 8.3.1
+# The trailing-form gap between the rule number and the set marker excludes
+# ";" throughout: a semicolon is a string-cite boundary, so "2024 ND 4;
+# N.D.R.Civ.P. 60(b)" must not read the neutral cite's "4" as a rule number.
 _NDRCT_3 = re.compile(
     r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|\D)[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
@@ -118,7 +121,7 @@ _NDRCT_3 = re.compile(
 # N.D.R.Ct. 2-part: Rule 11.10
 _NDRCT_2 = re.compile(
     r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
@@ -126,7 +129,7 @@ _NDRCT_2 = re.compile(
 # N.D. Sup. Ct. Admin. R. 2-part
 _ADMIN_2 = re.compile(
     r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d])[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*'
     r'N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[\s.]*'
     r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
@@ -135,7 +138,7 @@ _ADMIN_2 = re.compile(
 # N.D. Sup. Ct. Admin. R. 1-part
 _ADMIN_1 = re.compile(
     r'(?:(?:Rule\s+)?(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d])[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*'
     r'N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[\s.]*'
     r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rule\s+)?(\d{1,2})(?![.\d]))',
     re.IGNORECASE,
@@ -144,7 +147,7 @@ _ADMIN_1 = re.compile(
 # N.D.R.Ev. (3-4 digit rule numbers)
 _NDREV = re.compile(
     r'(?:(?:Rule\s+)?(\d{3,4})'
-    r'(?:(?:\([a-z\d]*\))*|\D)[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[.\s]*(?:Rule\s+)?(\d{3,4}))',
     re.IGNORECASE,
@@ -153,7 +156,7 @@ _NDREV = re.compile(
 # Procedural rules: N.D.R.Civ.P., N.D.R.Crim.P., N.D.R.App.P., N.D.R.Juv.P.
 _PROC_RULES = re.compile(
     r'(?:(?:Rule\s+)?(\d{1,2}(?:\.\d{1,2})?)'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d])[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*'
     r'(?:North\s+Dakota\s+Rules?\s+of\s+(Civil|Criminal|Appellate|Juvenile)\s+Procedure'
     r'|N[\s.]*D[\s.]*R[\s.]*(Civ|Crim|App|Juv)(?:il|inal|ellate|enile)?[\s.]*'
     r'P(?:rocedure)?[\s.]*))',
@@ -170,7 +173,7 @@ _PROC_RULES_PREFIX = re.compile(
 # N.D.R. Prof. Conduct
 _PROF_CONDUCT = re.compile(
     r'(?:(?:Rule\s+)?(\d)\.(\d+)'
-    r'(?:(?:\([a-z\d]*\))*|\D)[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[.\s]*(?:Rule\s+)?(\d)\.(\d+))',
     re.IGNORECASE,
@@ -179,7 +182,7 @@ _PROF_CONDUCT = re.compile(
 # N.D.R. Lawyer Discipl.
 _LAWYER_DISCIPL = re.compile(
     r'(?:(?:Rule\s+)?(\d)\.(\d+)'
-    r'(?:(?:\([a-z\d]*\))*|\D)[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[.\s]*(?:Rule\s+)?(\d)\.(\d+))',
     re.IGNORECASE,
@@ -188,7 +191,7 @@ _LAWYER_DISCIPL = re.compile(
 # N.D. Code Jud. Conduct (Canon:Rule format)
 _JUD_CONDUCT_CANON = re.compile(
     r'Canon\s+(\d)\s*:\s*Rule\s+(\d)\.(\d+)'
-    r'(?:(?:\([a-z\d]*\))*|\D)[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
     r'N[\s.]*D[\s.]*Code[\s.]*Jud(?:icial)?[\s.]*Conduct',
     re.IGNORECASE,
 )
@@ -203,7 +206,7 @@ _JUD_CONDUCT_RULE = re.compile(
 # N.D.R. Juv. P. decimal
 _JUV_DECIMAL = re.compile(
     r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|\D)[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
@@ -648,6 +651,93 @@ class NDMatcher(BaseMatcher):
             sources=[Source("ndcourts", nd_court_rule_url(rule_set, parts))],
             position=m.start(),
         )
+
+
+# ---------------------------------------------------------------------------
+# Rule-set marker vocabulary — bare "Rule N" short-form attribution
+# ---------------------------------------------------------------------------
+# Ported from ndcourts-mcp notes.py (rule_set_markers / _SPELLED_MARKERS),
+# proven on the opinion corpus in get_notes_of_decisions. A marker is any
+# in-text mention of a rule set — compact prefix ("N.D.R.Civ.P.", spacing-
+# tolerant) or spelled-out name ("Rules of Civil Procedure") — used by
+# scanner._resolve_pin_cites to attribute a bare "Rule 60(b)" to a set.
+# Canonical names match this module's normalized display prefixes so an
+# attributed set can be compared against full-cite normalized forms. Federal
+# sets are in the vocabulary as decoys: a bare "Rule 12" following a
+# Fed. R. Civ. P. discussion must not be attributed to the ND set.
+
+
+def _flex_prefix_pattern(prefix: str) -> str:
+    """A regex for a rule-set prefix tolerant of spacing variants.
+
+    'N.D.R.Civ.P.' matches 'N.D.R.Civ.P.', 'N. D. R. Civ. P.'; the spaced
+    canonicals ('N.D. Sup. Ct. Admin. R.') also match their compact forms."""
+    out = []
+    for ch in prefix:
+        if ch == ".":
+            out.append(r"\.\s*")
+        elif ch == " ":
+            out.append(r"\s*")
+        else:
+            out.append(re.escape(ch))
+    return "".join(out)
+
+
+# Spelled-out names for the commonly narrated rule sets (the compact-dotted
+# marker for every set is generated from its canonical prefix).
+_SPELLED_MARKERS = {
+    "N.D.R.Civ.P.": [r"North Dakota Rules of Civil Procedure",
+                     r"Rules of Civil Procedure"],
+    "N.D.R.Crim.P.": [r"Rules of Criminal Procedure"],
+    "N.D.R.Ev.": [r"Rules of Evidence"],
+    "N.D.R.App.P.": [r"Rules of Appellate Procedure"],
+    "N.D.R.Ct.": [r"Rules of Court"],
+    "N.D.R.Juv.P.": [r"Rules of Juvenile Procedure"],
+    "N.D. Sup. Ct. Admin. R.": [r"Administrative Rule"],
+    "N.D.R. Prof. Conduct": [r"Rules of Professional Conduct"],
+    "N.D. Code Jud. Conduct": [r"Code of Judicial Conduct"],
+    "Fed. R. Civ. P.": [r"Federal Rules of Civil Procedure"],
+    "Fed. R. Crim. P.": [r"Federal Rules of Criminal Procedure"],
+    "Fed. R. Evid.": [r"Federal Rules of Evidence"],
+    "Fed. R. App. P.": [r"Federal Rules of Appellate Procedure"],
+    "Fed. R. Bankr. P.": [r"Federal Rules of Bankruptcy Procedure"],
+}
+
+_MARKER_RULE_SETS = (
+    "N.D.R.Civ.P.", "N.D.R.Crim.P.", "N.D.R.Ev.", "N.D.R.App.P.",
+    "N.D.R.Ct.", "N.D.R.Juv.P.", "N.D. Sup. Ct. Admin. R.",
+    "N.D.R. Prof. Conduct", "N.D. Code Jud. Conduct",
+    "Fed. R. Civ. P.", "Fed. R. Crim. P.", "Fed. R. Evid.",
+    "Fed. R. App. P.", "Fed. R. Bankr. P.",
+)
+
+RULE_SET_JURISDICTION = {
+    prefix: ("us" if prefix.startswith("Fed.") else "nd")
+    for prefix in _MARKER_RULE_SETS
+}
+
+_MARKER_PATTERNS: list[tuple[str, re.Pattern]] = [
+    (canon, re.compile(pat))
+    for canon in _MARKER_RULE_SETS
+    for pat in [_flex_prefix_pattern(canon)] + _SPELLED_MARKERS.get(canon, [])
+]
+
+
+def rule_set_markers(text: str) -> list[tuple[int, int, str]]:
+    """Every rule-set mention in ``text`` as (start, end, canonical_prefix),
+    sorted by position. A marker fully contained in a longer one is dropped
+    ('Rules of Civil Procedure' inside 'Federal Rules of Civil Procedure')."""
+    hits: list[tuple[int, int, str]] = []
+    for canon, pat in _MARKER_PATTERNS:
+        for m in pat.finditer(text):
+            hits.append((m.start(), m.end(), canon))
+    hits.sort(key=lambda h: (h[0], -(h[1] - h[0])))
+    kept: list[tuple[int, int, str]] = []
+    for s, e, c in hits:
+        if kept and s >= kept[-1][0] and e <= kept[-1][1]:
+            continue  # contained in the previous (longer) marker
+        kept.append((s, e, c))
+    return kept
 
 
 register(4, NDMatcher())
