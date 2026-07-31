@@ -26,7 +26,7 @@ import re
 import sys
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 # ---------------------------------------------------------------------------
 # Paragraph splitting
@@ -421,6 +421,65 @@ def _nd_direct_url(local_path: str | None) -> str | None:
         f"?cit1={year_m.group(1)}&citType=ND&cit2={year_m.group(2)}"
         f"&pageSize=10&sortOrder=1"
     )
+
+
+# ---------------------------------------------------------------------------
+# ndlaw.org — one reading surface for every ND authority
+# ---------------------------------------------------------------------------
+
+# ndlaw.org resolves any ND citation — opinions, N.D.C.C., the Constitution,
+# court rules, the administrative code — from free text at /cite/<citation>.
+# We hand it the citation rather than building canonical paths here: the server
+# runs jetcite itself, and the canonical form is era-dependent for opinions
+# (a post-1997 case answers to its neutral cite, not its N.W.2d parallel), so
+# a URL grammar duplicated on this side would drift out of sync.
+_NDLAW_DEFAULT_BASE = "https://ndlaw.org"
+
+
+def _ndlaw_url(citation: str | None, pin_anchor: str | None,
+               base: str = _NDLAW_DEFAULT_BASE) -> str | None:
+    """Resolver URL for an ND citation, with the pinpoint ¶ as a fragment.
+
+    The fragment survives the resolver's 301: a browser reattaches the
+    original fragment when the redirect target carries none (RFC 7231
+    §7.1.2), so ``/cite/2020%20ND%2030#p14`` lands on ¶ 14 of ``/2020ND30``.
+    Verified in Chrome against a local instance (2026-07-31): final URL
+    ``/2020ND30#p14``, scrolled to the ``[¶14]`` marker.
+
+    Only opinions get a fragment — ``#p{n}`` matches the ¶ anchors ndlaw
+    renders in opinion bodies. Provision pages have no subsection anchors, and
+    the resolver drops the subdivision, so a fragment there would scroll
+    nowhere.
+    """
+    if not citation:
+        return None
+    url = f"{base.rstrip('/')}/cite/{quote(citation, safe='')}"
+    if pin_anchor:
+        url += f"#p{pin_anchor}"
+    return url
+
+
+def _ndlaw_eligible(cite: dict, meta: dict) -> bool:
+    """Whether ndlaw.org can serve this citation.
+
+    Two signals, both positive proof — never a guess. An ineligible citation
+    simply keeps the old panes; a wrong guess would iframe ndlaw's 404 page in
+    place of the authority, which is worse than not offering the copy.
+
+    1. ``jurisdiction == "nd"`` — ND neutral cites and all four provision
+       corpora (N.D.C.C., N.D.A.C., Constitution, court rules).
+    2. An ``ndlaw_export`` metadata entry, which exists only for citations
+       resolved against the ND corpus.
+
+    Signal 2 is what covers pre-1997 ND cases: they are cited to N.W. or
+    N.W.2d, which jetcite classifies as a regional reporter with jurisdiction
+    ``us`` — correct, the reporter is regional. The reporter alone cannot
+    stand in, because N.W.2d also carries six other states. A refs path cannot
+    stand in either: ``~/refs/opin/`` holds every reporter, federal and state
+    alike (``opin/US/``, ``opin/F3d/``, ``opin/Cal2d/``), so it says nothing
+    about jurisdiction until the three-tier restructure lands.
+    """
+    return cite.get("jurisdiction") == "nd" or bool(meta)
 
 
 _ND_OPINION_PDF_RE = re.compile(r"/supreme-court/opinions/\d+$")
@@ -916,6 +975,16 @@ main { display:flex; flex:1; overflow:hidden; }
 .pane-src iframe {
   flex:1; border:none; background:#fff; width:100%;
 }
+/* ndlaw is a compiled copy, not an official source — say so in the pane,
+   not only in a footer the reviewer scrolls past. Amber, and paired with the
+   word "unofficial", so it reads the same to a red-green colorblind viewer. */
+.unofficial-badge {
+  margin-left:auto; flex:none;
+  font-family:'SF Mono',monospace; font-size:10px; letter-spacing:.04em;
+  text-transform:uppercase; cursor:help;
+  color:#8a6d1a; background:#f5edd2; border:1px solid #e3d49a;
+  border-radius:3px; padding:2px 6px;
+}
 .pane-src .no-url, .pane-src .no-local {
   flex:1; display:flex; flex-direction:column;
   align-items:center; justify-content:center;
@@ -1309,6 +1378,11 @@ _JS = """\
         target.classList.add('pinpoint-active');
         setTimeout(function() { target.scrollIntoView({block:'center'}); }, 80);
       }
+      if (d.ndlaw_url) {
+        srcBody.insertAdjacentHTML('beforeend',
+          '<span class="local-toggle" onclick="window._showNdlaw()">' +
+          'ndlaw reading copy</span>');
+      }
     }
 
     // Helper: render iframe/web view into the source pane
@@ -1357,9 +1431,59 @@ _JS = """\
       srcBody.innerHTML = html;
     }
 
+    // Helper: render the ndlaw.org reading copy into the source pane.
+    // ndlaw serves every ND authority with ¶ anchors, so this is the view
+    // that lands on the cited paragraph. It is an UNOFFICIAL compiled copy —
+    // the official source stays one click away and keeps the header link.
+    function showNdlaw() {
+      var html = '<div class="source-link-bar">' +
+        '<span class="ext-icon">&#x1f517;</span>' +
+        '<a href="' + esc(d.ndlaw_url) + '" target="_blank">' +
+        esc(d.ndlaw_url.replace(/^https?:\\/\\//, '')) + '</a>' +
+        '<span class="unofficial-badge" title="Compiled copy, not an official' +
+        ' source. Verify against the official text before relying on it.">' +
+        'unofficial copy</span></div>';
+      html += '<iframe src="' + esc(d.ndlaw_url) + '"></iframe>';
+      var alts = [];
+      if (d.url) {
+        alts.push('<span class="local-toggle" onclick="window._showOfficial()">'
+          + 'Official source &#x2197;</span>');
+      }
+      if (sourceHtml) {
+        alts.push('<span class="local-toggle" onclick="window._showLocal()">'
+          + 'Local reference</span>');
+      }
+      srcBody.innerHTML = html + alts.join('');
+    }
+
+    // Helper: the official source in the same pane — the court's PDF via the
+    // PDF.js viewer where we have one, else the publisher's page, else a link.
+    function showOfficial() {
+      if (d.viewer_path || d.iframe_ok) {
+        showIframe();
+      } else if (sourceHtml) {
+        showLocal();
+      } else {
+        srcBody.innerHTML =
+          '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
+          '<a href="' + esc(d.url) + '" target="_blank">' +
+          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>' +
+          '<div class="no-local"><p>Official source cannot be displayed inline</p>' +
+          '<a class="open-tab-btn" href="' + esc(d.url) +
+          '" target="_blank">Open official source &#x2197;</a></div>';
+      }
+      if (d.ndlaw_url) {
+        srcBody.insertAdjacentHTML('beforeend',
+          '<span class="local-toggle" onclick="window._showNdlaw()">' +
+          'ndlaw reading copy</span>');
+      }
+    }
+
     // Expose for onclick
     window._showLocal = showLocal;
     window._showIframe = showIframe;
+    window._showNdlaw = showNdlaw;
+    window._showOfficial = showOfficial;
 
     // Set URL link (always visible)
     if (d.url) {
@@ -1370,9 +1494,13 @@ _JS = """\
       urlLink.textContent = sourceHtml ? 'local reference' : 'no URL available';
     }
 
-    // Choose primary view: local source preferred (instant), then the
-    // verification passage, then web fallbacks
-    if (sourceHtml) {
+    // Choose primary view. ndlaw first for ND authority: it is the only view
+    // that opens at the cited ¶ for every authority type, including statutes
+    // and rules that have no local reference and no court PDF. Everything
+    // else keeps the previous order — local (instant), passage, web.
+    if (d.ndlaw_url) {
+      showNdlaw();
+    } else if (sourceHtml) {
       showLocal();
     } else if (d.passage) {
       showPassage();
@@ -1645,7 +1773,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 via_map: dict[str, str] | None = None,
                 sources_meta: dict[str, dict] | None = None,
                 passages: list[dict] | None = None,
-                authority_alias: dict[str, str] | None = None) -> str:
+                authority_alias: dict[str, str] | None = None,
+                ndlaw_base: str | None = _NDLAW_DEFAULT_BASE) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
     via_map = via_map or {}
@@ -1727,7 +1856,14 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         # kept primary form.
         authority = parent_norm or norm
         authority = authority_alias.get(authority, authority)
+        # ndlaw reading copy. Keyed on the authority (a pin/repeat entry
+        # resolves to the cite it refers back to) but carrying THIS entry's
+        # pinpoint, so every occurrence opens at its own ¶.
+        ndlaw_url = None
+        if ndlaw_base and _ndlaw_eligible(c, meta):
+            ndlaw_url = _ndlaw_url(authority, pin_anchor, ndlaw_base)
         enriched.append({
+            "ndlaw_url": ndlaw_url,
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
             "normalized": norm,
@@ -1901,6 +2037,14 @@ def main():
                              "the exact text each pinpoint verification "
                              "relied on. Shown in the source pane when no "
                              "full text is embedded for the citation.")
+    parser.add_argument("--ndlaw-base", default=_NDLAW_DEFAULT_BASE,
+                        help="Base URL of the ndlaw citation site used for the "
+                             "reading-copy pane (default: %(default)s). Point "
+                             "at a local instance to test unreleased corpus "
+                             "changes.")
+    parser.add_argument("--no-ndlaw", action="store_true",
+                        help="Do not embed ndlaw reading copies; official "
+                             "sources and local refs only.")
     args = parser.parse_args()
 
     opinion_path = Path(args.opinion).expanduser()
@@ -1969,7 +2113,8 @@ def main():
 
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
                            via_map=via_map, sources_meta=sources_meta,
-                           passages=passages, authority_alias=authority_alias)
+                           passages=passages, authority_alias=authority_alias,
+                           ndlaw_base=None if args.no_ndlaw else args.ndlaw_base)
 
     out.write_text(html_str, encoding="utf-8")
     n_viewers = len(viewers)

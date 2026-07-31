@@ -9,6 +9,8 @@ from cite_review import (
     _IFRAME_OK_DOMAINS,
     _build_html,
     _find_paragraph,
+    _ndlaw_eligible,
+    _ndlaw_url,
     _opinion_to_html,
     _split_paragraphs,
     _via_key,
@@ -579,3 +581,107 @@ class TestFrontmatterCard:
         text = "---\ntitle: x\nno closing fence"
         meta, body = _split_frontmatter(text)
         assert meta == {} and body == text
+
+
+# ---------------------------------------------------------------------------
+# ndlaw.org reading copies
+# ---------------------------------------------------------------------------
+
+class TestNdlawUrl:
+    def test_free_text_resolver_form(self):
+        url = _ndlaw_url("2020 ND 30", None, "https://ndlaw.org")
+        assert url == "https://ndlaw.org/cite/2020%20ND%2030"
+
+    def test_pinpoint_becomes_paragraph_fragment(self):
+        """The fragment rides through the resolver's 301 (RFC 7231 §7.1.2);
+        verified in Chrome landing on /2020ND30#p14."""
+        url = _ndlaw_url("2020 ND 30", "14", "https://ndlaw.org")
+        assert url == "https://ndlaw.org/cite/2020%20ND%2030#p14"
+
+    def test_section_sign_and_spaces_encoded(self):
+        url = _ndlaw_url("N.D.C.C. § 14-09-06.2", None, "https://ndlaw.org")
+        assert " " not in url and "§" not in url
+        assert url.endswith("/cite/N.D.C.C.%20%C2%A7%2014-09-06.2")
+
+    def test_trailing_slash_on_base_not_doubled(self):
+        assert _ndlaw_url("2020 ND 30", None, "http://127.0.0.1:8777/") == \
+            "http://127.0.0.1:8777/cite/2020%20ND%2030"
+
+    def test_no_citation_no_url(self):
+        assert _ndlaw_url(None, "14", "https://ndlaw.org") is None
+
+
+class TestNdlawEligibility:
+    def test_nd_jurisdiction_eligible(self):
+        for t in ("neutral_cite", "statute", "constitution", "court_rule",
+                  "regulation"):
+            assert _ndlaw_eligible({"cite_type": t, "jurisdiction": "nd"},
+                                   {}), t
+
+    def test_foreign_authority_not_eligible(self):
+        assert not _ndlaw_eligible(
+            {"cite_type": "us_supreme_court", "jurisdiction": "us"}, {})
+
+    def test_pre_1997_nd_case_eligible_via_corpus_hit(self):
+        """jetcite marks '355 N.W.2d 16' jurisdiction 'us' — the reporter is
+        regional. Only an ndlaw metadata entry proves it is a ND case."""
+        cite = {"cite_type": "regional_reporter", "jurisdiction": "us"}
+        assert not _ndlaw_eligible(cite, {})
+        assert _ndlaw_eligible(cite, {"case_name": "State v. Hersch"})
+
+    def test_regional_reporter_alone_never_qualifies(self):
+        """N.W.2d carries six states besides North Dakota; a guess here would
+        iframe ndlaw's 404 page instead of the authority."""
+        assert not _ndlaw_eligible(
+            {"cite_type": "regional_reporter", "jurisdiction": "us",
+             "normalized": "355 N.W.2d 16"}, {})
+
+
+class TestNdlawInHtml:
+    OPINION = ("[¶1] See Olson v. Olson, 2024 ND 156, ¶ 7. Under "
+               "N.D.C.C. § 14-09-06.2 and N.D.R.App.P. 4(a). "
+               "But see 347 U.S. 483.\n")
+
+    @pytest.fixture
+    def entries(self, tmp_path):
+        from cite_check import scan_opinion
+        return scan_opinion(self.OPINION, refs_dir=str(tmp_path),
+                            cache_missing=False)
+
+    def test_nd_entries_get_urls_foreign_do_not(self, entries):
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION))
+        by_norm = {d["normalized"]: d for d in data}
+        assert by_norm["2024 ND 156"]["ndlaw_url"].startswith(
+            "https://ndlaw.org/cite/")
+        assert by_norm["N.D.C.C. § 14-09-06.2"]["ndlaw_url"] is not None
+        assert by_norm["N.D.R.App.P. 4"]["ndlaw_url"] is not None
+        assert by_norm["347 U.S. 483"]["ndlaw_url"] is None
+
+    def test_pinpoint_fragment_present_for_opinion(self, entries):
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION))
+        url = {d["normalized"]: d for d in data}["2024 ND 156"]["ndlaw_url"]
+        assert url.endswith("#p7")
+
+    def test_base_url_override(self, entries):
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION,
+                                 ndlaw_base="http://127.0.0.1:8777"))
+        urls = [d["ndlaw_url"] for d in data if d["ndlaw_url"]]
+        assert urls and all(u.startswith("http://127.0.0.1:8777/cite/")
+                            for u in urls)
+
+    def test_disabled_when_base_is_none(self, entries):
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION,
+                                 ndlaw_base=None))
+        assert all(d["ndlaw_url"] is None for d in data)
+
+    def test_unofficial_badge_and_toggles_rendered(self, entries):
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", entries, paras, "k", self.OPINION)
+        assert "unofficial-badge" in html_str
+        assert "window._showNdlaw" in html_str
+        assert "window._showOfficial" in html_str
+        assert "Official source" in html_str
