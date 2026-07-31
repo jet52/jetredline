@@ -9,7 +9,7 @@ SPLITMARKS_DEST := skills/jetredline/splitmarks.py
 PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
 WEB_ZIP := $(SKILL_NAME)-web-$(VERSION).zip
 
-.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks drift-check
+.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks drift-check version-check
 
 # Public package targets clean first (so zip -r never updates a stale archive),
 # then delegate to a build-* recipe. package-all cleans once and builds all three
@@ -45,7 +45,7 @@ build-web:
 # NOTE: jet-hub installs by git clone of this repo's default branch, not from any
 # zip — so a release must push main. The zips are attached for direct uploads
 # (Cowork plugin upload, Projects web bundle, manual skill drop).
-release: package-all
+release: version-check package-all
 	@VERSION=$$(cat skills/jetredline/VERSION) && \
 	git tag -a "v$$VERSION" -m "Release v$$VERSION" && \
 	git push origin main && \
@@ -84,9 +84,22 @@ drift-check:
 	  echo "splitmarks: canonical repo not present ($(SPLITMARKS_SRC)); skipping drift check."; \
 	fi
 
+# The version lives in three places that must agree: VERSION (canonical, drives
+# the zip names and check_update.py), the plugin manifest, and the SKILL.md
+# frontmatter the model reads. v4.9.0 shipped with only VERSION bumped; this
+# target makes that failure loud instead of silent.
+version-check:
+	@V=$$(cat skills/jetredline/VERSION) && \
+	PV=$$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .claude-plugin/plugin.json | head -1) && \
+	SV=$$(sed -n 's/^version:[[:space:]]*//p' skills/jetredline/SKILL.md | head -1) && \
+	if [ "$$V" != "$$PV" ] || [ "$$V" != "$$SV" ]; then \
+	  echo "VERSION DRIFT: VERSION=$$V plugin.json=$$PV SKILL.md=$$SV"; exit 1; \
+	fi; \
+	echo "version: $$V consistent across VERSION, plugin.json, SKILL.md."
+
 test: test-structure test-unit
 
-test-structure: drift-check
+test-structure: drift-check version-check
 	@echo "Validating skill structure..."
 	@test -f skills/jetredline/SKILL.md || (echo "FAIL: skills/jetredline/SKILL.md missing" && exit 1)
 	@test -d skills/jetredline/references || (echo "FAIL: skills/jetredline/references/ missing" && exit 1)

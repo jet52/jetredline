@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.8.1
+version: 4.9.1
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -239,17 +239,21 @@ For PDF files **> 10 MB**, use `splitmarks` to split the PDF at its top-level bo
 # Preview what bookmarks exist
 $VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf --dry-run -vv
 
-# Split into individual files in an output directory
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v
+# Split into individual files in an output directory, flagging image-scanned output
+$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v --check-text
 ```
+
+`--check-text` runs `pdftotext` over each output file and prints a `WARNING: <file> … appears image-scanned` line to stderr for anything under ~50 chars/page, naming the file and suggesting `ocrmypdf`. **Read those warnings — they tell you which files need the OCR ladder below before any subagent touches them.** The flag needs `pdftotext` on `PATH`; without poppler it degrades to "can't check," so its silence is not proof of a text layer.
 
 **Recursive split:** After the initial split, check the resulting files. If any single file is still **> 10 MB** (typically a record bundle containing many individual record items), split it again into a subdirectory:
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v
+$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v --check-text
 ```
 This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
 
-**Image-scanned / image-only PDFs (detection + OCR recovery):** splitmarks does not check whether output PDFs have an extractable text layer, and court e-filing systems (e.g., C-Track) routinely produce raster-scanned briefs with no text layer at all. **Detect and recover such files — do not skip them.** A brief the court never read is not a footnote; treat an unreadable input as a coverage failure (Step 11), not a stall.
+**Image-scanned / image-only PDFs (detection + OCR recovery):** Court e-filing systems (e.g., C-Track) routinely produce raster-scanned briefs with no text layer at all. **Detect and recover such files — do not skip them.** A brief the court never read is not a footnote; treat an unreadable input as a coverage failure (Step 11), not a stall.
+
+`splitmarks --check-text` flags split *outputs* proactively (above). It does **not** cover PDFs that were never split — anything ≤ 10 MB that went straight to a subagent — so run the detection signals below on those, and use them as a backstop whenever `--check-text` was unavailable or silent.
 
 **Detection (two signals; either one ⇒ treat as image-only). Both tools are optional — degrade, don't error:**
 - `pdffonts <file>.pdf` reports **zero embedded fonts** (near-certain image-only). If `pdffonts` is not on the probe (see below), skip this signal and rely on the next one.
