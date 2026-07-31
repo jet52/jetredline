@@ -2,6 +2,8 @@
 
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -678,27 +680,44 @@ class TestNdlawInHtml:
                                  ndlaw_base=None))
         assert all(d["ndlaw_url"] is None for d in data)
 
-    def test_unofficial_badge_and_toggles_rendered(self, entries):
+    def test_header_carries_the_mode_control(self, entries):
+        """The pane header names the view showing and cycles on click; the
+        provenance badge rides beside it."""
         paras = _split_paragraphs(self.OPINION)
         html_str = _build_html("t", entries, paras, "k", self.OPINION)
-        assert "unofficial-badge" in html_str
-        assert "official-badge" in html_str
-        assert "window._showNdlaw" in html_str
-        assert "window._showOfficial" in html_str
-        assert "Official &mdash; " in html_str      # toggle names the host
+        assert 'class="ptitle src-mode"' in html_str      # header button
+        assert 'class="src-badge"' in html_str
+        assert "modeBtn.onclick" in html_str
+        assert "window._cycleSource" in html_str
+        for label in ("ndlaw.org", "Official source", "Local reference"):
+            assert label in html_str, label
 
-    def test_official_view_never_substitutes_local_reference(self, entries):
-        """The toggle is a two-state switch. showOfficial must not fall back
-        to the cached copy — the pane would show a local file while the
-        button said 'official'."""
+    def test_mode_order_puts_ndlaw_first_and_local_last(self, entries):
+        """modes[0] is the default view; the cycle order is the array order."""
         paras = _split_paragraphs(self.OPINION)
         html_str = _build_html("t", entries, paras, "k", self.OPINION)
-        # Slice the render decision only — the toggle list after it may
-        # legitimately offer "Local reference" as an explicit third choice.
-        body = html_str[html_str.index("function showOfficial"):]
-        body = body[:body.index("var alts = []")]
-        assert "showLocal" not in body
-        assert "iframe" in body                 # it renders the publisher
+        block = html_str[html_str.index("var modes = []"):
+                         html_str.index("var curMode = 0")]
+        assert block.index("'ndlaw'") < block.index("'official'") < \
+            block.index("'local'")
+
+    def test_body_renderers_do_not_repeat_the_header_url(self, entries):
+        """The header owns the URL for the current view. An in-body link bar
+        would duplicate it and could disagree after a mode switch."""
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", entries, paras, "k", self.OPINION)
+        block = html_str[html_str.index("function renderLocal"):
+                         html_str.index("var modes = []")]
+        assert "source-link-bar" not in block
+        assert "local-toggle" not in block
+
+    def test_retired_toggle_machinery_fully_removed(self, entries):
+        """Chips and their globals are gone — no dead CSS, no dead handlers."""
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", entries, paras, "k", self.OPINION)
+        for dead in ("local-toggle", "pane-toggles", "source-link-bar",
+                     "_showOfficial", "_showNdlaw", "_showIframe"):
+            assert dead not in html_str, dead
 
 
 class TestOfficialSourceDomains:
@@ -712,3 +731,70 @@ class TestOfficialSourceDomains:
     ])
     def test_official_publishers_are_iframe_ok(self, host):
         assert host in _IFRAME_OK_DOMAINS
+
+
+# ---------------------------------------------------------------------------
+# The generated page must actually run
+# ---------------------------------------------------------------------------
+
+class TestGeneratedJavaScriptParses:
+    """Every other test here asserts on substrings of the output, which cannot
+    tell a working page from a broken one. A stray quote in a JS string
+    literal once took out the whole script — DATA never defined, citation
+    list empty, blank panes — while the substring assertions all passed. Parse
+    what we emit.
+    """
+
+    @staticmethod
+    def _scripts(html_str):
+        return re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>",
+                          html_str, re.DOTALL)
+
+    def _check(self, html_str, tmp_path):
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("node not on PATH")
+        scripts = self._scripts(html_str)
+        assert scripts, "no inline <script> found in generated page"
+        for n, js in enumerate(scripts):
+            f = tmp_path / f"emitted_{n}.js"
+            f.write_text(js, encoding="utf-8")
+            r = subprocess.run([node, "--check", str(f)],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, (
+                f"emitted <script> #{n} is not valid JavaScript:\n{r.stderr}")
+
+    def test_minimal_page_parses(self, sample_opinion, tmp_path):
+        paras = _split_paragraphs(sample_opinion)
+        cites = [{"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
+                  "normalized": "2023 ND 219", "jurisdiction": "nd",
+                  "url": "https://www.ndcourts.gov/supreme-court/opinions/1"}]
+        self._check(_build_html("t", cites, paras, "k", sample_opinion),
+                    tmp_path)
+
+    def test_page_with_every_source_mode_parses(self, sample_opinion, tmp_path):
+        """Exercises the ndlaw / official / local branches together — the
+        apostrophe that broke the page lived in the official branch."""
+        paras = _split_paragraphs(sample_opinion)
+        cites = [
+            {"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
+             "normalized": "2023 ND 219", "jurisdiction": "nd",
+             "pinpoint": "¶ 14",
+             "url": "https://www.ndcourts.gov/supreme-court/opinions/1"},
+            {"cite_text": "N.D.C.C. § 14-05-24", "cite_type": "statute",
+             "normalized": "N.D.C.C. § 14-05-24", "jurisdiction": "nd",
+             "url": "https://ndlegis.gov/cencode/t14c05.pdf"},
+            {"cite_text": "445 U.S. 684", "cite_type": "us_supreme_court",
+             "normalized": "445 U.S. 684", "jurisdiction": "us",
+             "url": "https://supreme.justia.com/cases/federal/us/445/684/"},
+        ]
+        self._check(_build_html("t", cites, paras, "k", sample_opinion),
+                    tmp_path)
+
+    def test_ndlaw_disabled_page_parses(self, sample_opinion, tmp_path):
+        paras = _split_paragraphs(sample_opinion)
+        cites = [{"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
+                  "normalized": "2023 ND 219", "jurisdiction": "nd",
+                  "url": "https://www.ndcourts.gov/supreme-court/opinions/1"}]
+        self._check(_build_html("t", cites, paras, "k", sample_opinion,
+                                ndlaw_base=None), tmp_path)

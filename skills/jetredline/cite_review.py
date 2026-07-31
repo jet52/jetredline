@@ -1031,33 +1031,33 @@ main { display:flex; flex:1; overflow:hidden; }
   font-family:'SF Mono',monospace; z-index:10;
 }
 .fallback-link:hover { background:var(--accent-dim); color:#fff; }
-.local-toggle {
-  position:absolute; bottom:8px; left:12px;
-  font-size:11px; color:var(--accent); background:var(--surface);
-  padding:4px 10px; border-radius:4px;
-  border:1px solid var(--border); text-decoration:none;
-  font-family:'SF Mono',monospace; z-index:10; cursor:pointer;
+/* The source pane's header label IS the view switcher: it names the view you
+   are looking at and cycles on click, with that view's own URL to its right.
+   Chips floating over the body could not do this — they had to name the view
+   you were NOT in, and they overlapped the PDF viewer's own controls. */
+.src-mode-wrap { display:flex; align-items:center; gap:8px; min-width:0; }
+.src-mode {
+  font:inherit; font-size:11px; font-weight:600; text-transform:uppercase;
+  letter-spacing:0.05em; color:var(--text-muted);
+  background:none; border:1px solid transparent; border-radius:4px;
+  padding:3px 8px; margin:-3px -8px;
 }
-.local-toggle:hover { background:var(--accent-dim); color:#fff; }
-/* More than one toggle needs a row: .local-toggle pins itself to a fixed
-   bottom-left corner, so two of them would land on the same spot and the
-   second would be invisible under the first. */
-.pane-toggles {
-  position:absolute; bottom:8px; left:12px;
-  display:flex; gap:6px; flex-wrap:wrap; z-index:10;
+.src-mode.cycles { cursor:pointer; }
+.src-mode.cycles:hover {
+  color:var(--text); border-color:var(--border); background:var(--bg);
 }
-.pane-toggles .local-toggle { position:static; bottom:auto; left:auto; }
-.source-link-bar {
-  display:flex; align-items:center; gap:8px;
-  padding:6px 16px; background:#f0f0ee; border-bottom:1px solid #d8d8d4;
-  flex-shrink:0; font-family:'SF Mono','Cascadia Code',monospace; font-size:11px;
+.src-mode.cycles::after { content:' \\21bb'; opacity:.55; }
+/* ndlaw.org is a domain, not a label — show it as written, per its own
+   spelling, rather than shouting it in caps like the other two states. */
+.src-mode.mode-ndlaw { text-transform:none; letter-spacing:0; }
+.src-badge {
+  font-family:'SF Mono',monospace; font-size:10px; letter-spacing:.04em;
+  text-transform:uppercase; cursor:help; flex:none;
+  border-radius:3px; padding:2px 6px;
+  color:#8a6d1a; background:#f5edd2; border:1px solid #e3d49a;
 }
-.source-link-bar a {
-  color:#3366cc; text-decoration:none; overflow:hidden;
-  text-overflow:ellipsis; white-space:nowrap;
-}
-.source-link-bar a:hover { text-decoration:underline; }
-.source-link-bar .ext-icon { font-size:13px; flex-shrink:0; }
+.src-badge.is-official { color:#1a4d8a; background:#dde8f5; border-color:#9ab8dc; }
+.src-badge.is-offline  { color:#4a4a4a; background:#e8e8e6; border-color:#c9c9c5; }
 .local-ref-html {
   flex:1; overflow-y:auto; padding:24px 36px;
   font-family:'Charter','Georgia','Times New Roman',serif; font-size:17px;
@@ -1361,21 +1361,18 @@ _JS = """\
     // Source pane
     const srcHdr = document.querySelector('.pane-src .pane-hdr');
     const urlLink = srcHdr.querySelector('.curl');
+    const modeBtn = srcHdr.querySelector('.src-mode');
+    const modeBadge = srcHdr.querySelector('.src-badge');
     const srcBody = document.querySelector('.src-body');
     const sourceHtml = d.source_key ? SOURCES[d.source_key] : null;
 
-    // Helper: render local source HTML into the source pane
-    function showLocal() {
+    // ---- Source view modes -------------------------------------------------
+    // Renderers write ONLY the content. The header carries the provenance
+    // label and the URL for whichever view is showing, so an in-body link bar
+    // would just repeat it.
+
+    function renderLocal() {
       srcBody.innerHTML = '';
-      // Source link bar at top
-      if (d.url) {
-        var bar = document.createElement('div');
-        bar.className = 'source-link-bar';
-        bar.innerHTML = '<span class="ext-icon">&#x1f517;</span>' +
-          '<a href="' + esc(d.url) + '" target="_blank">' +
-          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a>';
-        srcBody.appendChild(bar);
-      }
       var wrap = document.createElement('div');
       wrap.className = 'local-ref-html';
       wrap.innerHTML = sourceHtml;
@@ -1396,181 +1393,124 @@ _JS = """\
         target.classList.add('pinpoint-active');
         setTimeout(function() { target.scrollIntoView({block:'center'}); }, 80);
       }
-      if (d.ndlaw_url) {
-        srcBody.insertAdjacentHTML('beforeend',
-          '<span class="local-toggle" onclick="window._showNdlaw()">' +
-          'ndlaw reading copy</span>');
-      }
     }
 
-    // Helper: render iframe/web view into the source pane
-    function showIframe() {
-      var html = '';
-      if (d.url) {
-        html += '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
-          '<a href="' + esc(d.url) + '" target="_blank">' +
-          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>';
-      }
-      if (d.viewer_path) {
-        var viewerUrl = d.viewer_path;
-        if (d.search_term) viewerUrl += '#search=' + encodeURIComponent(d.search_term);
-        html += '<iframe src="' + esc(viewerUrl) + '"></iframe>' +
-          (d.search_term
-            ? '<div class="search-hint">Searching: <code>' + esc(d.search_term) + '</code></div>'
-            : '');
-      } else if (d.iframe_ok) {
-        html += '<iframe src="' + esc(d.url) + '"></iframe>';
-      }
-      if (sourceHtml) {
-        html += '<span class="local-toggle" onclick="window._showLocal()">Local reference</span>';
-      }
-      srcBody.innerHTML = html;
-      // Detect iframe load failure and auto-switch to local
-      var iframe = srcBody.querySelector('iframe');
-      if (iframe && sourceHtml) {
-        var loadTimer = setTimeout(function() { showLocal(); }, 8000);
-        iframe.addEventListener('load', function() { clearTimeout(loadTimer); });
-        iframe.addEventListener('error', function() { clearTimeout(loadTimer); showLocal(); });
-      }
-    }
-    // Helper: render a Pass 3B verification passage into the source pane
-    function showPassage() {
-      var html = '';
-      if (d.url) {
-        html += '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
-          '<a href="' + esc(d.url) + '" target="_blank">' +
-          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>';
-      }
-      html += '<div class="passage-box">' +
-        '<div class="passage-caption">Passage retrieved during citation ' +
-        'verification' + (d.pinpoint ? ' (' + esc(d.pinpoint) + ')' : '') +
-        ' — full text not embedded</div>' +
-        '<blockquote>' + esc(d.passage) + '</blockquote></div>';
-      srcBody.innerHTML = html;
-    }
-
-    // Helper: render the ndlaw.org reading copy into the source pane.
-    // ndlaw serves every ND authority with ¶ anchors, so this is the view
-    // that lands on the cited paragraph. It is an UNOFFICIAL compiled copy —
-    // the official source stays one click away and keeps the header link.
-    function showNdlaw() {
-      var html = '<div class="source-link-bar">' +
-        '<span class="ext-icon">&#x1f517;</span>' +
-        '<a href="' + esc(d.ndlaw_url) + '" target="_blank">' +
-        esc(d.ndlaw_url.replace(/^https?:\\/\\//, '')) + '</a>' +
-        '<span class="unofficial-badge" title="Compiled copy, not an official' +
-        ' source. Verify against the official text before relying on it.">' +
-        'unofficial copy</span></div>';
-      html += '<iframe src="' + esc(d.ndlaw_url) + '"></iframe>';
-      var alts = [];
-      if (d.url) {
-        // Name the destination: ndcourts.gov and ndlegis.gov mean different
-        // things to a reviewer deciding whether the official text is worth
-        // the click.
-        var ohost = d.url.replace(/^https?:\\/\\//, '').split('/')[0]
-                         .replace(/^www\\./, '');
-        alts.push('<span class="local-toggle" onclick="window._showOfficial()">'
-          + 'Official &mdash; ' + esc(ohost) + '</span>');
-      }
-      if (sourceHtml) {
-        alts.push('<span class="local-toggle" onclick="window._showLocal()">'
-          + 'Local reference</span>');
-      }
-      srcBody.innerHTML = html + (alts.length
-        ? '<div class="pane-toggles">' + alts.join('') + '</div>' : '');
-    }
-
-    // Helper: the OFFICIAL publisher's own page, in this pane. The toggle is
-    // a two-state switch between ndlaw and the official source, so this never
-    // silently substitutes the local reference — that would leave the pane
-    // showing a cached copy while the button said "official".
-    //   opinions   ndcourts.gov PDF (PDF.js viewer when we have one, so the
-    //              pinpoint ¶ is searched and highlighted)
-    //   N.D.C.C.   ndlegis.gov chapter PDF, #nameddest jumps to the section
-    //   N.D.A.C.   ndlegis.gov article PDF
-    //   rules      ndcourts.gov HTML
-    //   const      ndconst.org HTML
-    function showOfficial() {
+    // The publisher's own text: ndcourts.gov PDF (through the PDF.js viewer
+    // when we have one, so the pinpoint ¶ is searched and highlighted),
+    // ndlegis.gov chapter/article PDF for N.D.C.C. and N.D.A.C. with
+    // #nameddest landing on the section, ndcourts.gov HTML for court rules,
+    // ndconst.org HTML for the Constitution.
+    function renderOfficial() {
       var host = d.url ? d.url.replace(/^https?:\\/\\//, '').split('/')[0] : '';
       var html = '';
-      if (d.url) {
-        html += '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
-          '<a href="' + esc(d.url) + '" target="_blank">' +
-          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a>' +
-          '<span class="official-badge" title="The publisher\\'s own text.">' +
-          'official</span></div>';
-      }
       if (d.viewer_path) {
         var vurl = d.viewer_path;
         if (d.search_term) vurl += '#search=' + encodeURIComponent(d.search_term);
-        html += '<iframe src="' + esc(vurl) + '"></iframe>' +
+        html = '<iframe src="' + esc(vurl) + '"></iframe>' +
           (d.search_term
             ? '<div class="search-hint">Searching: <code>' +
               esc(d.search_term) + '</code></div>'
             : '');
       } else if (d.iframe_ok) {
-        html += '<iframe src="' + esc(d.url) + '"></iframe>';
+        html = '<iframe src="' + esc(d.url) + '"></iframe>';
       } else {
-        html += '<div class="no-local">' +
+        html = '<div class="no-local">' +
           '<p>' + (d.url ? esc(host) + ' cannot be displayed inline'
                          : 'No official source URL for this citation') + '</p>' +
           (d.url ? '<a class="open-tab-btn" href="' + esc(d.url) +
                    '" target="_blank">Open official source &#x2197;</a>' : '') +
           '</div>';
       }
-      var alts = [];
-      if (d.ndlaw_url) {
-        alts.push('<span class="local-toggle" onclick="window._showNdlaw()">'
-          + 'ndlaw reading copy</span>');
-      }
-      if (sourceHtml) {
-        alts.push('<span class="local-toggle" onclick="window._showLocal()">'
-          + 'Local reference</span>');
-      }
-      srcBody.innerHTML = html + (alts.length
-        ? '<div class="pane-toggles">' + alts.join('') + '</div>' : '');
+      srcBody.innerHTML = html;
     }
 
-    // Expose for onclick
-    window._showLocal = showLocal;
-    window._showIframe = showIframe;
-    window._showNdlaw = showNdlaw;
-    window._showOfficial = showOfficial;
-
-    // Set URL link (always visible)
-    if (d.url) {
-      urlLink.href = d.url;
-      urlLink.textContent = d.url.replace(/^https?:\\/\\//, '');
-    } else {
-      urlLink.href = '#';
-      urlLink.textContent = sourceHtml ? 'local reference' : 'no URL available';
+    function renderNdlaw() {
+      srcBody.innerHTML = '<iframe src="' + esc(d.ndlaw_url) + '"></iframe>';
     }
 
-    // Choose primary view. ndlaw first for ND authority: it is the only view
-    // that opens at the cited ¶ for every authority type, including statutes
-    // and rules that have no local reference and no court PDF. Everything
-    // else keeps the previous order — local (instant), passage, web.
-    if (d.ndlaw_url) {
-      showNdlaw();
-    } else if (sourceHtml) {
-      showLocal();
-    } else if (d.passage) {
-      showPassage();
-    } else if (d.viewer_path || d.iframe_ok) {
-      showIframe();
-    } else if (d.url) {
+    function renderPassage() {
+      srcBody.innerHTML = '<div class="passage-box">' +
+        '<div class="passage-caption">Passage retrieved during citation ' +
+        'verification' + (d.pinpoint ? ' (' + esc(d.pinpoint) + ')' : '') +
+        ' — full text not embedded</div>' +
+        '<blockquote>' + esc(d.passage) + '</blockquote></div>';
+    }
+
+    function renderNoSource() {
       srcBody.innerHTML =
-        '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
-        '<a href="' + esc(d.url) + '" target="_blank">' +
-        esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>' +
-        '<div class="no-local">' +
-        '<p>Source not cached locally</p>' +
-        '<a class="open-tab-btn" href="' + esc(d.url) +
-        '" target="_blank">Open source in new tab &#x2197;</a>' +
-        '</div>';
-    } else {
-      srcBody.innerHTML = '<div class="no-url">No source URL for this citation</div>';
+        '<div class="no-url">No source URL for this citation</div>';
     }
+
+    // No load-timeout fallback. An earlier version switched to the offline
+    // copy if a frame had not loaded in 8s, and it misfired on the first
+    // request to a cold server — the reviewer picked ndlaw and silently got
+    // ~/refs. Slow is not failed, the switch is one click or one keypress
+    // away, and a verification tool should never change what you are looking
+    // at without being asked.
+
+    // Order here is both the cycle order and the default (modes[0] opens).
+    // ndlaw leads for ND authority: it is the only view that opens at the
+    // cited ¶ for every authority type, including the statutes and rules that
+    // have no local reference and no court PDF.
+    var modes = [];
+    if (d.ndlaw_url) modes.push({
+      key: 'ndlaw', label: 'ndlaw.org', badge: 'unofficial',
+      badgeTitle: 'Compiled copy, not an official source. Verify against the '
+                + 'official text before relying on it.',
+      url: d.ndlaw_url, render: renderNdlaw});
+    if (d.url) modes.push({
+      key: 'official', label: 'Official source', badge: 'official',
+      badgeTitle: 'The publisher\\'s own text.',
+      url: d.url, render: renderOfficial});
+    if (sourceHtml) modes.push({
+      key: 'local', label: 'Local reference', badge: 'offline',
+      badgeTitle: 'Cached copy under ~/refs. Readable with no network.',
+      url: null, render: renderLocal});
+    else if (d.passage) modes.push({
+      key: 'passage', label: 'Verification passage', badge: 'excerpt',
+      badgeTitle: 'The exact text the citation check relied on.',
+      url: d.url, render: renderPassage});
+    if (!modes.length) modes.push({
+      key: 'none', label: 'Source', badge: '', badgeTitle: '',
+      url: null, render: renderNoSource});
+
+    var curMode = 0;
+    function setMode(i) {
+      curMode = ((i % modes.length) + modes.length) % modes.length;
+      var m = modes[curMode];
+      var cycles = modes.length > 1;
+      modeBtn.textContent = m.label;
+      modeBtn.className = 'ptitle src-mode mode-' + m.key + (cycles ? ' cycles' : '');
+      modeBtn.disabled = !cycles;
+      modeBtn.title = cycles
+        ? 'Showing ' + m.label + ' — click for '
+          + modes[(curMode + 1) % modes.length].label
+        : m.label;
+      if (m.badge) {
+        modeBadge.hidden = false;
+        modeBadge.textContent = m.badge;
+        modeBadge.title = m.badgeTitle;
+        modeBadge.className = 'src-badge is-' + m.key.replace('local', 'offline');
+      } else {
+        modeBadge.hidden = true;
+      }
+      if (m.url) {
+        urlLink.href = m.url;
+        urlLink.textContent = m.url.replace(/^https?:\\/\\//, '');
+      } else {
+        urlLink.removeAttribute('href');
+        urlLink.textContent = m.key === 'local'
+          ? 'cached copy — no network needed' : '';
+      }
+      m.render();
+    }
+    modeBtn.onclick = function() { if (modes.length > 1) setMode(curMode + 1); };
+    // Keyboard reaches the same control: l forward, h back (the keys that
+    // used to jump straight to the web and local views).
+    window._cycleSource = function(delta) {
+      if (modes.length > 1) setMode(curMode + (delta || 1));
+    };
+    setMode(0);
 
     // Buttons
     updateButtons(cs.status);
@@ -1636,8 +1576,8 @@ _JS = """\
       autoAdvance = !autoAdvance;
       updateAutoAdvanceIndicator();
     }
-    else if (e.key === 'l') { if (window._showIframe) window._showIframe(); }
-    else if (e.key === 'h') { if (window._showLocal) window._showLocal(); }
+    else if (e.key === 'l') { if (window._cycleSource) window._cycleSource(1); }
+    else if (e.key === 'h') { if (window._cycleSource) window._cycleSource(-1); }
     else if (e.key === 'n') { e.preventDefault(); document.getElementById('notes-input').focus(); }
     else if (e.key === '?') toggleHelp();
     else if (e.key === 'Escape') closeHelp();
@@ -1995,7 +1935,10 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
 
       <div class="pane-src">
         <div class="pane-hdr">
-          <span class="ptitle">Source</span>
+          <span class="src-mode-wrap">
+            <button type="button" class="ptitle src-mode">Source</button>
+            <span class="src-badge" hidden></span>
+          </span>
           <a class="curl" href="#" target="_blank"></a>
         </div>
         <div class="src-body" style="flex:1;display:flex;flex-direction:column;position:relative;min-height:0;overflow:hidden;">
