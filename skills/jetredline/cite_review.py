@@ -307,9 +307,12 @@ _ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 # Domains whose pages can be loaded in an iframe (no X-Frame-Options block).
 # Used only when no embedded text is available for the citation.
 _IFRAME_OK_DOMAINS = frozenset({
-    "ndlegis.gov",
-    "www.ndcourts.gov",
+    "ndlegis.gov",          # N.D.C.C. chapter PDFs (#nameddest jumps to §),
+                            # N.D.A.C. article PDFs
+    "www.ndcourts.gov",     # opinion PDFs; court rules as HTML
     "ndcourts.gov",
+    "ndconst.org",          # ND Constitution, article/section HTML
+    "www.ndconst.org",
 })
 
 # PDF.js CDN version
@@ -978,12 +981,19 @@ main { display:flex; flex:1; overflow:hidden; }
 /* ndlaw is a compiled copy, not an official source — say so in the pane,
    not only in a footer the reviewer scrolls past. Amber, and paired with the
    word "unofficial", so it reads the same to a red-green colorblind viewer. */
-.unofficial-badge {
+.unofficial-badge, .official-badge {
   margin-left:auto; flex:none;
   font-family:'SF Mono',monospace; font-size:10px; letter-spacing:.04em;
   text-transform:uppercase; cursor:help;
-  color:#8a6d1a; background:#f5edd2; border:1px solid #e3d49a;
   border-radius:3px; padding:2px 6px;
+}
+.unofficial-badge {
+  color:#8a6d1a; background:#f5edd2; border:1px solid #e3d49a;
+}
+/* Blue against the amber above — distinguishable without relying on a
+   red/green contrast, and the words differ regardless of color. */
+.official-badge {
+  color:#1a4d8a; background:#dde8f5; border:1px solid #9ab8dc;
 }
 .pane-src .no-url, .pane-src .no-local {
   flex:1; display:flex; flex-direction:column;
@@ -1029,6 +1039,14 @@ main { display:flex; flex:1; overflow:hidden; }
   font-family:'SF Mono',monospace; z-index:10; cursor:pointer;
 }
 .local-toggle:hover { background:var(--accent-dim); color:#fff; }
+/* More than one toggle needs a row: .local-toggle pins itself to a fixed
+   bottom-left corner, so two of them would land on the same spot and the
+   second would be invisible under the first. */
+.pane-toggles {
+  position:absolute; bottom:8px; left:12px;
+  display:flex; gap:6px; flex-wrap:wrap; z-index:10;
+}
+.pane-toggles .local-toggle { position:static; bottom:auto; left:auto; }
 .source-link-bar {
   display:flex; align-items:center; gap:8px;
   padding:6px 16px; background:#f0f0ee; border-bottom:1px solid #d8d8d4;
@@ -1446,37 +1464,71 @@ _JS = """\
       html += '<iframe src="' + esc(d.ndlaw_url) + '"></iframe>';
       var alts = [];
       if (d.url) {
+        // Name the destination: ndcourts.gov and ndlegis.gov mean different
+        // things to a reviewer deciding whether the official text is worth
+        // the click.
+        var ohost = d.url.replace(/^https?:\\/\\//, '').split('/')[0]
+                         .replace(/^www\\./, '');
         alts.push('<span class="local-toggle" onclick="window._showOfficial()">'
-          + 'Official source &#x2197;</span>');
+          + 'Official &mdash; ' + esc(ohost) + '</span>');
       }
       if (sourceHtml) {
         alts.push('<span class="local-toggle" onclick="window._showLocal()">'
           + 'Local reference</span>');
       }
-      srcBody.innerHTML = html + alts.join('');
+      srcBody.innerHTML = html + (alts.length
+        ? '<div class="pane-toggles">' + alts.join('') + '</div>' : '');
     }
 
-    // Helper: the official source in the same pane — the court's PDF via the
-    // PDF.js viewer where we have one, else the publisher's page, else a link.
+    // Helper: the OFFICIAL publisher's own page, in this pane. The toggle is
+    // a two-state switch between ndlaw and the official source, so this never
+    // silently substitutes the local reference — that would leave the pane
+    // showing a cached copy while the button said "official".
+    //   opinions   ndcourts.gov PDF (PDF.js viewer when we have one, so the
+    //              pinpoint ¶ is searched and highlighted)
+    //   N.D.C.C.   ndlegis.gov chapter PDF, #nameddest jumps to the section
+    //   N.D.A.C.   ndlegis.gov article PDF
+    //   rules      ndcourts.gov HTML
+    //   const      ndconst.org HTML
     function showOfficial() {
-      if (d.viewer_path || d.iframe_ok) {
-        showIframe();
-      } else if (sourceHtml) {
-        showLocal();
-      } else {
-        srcBody.innerHTML =
-          '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
+      var host = d.url ? d.url.replace(/^https?:\\/\\//, '').split('/')[0] : '';
+      var html = '';
+      if (d.url) {
+        html += '<div class="source-link-bar"><span class="ext-icon">&#x1f517;</span>' +
           '<a href="' + esc(d.url) + '" target="_blank">' +
-          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a></div>' +
-          '<div class="no-local"><p>Official source cannot be displayed inline</p>' +
-          '<a class="open-tab-btn" href="' + esc(d.url) +
-          '" target="_blank">Open official source &#x2197;</a></div>';
+          esc(d.url.replace(/^https?:\\/\\//, '')) + '</a>' +
+          '<span class="official-badge" title="The publisher\\'s own text.">' +
+          'official</span></div>';
       }
+      if (d.viewer_path) {
+        var vurl = d.viewer_path;
+        if (d.search_term) vurl += '#search=' + encodeURIComponent(d.search_term);
+        html += '<iframe src="' + esc(vurl) + '"></iframe>' +
+          (d.search_term
+            ? '<div class="search-hint">Searching: <code>' +
+              esc(d.search_term) + '</code></div>'
+            : '');
+      } else if (d.iframe_ok) {
+        html += '<iframe src="' + esc(d.url) + '"></iframe>';
+      } else {
+        html += '<div class="no-local">' +
+          '<p>' + (d.url ? esc(host) + ' cannot be displayed inline'
+                         : 'No official source URL for this citation') + '</p>' +
+          (d.url ? '<a class="open-tab-btn" href="' + esc(d.url) +
+                   '" target="_blank">Open official source &#x2197;</a>' : '') +
+          '</div>';
+      }
+      var alts = [];
       if (d.ndlaw_url) {
-        srcBody.insertAdjacentHTML('beforeend',
-          '<span class="local-toggle" onclick="window._showNdlaw()">' +
-          'ndlaw reading copy</span>');
+        alts.push('<span class="local-toggle" onclick="window._showNdlaw()">'
+          + 'ndlaw reading copy</span>');
       }
+      if (sourceHtml) {
+        alts.push('<span class="local-toggle" onclick="window._showLocal()">'
+          + 'Local reference</span>');
+      }
+      srcBody.innerHTML = html + (alts.length
+        ? '<div class="pane-toggles">' + alts.join('') + '</div>' : '');
     }
 
     // Expose for onclick

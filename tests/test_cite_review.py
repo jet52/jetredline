@@ -682,6 +682,33 @@ class TestNdlawInHtml:
         paras = _split_paragraphs(self.OPINION)
         html_str = _build_html("t", entries, paras, "k", self.OPINION)
         assert "unofficial-badge" in html_str
+        assert "official-badge" in html_str
         assert "window._showNdlaw" in html_str
         assert "window._showOfficial" in html_str
-        assert "Official source" in html_str
+        assert "Official &mdash; " in html_str      # toggle names the host
+
+    def test_official_view_never_substitutes_local_reference(self, entries):
+        """The toggle is a two-state switch. showOfficial must not fall back
+        to the cached copy — the pane would show a local file while the
+        button said 'official'."""
+        paras = _split_paragraphs(self.OPINION)
+        html_str = _build_html("t", entries, paras, "k", self.OPINION)
+        # Slice the render decision only — the toggle list after it may
+        # legitimately offer "Local reference" as an explicit third choice.
+        body = html_str[html_str.index("function showOfficial"):]
+        body = body[:body.index("var alts = []")]
+        assert "showLocal" not in body
+        assert "iframe" in body                 # it renders the publisher
+
+
+class TestOfficialSourceDomains:
+    """Every ND authority type resolves to a publisher we can frame, so the
+    official half of the toggle renders inline rather than punting to a tab."""
+
+    @pytest.mark.parametrize("host", [
+        "www.ndcourts.gov",   # opinion PDFs, court rules as HTML
+        "ndlegis.gov",        # N.D.C.C. and N.D.A.C. PDFs
+        "ndconst.org",        # ND Constitution HTML
+    ])
+    def test_official_publishers_are_iframe_ok(self, host):
+        assert host in _IFRAME_OK_DOMAINS
