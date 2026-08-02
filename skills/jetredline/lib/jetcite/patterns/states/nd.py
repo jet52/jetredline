@@ -5,7 +5,11 @@ import re
 from jetcite.models import Citation, CitationType, Source
 from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
-from jetcite.sources.ndconst import nd_constitution_url
+from jetcite.sources.ndconst import (
+    OLD_SECTION_MAX,
+    nd_constitution_old_url,
+    nd_constitution_url,
+)
 from jetcite.sources.ndcourts import nd_court_rule_url, nd_local_rule_url
 from jetcite.sources.ndlegis import ndac_url, ndcc_chapter_url, ndcc_section_url
 
@@ -97,11 +101,105 @@ _ND_CONST_SHORT = re.compile(
 )
 
 _ND_CONST_LONG = re.compile(
-    r'(?:Article|Art\.?)\s+([IVX]+)[,\s]+(?:section|sec\.?)\s+(\d+)'
+    r'(?:Article|Art\.?)\s+\[?([IVX]+)\]?[,\s]+(?:section|sec\.?)\s+(\d+)'
     r'(?:(?:\([a-z\d]*\))*|\D)\s+of\s+the\s+'
     r'N(?:orth)?\s*D(?:akota)?\s*Const(?:itution)?',
     re.IGNORECASE,
 )
+
+# Pre-1981 (1889 numbering) ND Constitution: sections were numbered
+# continuously 1-217 with no article, so old cites are section-only —
+# "section 121 of the Constitution," "Section 121, N.D. Const.,"
+# "N.D. Const. § 121." Normalized to "N.D. Const. § NNN" (the
+# const_crosswalk old_cite format).
+
+# One leading section number plus an optional enumeration tail
+# ("185 and 186", "179, 180, and 181"); each number becomes its own cite.
+# Old numbering is integer-only (1-217): a DECIMAL continuation means the
+# number belongs to something else ("N.D. Const., Section 16.1-11-08,
+# N.D.C.C." is a statute cite in a string cite, not old § 16), as does a
+# statute-shaped dash chain ("Sec. 11-1002, NDRC 1943" = dash + 4 digits;
+# "Section 54-03-01" = dash-separated chain). A section RANGE is kept —
+# "Secs. 130, 166–173" cites old § 166 (range tails stay unparsed).
+_NOT_STATUTE_NUM = r'(?!\.\d)(?![-–—]\d{4})(?![-–—]\d{1,3}[.\-–—]\d)'
+_OLD_SECTION_LIST = (
+    rf'(\d{{1,3}})(?!\d){_NOT_STATUTE_NUM}'
+    rf'((?:\s*,\s*(?:and\s+)?\d{{1,3}}|\s+and\s+\d{{1,3}})*)(?!\d){_NOT_STATUTE_NUM}'
+)
+
+# Optional spelled-out attribution after "Constitution": "of North Dakota",
+# "of the State of North Dakota", "of the state", "of 1889".
+_OLD_CONST_OF_ND = (
+    r'(?:\s+of\s+(?:the\s+)?(?:(?:State\s+of\s+)?North\s+Dakota|state\b|1889))?'
+)
+
+# Trailing form: "section(s) N [...] of the [state|North Dakota|1889]
+# Constitution [of North Dakota]" / "Section N, N.D. Const." The attribution
+# vocabulary is closed (state, our, N.D., 1889, original...), so
+# "section 2 of the United States Constitution" cannot match; the lookahead
+# additionally rejects "of the Constitution of the United States".
+_ND_CONST_OLD_TRAIL = re.compile(
+    r'(?:§§?|(?<![A-Za-z])[Ss]ec(?:tion)?s?\.?)\s*'
+    rf'{_OLD_SECTION_LIST}'
+    r'[,\s]*(?:of\s+)?(?:the\s+|our\s+)?'
+    r'(?:(?:1889|original|old|former)\s+)?'
+    r'(?:(?:North\s+Dakota|N[.\s]*D[.\s]*|state)\s+)?'
+    r'Const(?:itution\b|\.)'
+    rf'{_OLD_CONST_OF_ND}'
+    r'(?!\s+of\b)'
+    # A ROMAN-numbered article right after "Const." means the section numbers
+    # belong to a MODERN article-scoped cite read tail-first ("Sections 1
+    # and 10, N.D. Const. art. III"); ", Article I" likewise. Arabic-numbered
+    # ("Constitution, article 28 of Amendments thereto") is a pre-1981
+    # amendment article — a real old-numbering context, kept. A new sentence
+    # ("... Constitution. Article VI provides") is not rejected: the no-comma
+    # branch requires the abbreviated "Art." form.
+    r'(?!\s*,\s*[Aa]rt(?:icle)?\b\.?\s*\[?[IVXLC])(?!\s+[Aa]rt\b\.\s*\[?[IVXLC])',
+    re.IGNORECASE,
+)
+
+# Leading form: "N.D. Const. § 121", "Constitution, § 121". A bare "Const."
+# (no ND marker, not spelled out) is NOT accepted — that shape belongs to
+# other jurisdictions' cites ("Iowa Const. ...").
+_ND_CONST_OLD_LEAD = re.compile(
+    r'(?:N(?:orth)?[\s.]*D(?:akota)?[\s.]*Const(?:itution\b|\.)|Constitution\b)'
+    rf'{_OLD_CONST_OF_ND}'
+    r'[,\s]*(?:§§?|(?<![A-Za-z])[Ss]ec(?:tion)?s?\.?)\s*'
+    rf'{_OLD_SECTION_LIST}'
+    # "N.D.Const., section 6, of that same Article" — the section number is
+    # scoped to an article named earlier in the sentence, not old numbering.
+    r'(?!,?\s*of\s+th(?:at|e)\s+same\s+[Aa]rt)',
+    re.IGNORECASE,
+)
+
+# Reject an old-form match when the immediately preceding text shows it is
+# really an article-scoped cite ("Article II, section 1 of the Constitution",
+# including a bracket-altered quotation "article [I], section 1 ...")
+# or a federal one ("United States Constitution, § 2"). The article branch
+# tolerates an intervening enumeration chain ("Article I, § 3 and § 4 of
+# the ..." — the § 4 match is the tail of the SAME article-scoped cite) and
+# an intervening star-page marker ("Article VI, [*348] Section 3 of the ...").
+_OLD_CONST_BAD_PREFIX = re.compile(
+    r'\b(?:[Aa]rt(?:icle)?\.?\s*\[?[IVXLCivxlc\d]+\]?\s*[,.]?'
+    # comma/and only — a SEMICOLON ends a string cite, so "U.S. Const.
+    # art. 1, § 10; N.D. Const. § 16" must not chain into the ND cite
+    r'(?:\s*(?:§§?|[Ss]ec(?:tions?)?\.?)\s*\d+(?:\.\d+)?,?\s*(?:and\s+)?)*'
+    r'(?:\s*\[\*\d+\])?'
+    r'|U\.?\s*S\.?|United\s+States|[Ff]ed(?:eral)?\.?)\s*$'
+)
+
+# A bare-"Constitution" lead match ("Constitution, § 2") preceded by a
+# capitalized word is another jurisdiction's constitution ("Montana
+# Constitution, § 2, art. 8") — the closed attribution vocabulary can't see
+# words the pattern never consumes. Allowlist the capitalized words that
+# legitimately precede an ND "Constitution, § N" in running text. A lowercase
+# "new"/"proposed"/"revised" marks a REPLACEMENT document ("The new
+# constitution § 5" = the post-1981 text, cited article-form elsewhere), not
+# the 1889 numbering.
+_BARE_CONST_OK_PREFIX = frozenset({"The", "State", "Our", "Said"})
+_BARE_CONST_BAD_LOWER = frozenset({"new", "proposed", "revised"})
+_CAP_WORD_BEFORE = re.compile(r'([A-Z][a-zA-Z]+)\s+$')
+_WORD_BEFORE = re.compile(r'([A-Za-z]+)\s+$')
 
 # ---------------------------------------------------------------------------
 # ND Court Rules
@@ -243,17 +341,52 @@ _SANCTIONS = re.compile(
 # Local Rules
 _LOCAL = re.compile(r'Local[\s.]*Rule[\s.]*(\d{1,4}(?:-\d+)?)', re.IGNORECASE)
 
-# N.D.R. Proc. R.
-_PROC_R = re.compile(
-    r'(?:N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R[.\s]*(?:Rule\s+)?(\d+)'
-    r'|(?:Rule\s+)?(\d+)[,\s]*N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R)',
+# N.D. Sup. Ct. Admin. Order — the Supreme Court's administrative orders
+# (Order 25 suspended jury trials during COVID-19), a set distinct from
+# N.D. Sup. Ct. Admin. R.
+#
+# Discrimination matters here: "Administrative Order" alone is ordinary prose
+# for an AGENCY order in ND opinions ("the State Engineer's Administrative
+# Order 10-1", a highway-commissioner licence revocation). Two cues make a
+# reference unambiguous, and nothing else is extracted:
+#   1. the set is named        — "N.D. Sup. Ct. Admin. Order 25"
+#   2. the court owns it       — "this Court's Administrative Order 25",
+#                                "Administrative Order No. 1 of this Court"
+# A hyphen-suffixed number ("10-1", "2-1979") is an agency docket form and is
+# excluded outright. Corpus-verified 2026-07-31: these cues cover every
+# genuine reference; bare "Administrative Order 25" repeats inside an opinion
+# that already gave a full cite are deliberately left to the full cite rather
+# than guessed at.
+_ADMIN_ORDER = re.compile(
+    r'(?:N[\s.]*D[\s.]*)?Sup(?:reme)?[\s.]*Ct?(?:ourt)?[\s.]*'
+    r'Admin(?:istrative)?[\s.]*Order[\s.]*(?:No[\s.]*)?(\d{1,3})(?!\s*-\s*\d)',
     re.IGNORECASE,
 )
 
-# N.D.R. Local Ct. P.R.
+_ADMIN_ORDER_POSSESSIVE = re.compile(
+    r'(?:this\s+Court\'?s?\s+Administrative[\s.]*Order[\s.]*(?:No[\s.]*)?'
+    r'(\d{1,3})(?!\s*-\s*\d)'
+    r'|Administrative[\s.]*Order[\s.]*(?:No[\s.]*)?(\d{1,3})(?!\s*-\s*\d)'
+    r'\s+of\s+this\s+Court)',
+    re.IGNORECASE,
+)
+
+# N.D.R. Proc. R. — the court writes "N.D.R.Proc.R. § 3.1", so the section
+# sign is optional and the number may carry a decimal part.
+_PROC_R = re.compile(
+    r'(?:N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R[.\s]*(?:§\s*)?(?:Rule\s+)?'
+    r'(\d+(?:\.\d+)?)'
+    r'|(?:§\s*)?(?:Rule\s+)?(\d+(?:\.\d+)?)[,\s]*'
+    r'N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R)',
+    re.IGNORECASE,
+)
+
+# N.D.R. Local Ct. Pr.
 _LOCAL_CT = re.compile(
-    r'(?:N[\s.]*D[\s.]*R[\s.]*Local[\s.]*Ct[\s.]*P[\s.]*R[.\s]*(?:Rule\s+)?(\d+)'
-    r'|(?:Rule\s+)?(\d+)[,\s]*N[\s.]*D[\s.]*R[\s.]*Local[\s.]*Ct[\s.]*P[\s.]*R)',
+    r'(?:N[\s.]*D[\s.]*R[\s.]*Local[\s.]*Ct[\s.]*P[\s.]*R?[.\s]*(?:§\s*)?'
+    r'(?:Rule\s+)?(\d+(?:\.\d+)?)'
+    r'|(?:§\s*)?(?:Rule\s+)?(\d+(?:\.\d+)?)[,\s]*'
+    r'N[\s.]*D[\s.]*R[\s.]*Local[\s.]*Ct[\s.]*P[\s.]*R?)',
     re.IGNORECASE,
 )
 
@@ -275,13 +408,36 @@ _JUD_COMM = re.compile(
     re.IGNORECASE,
 )
 
-# Student Practice Rules (Roman numeral)
+# Ltd. Practice of Law by Law Students R. — the rules print their numbers as
+# roman numerals in the headings but the corpus cites them in arabic
+# ("Ltd. Practice of Law by Law Students R. 3"), so a roman capture is
+# converted. Corpus-verified 2026-07-31: all 118 mentions of this set in ND
+# opinions are counsel-appearance lines ("appearing under the Rule on the
+# Limited Practice of Law by Law Students"), never a numbered citation — the
+# pattern exists so a future numbered cite normalizes correctly, and the
+# unnumbered appearance lines correctly yield nothing.
 _STUDENT = re.compile(
     r'(?:Limited\s+Practice\s+of\s+Law\s+by\s+Law\s+Students|'
     r'N[\s.]*D[\s.]*Student[\s.]*Practice[\s.]*R(?:ule)?)'
-    r'[.\s]*(?:§\s*)?([IVX]+)',
+    r'[.\s]*R?[.\s]*(?:§\s*)?([IVX]+|\d{1,2})(?![\d\w])',
     re.IGNORECASE,
 )
+
+_ROMAN_VALUES = {"I": 1, "V": 5, "X": 10}
+
+
+def _roman_to_arabic(s: str) -> str:
+    """'VII' -> '7'. Returns the input unchanged if it is already arabic."""
+    if s.isdigit():
+        return s
+    total = prev = 0
+    for ch in reversed(s.upper()):
+        v = _ROMAN_VALUES.get(ch)
+        if v is None:
+            return s
+        total = total - v if v < prev else total + v
+        prev = max(prev, v)
+    return str(total)
 
 _PROC_MAP = {
     "civil": "ndrcivp", "civ": "ndrcivp",
@@ -466,6 +622,55 @@ class NDMatcher(BaseMatcher):
                 position=m.start(),
             ))
 
+        # Pre-1981 (1889 numbering) forms. Article-form matches above take
+        # precedence: an old-form match overlapping one is the tail of an
+        # article-scoped cite ("Article VI, section 2 of the North Dakota
+        # Constitution"), not an old cite.
+        modern_spans = [
+            (c.position, c.position + len(c.raw_text))
+            for c in results
+            if c.cite_type == CitationType.CONSTITUTION
+        ]
+        for pattern in (_ND_CONST_OLD_TRAIL, _ND_CONST_OLD_LEAD):
+            for m in pattern.finditer(text):
+                self._emit_old_const(m, text, results, modern_spans)
+
+    def _emit_old_const(self, m, text, results, modern_spans):
+        start, end = m.start(), m.end()
+        if any(s < end and start < e for s, e in modern_spans):
+            return
+        # A match carrying its own N.D. marker ("N.D. Const. § 16") cannot be
+        # scoped by a preceding article or federal reference — "U.S. Const.
+        # art. 1, § 10, N.D. Const. § 16" is a string cite whose ND member is
+        # real. The prefix guard applies only to bare/section-first forms.
+        if m.group(0)[:1].lower() != "n":
+            if _OLD_CONST_BAD_PREFIX.search(text, max(0, start - 30), start):
+                return
+        if m.group(0)[:5].lower() == "const":
+            w = _WORD_BEFORE.search(text, max(0, start - 25), start)
+            if w and w.group(1) in _BARE_CONST_BAD_LOWER:
+                return
+            cap = _CAP_WORD_BEFORE.search(text, max(0, start - 25), start)
+            if cap and cap.group(1) not in _BARE_CONST_OK_PREFIX:
+                return
+        # (offset, number) for the lead section and any enumeration tail.
+        sections = [(m.start(1), m.group(1))]
+        for num in re.finditer(r'\d{1,3}', m.group(2)):
+            sections.append((m.start(2) + num.start(), num.group(0)))
+        if any(not 1 <= int(n) <= OLD_SECTION_MAX for _, n in sections):
+            return
+        for pos, n in sections:
+            url = nd_constitution_old_url(n)
+            results.append(Citation(
+                raw_text=m.group(0) if pos == sections[0][0] else text[pos:end],
+                cite_type=CitationType.CONSTITUTION,
+                jurisdiction="nd",
+                normalized=f"N.D. Const. § {n}",
+                components={"section": n, "numbering": "1889"},
+                sources=[Source("ndconst", url)] if url else [],
+                position=m.start() if pos == sections[0][0] else pos,
+            ))
+
     def _match_nd_rules(self, text: str, results: list[Citation]):
         # N.D.R.Ct. 3-part
         for m in _NDRCT_3.finditer(text):
@@ -604,19 +809,36 @@ class NDMatcher(BaseMatcher):
                 position=m.start(),
             ))
 
-        # N.D.R. Proc. R.
-        for m in _PROC_R.finditer(text):
-            rule = m.group(1) or m.group(2)
-            if rule:
+        # N.D. Sup. Ct. Admin. Order (named set, then the possessive cue)
+        seen_admin_order: set[int] = set()
+        for pattern in (_ADMIN_ORDER, _ADMIN_ORDER_POSSESSIVE):
+            for m in pattern.finditer(text):
+                order = next((g for g in m.groups() if g), None)
+                if not order or m.start() in seen_admin_order:
+                    continue
+                seen_admin_order.add(m.start())
                 results.append(self._rule_cite(
-                    m, "ndrprocr", "N.D.R. Proc. R.", [rule]))
+                    m, "ndsupctadminorder", "N.D. Sup. Ct. Admin. Order",
+                    [order]))
 
-        # N.D.R. Local Ct. P.R.
-        for m in _LOCAL_CT.finditer(text):
-            rule = m.group(1) or m.group(2)
-            if rule:
-                results.append(self._rule_cite(
-                    m, "ndrlocalctpr", "N.D.R. Local Ct. P.R.", [rule]))
+        # N.D.R. Proc. R. and N.D.R. Local Ct. Pr. — unlike the other rule
+        # sets, these number their SECTIONS with integers and their
+        # subsections with decimals ("Section 3" contains 3.1, 3.2, 3.3), so
+        # "N.D.R.Proc.R. § 3.1" is a pinpoint into section 3, not a rule 3.1.
+        # Normalizing to the section is what makes the cite resolve; the
+        # pinpoint is preserved in components.
+        for pattern, rule_set, display in (
+                (_PROC_R, "ndrprocr", "N.D.R. Proc. R."),
+                (_LOCAL_CT, "ndrlocalctpr", "N.D.R. Local Ct. Pr.")):
+            for m in pattern.finditer(text):
+                rule = m.group(1) or m.group(2)
+                if not rule:
+                    continue
+                section, _, sub = rule.partition(".")
+                cite = self._rule_cite(m, rule_set, display, [section])
+                if sub:
+                    cite.components["pinpoint"] = rule
+                results.append(cite)
 
         # Judicial Conduct Commission (decimal)
         for m in _JUD_COMM_DEC.finditer(text):
@@ -632,12 +854,12 @@ class NDMatcher(BaseMatcher):
                 results.append(self._rule_cite(
                     m, "rjudconductcomm", "N.D.R. Jud. Conduct Commission", [rule]))
 
-        # Student Practice Rules
+        # Ltd. Practice of Law by Law Students R.
         for m in _STUDENT.finditer(text):
-            roman = m.group(1).upper()
             results.append(self._rule_cite(
-                m, "rltdpracticeoflawbylawstudents",
-                "N.D. Student Practice R.", [roman]))
+                m, "ltdpracticeoflawbylawstudentsr",
+                "Ltd. Practice of Law by Law Students R.",
+                [_roman_to_arabic(m.group(1))]))
 
     def _rule_cite(self, m, rule_set: str, display: str,
                    parts: list[str]) -> Citation:
