@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Bootstrap the jetredline runtime environment (venv, optionally node_modules).
+Bootstrap a jet skill's runtime environment (venv, optionally node_modules).
+
+Canonical copy: identical across the jet skills that need a venv; the skill's
+name and version are read from the directory this file sits in, so the file
+itself carries no per-skill edits.
 
 Works in every install layout: dev symlink / standalone install (prebuilt
 .venv inside the skill dir), plugin-cache or zip install (no bundled
@@ -9,8 +13,8 @@ skill dir, possibly read-only home — falls back to the system temp dir).
 
 Selection ladder for the venv:
   1. <skill_dir>/.venv            — prebuilt; repaired in place if writable
-  2. ~/.cache/jet-skills/jetredline/<version>/venv
-  3. <tmpdir>/jetredline-venv
+  2. ~/.cache/jet-skills/<name>/<version>/venv
+  3. <tmpdir>/<name>-venv
 
 Prints machine-readable lines on stdout:
   VENV_PYTHON=<absolute path>
@@ -29,19 +33,46 @@ import sys
 import tempfile
 from pathlib import Path
 
-SKILL_NAME = "jetredline"
-
 # requirements.txt names -> import names to verify. Extras matter: httpx[socks]
 # is satisfied for import purposes without socksio, but Cowork's SOCKS proxy
 # needs it, so verify the extra explicitly.
 _IMPORT_OVERRIDES = {"httpx[socks]": ["httpx", "socksio"]}
 
 
+def _frontmatter(skill_dir: Path) -> dict:
+    """Best-effort parse of SKILL.md YAML frontmatter scalar fields."""
+    out: dict = {}
+    try:
+        text = (skill_dir / "SKILL.md").read_text()
+    except OSError:
+        return out
+    if not text.startswith("---"):
+        return out
+    for line in text.split("\n---", 1)[0].splitlines()[1:]:
+        key, sep, value = line.partition(":")
+        if sep and " " not in key.strip():
+            out[key.strip()] = value.strip().strip('"').strip("'")
+    return out
+
+
+def skill_name(skill_dir: Path) -> str:
+    return _frontmatter(skill_dir).get("name") or skill_dir.name
+
+
 def read_version(skill_dir: Path) -> str:
     try:
-        return (skill_dir / "VERSION").read_text().strip() or "dev"
+        v = (skill_dir / "VERSION").read_text().strip()
+        if v:
+            return v
     except OSError:
-        return "dev"
+        pass
+    try:
+        v = json.loads((skill_dir / "version.json").read_text()).get("version")
+        if v:
+            return str(v)
+    except (OSError, ValueError):
+        pass
+    return _frontmatter(skill_dir).get("version") or "dev"
 
 
 def import_names(requirements: Path) -> list[str]:
@@ -165,9 +196,10 @@ def ensure_venv(skill_dir: Path, cache_root: Path, tmp_root: Path) -> Path | Non
         print("venv: prebuilt .venv unusable, falling through", file=sys.stderr)
 
     # Tiers 2 and 3: version-keyed user cache, then the system temp dir.
+    name = skill_name(skill_dir)
     candidates = [
-        cache_root / SKILL_NAME / read_version(skill_dir) / "venv",
-        tmp_root / f"{SKILL_NAME}-venv",
+        cache_root / name / read_version(skill_dir) / "venv",
+        tmp_root / f"{name}-venv",
     ]
     for venv_dir in candidates:
         existing = venv_python(venv_dir)
@@ -195,7 +227,7 @@ def ensure_node(skill_dir: Path, cache_root: Path) -> Path | None:
         print(f"node: using bundled {local}", file=sys.stderr)
         return local
 
-    prefix = cache_root / SKILL_NAME / read_version(skill_dir) / "node"
+    prefix = cache_root / skill_name(skill_dir) / read_version(skill_dir) / "node"
     cached = prefix / "node_modules"
     if (cached / "docx").is_dir():
         print(f"node: reusing {cached}", file=sys.stderr)

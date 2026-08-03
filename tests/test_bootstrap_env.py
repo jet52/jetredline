@@ -31,6 +31,23 @@ def test_read_version(tmp_path):
     assert bootstrap_env.read_version(tmp_path / "nowhere") == "dev"
 
 
+def test_read_version_json_and_frontmatter_fallbacks(tmp_path):
+    (tmp_path / "version.json").write_text('{"version": "1.2.3"}')
+    assert bootstrap_env.read_version(tmp_path) == "1.2.3"
+    fm = tmp_path / "fm"
+    fm.mkdir()
+    (fm / "SKILL.md").write_text("---\nname: foo\nversion: 7.8.9\n---\nbody\n")
+    assert bootstrap_env.read_version(fm) == "7.8.9"
+
+
+def test_skill_name_from_frontmatter_else_dirname(tmp_path):
+    d = tmp_path / "skill"
+    d.mkdir()
+    assert bootstrap_env.skill_name(d) == "skill"
+    (d / "SKILL.md").write_text('---\nname: jetfoo\ndescription: "a: b"\n---\n')
+    assert bootstrap_env.skill_name(d) == "jetfoo"
+
+
 def test_venv_python_selects_posix_and_windows_layouts(tmp_path):
     assert bootstrap_env.venv_python(tmp_path) is None
     posix = tmp_path / "bin" / "python"
@@ -52,6 +69,7 @@ def test_venv_python_selects_posix_and_windows_layouts(tmp_path):
 def skill_dir(tmp_path):
     d = tmp_path / "skill"
     d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: jetredline\n---\n")
     (d / "VERSION").write_text("9.9.9")
     (d / "requirements.txt").write_text("")  # no deps -> no pip, no network
     return d
