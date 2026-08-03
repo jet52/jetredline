@@ -33,10 +33,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-# requirements.txt names -> import names to verify. Extras matter: httpx[socks]
-# is satisfied for import purposes without socksio, but Cowork's SOCKS proxy
-# needs it, so verify the extra explicitly.
-_IMPORT_OVERRIDES = {"httpx[socks]": ["httpx", "socksio"]}
+# requirements.txt names -> import names to verify, keyed on the requirement
+# with version specifiers stripped. Extras matter: httpx[socks] is satisfied
+# for import purposes without socksio, but Cowork's SOCKS proxy needs it, so
+# verify the extra explicitly. PyMuPDF's import name is fitz.
+_IMPORT_OVERRIDES = {
+    "httpx[socks]": ["httpx", "socksio"],
+    "PyMuPDF": ["fitz"],
+}
 
 
 def _frontmatter(skill_dir: Path) -> dict:
@@ -85,11 +89,11 @@ def import_names(requirements: Path) -> list[str]:
         req = line.strip()
         if not req or req.startswith("#"):
             continue
-        if req in _IMPORT_OVERRIDES:
-            names.extend(_IMPORT_OVERRIDES[req])
+        base = req.split(">")[0].split("<")[0].split("=")[0].split("~")[0].strip()
+        if base in _IMPORT_OVERRIDES:
+            names.extend(_IMPORT_OVERRIDES[base])
         else:
-            names.append(req.split("[")[0].split("=")[0].split(">")[0]
-                         .split("<")[0].strip().replace("-", "_"))
+            names.append(base.split("[")[0].replace("-", "_").lower())
     return names
 
 

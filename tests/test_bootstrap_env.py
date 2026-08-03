@@ -15,9 +15,10 @@ import bootstrap_env
 
 def test_import_names_maps_extras_and_dashes(tmp_path):
     req = tmp_path / "requirements.txt"
-    req.write_text("defusedxml\nhttpx[socks]\n# comment\n\npy-pdf>=3\n")
+    req.write_text(
+        "defusedxml\nhttpx[socks]>=0.27\n# comment\n\nPy-Pdf>=3\nPyMuPDF>=1.24.0\n")
     assert bootstrap_env.import_names(req) == [
-        "defusedxml", "httpx", "socksio", "py_pdf",
+        "defusedxml", "httpx", "socksio", "py_pdf", "fitz",
     ]
 
 
