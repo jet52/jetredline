@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.11.0
+version: 4.12.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -389,9 +389,14 @@ $VENV_PYTHON "${CLAUDE_SKILL_DIR}/cite_review.py" \
   --via-json <TMPDIR>/via.json \
   --sources-meta <TMPDIR>/sources.json \
   --passages-json <TMPDIR>/passages.json \
+  --facts-json <TMPDIR>/facts.json \
+  --case-dir <working_dir> \
+  --record-dir <record_item_dir> \
   --output <output_dir>/cite-review.html
 ```
-Omit `--via-json` if Pass 3B did not run or produced no table; omit `--sources-meta` if step 11a exported nothing; omit `--passages-json` if Pass 3B wrote no passages ledger. This produces a self-contained HTML file that lists **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — highlighting the exact occurrence in the draft pane and showing the cited authority (embedded text scrolled to the pinpoint ¶, or the Pass 3B verification passage) in the source pane. Tell the user the file is available and can be opened in a browser.
+Omit `--via-json` if Pass 3B did not run or produced no table; omit `--sources-meta` if step 11a exported nothing; omit `--passages-json` if Pass 3B wrote no passages ledger. Omit `--facts-json` if Pass 4 did not run or wrote no facts ledger. `--case-dir` is the working directory holding the case PDFs (pass it because the opinion markdown lives in TMPDIR); a `manifest.json` there is picked up automatically for docket-number and brief-name resolution. Pass `--record-dir` when a directory of district-court record items (`R<N> - <Type> <Title>.pdf`) is present — record cites like "R243" then resolve to embedded PDF viewers opened at the cited page with the evidence quote highlighted. `--link-pdfs` swaps the embedded viewers for zero-copy native iframes if sidecar size is a concern.
+
+**Local-PDF authorities.** If a cited authority has no online or refs source but a PDF copy sits in the working directory (an obscure treatise, an out-of-state slip opinion, a session-law scan), add to the step 11a `sources.json` entry for that citation: `"pdf": "<path relative to the working dir>"`, plus optional `"page": N` and `"quote": "<verbatim passage>"`. The review page then offers a "Local PDF" source mode with the same embedded viewer, opened at the page/quote. This produces a self-contained HTML file that lists **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — highlighting the exact occurrence in the draft pane and showing the cited authority (embedded text scrolled to the pinpoint ¶, or the Pass 3B verification passage) in the source pane. Tell the user the file is available and can be opened in a browser.
 
 **If the opinion is a .docx file:** its text was already extracted in step 3 via `extract_text.py`; apply edits directly to the **original** .docx with `apply_edits.py` (no unpack/pack, no docx plugin).
 
@@ -606,7 +611,7 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass4-factcheck.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass4-factcheck.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. Write the structured facts ledger to `<TMPDIR>/facts.json`. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
 
 **Returns:** the fact-check results table (`¶ | Claim | Source Document(s) | Result | Notes`) with a summary line, plus an **Ingestion Status table** (one row per source PDF: `Source file | Pages | Ingestion | Method`) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder, so image-only files are recovered, not skipped; a `not-ingested` or `OCR-low-confidence` file means its dependent facts are unverified, and the subagent says so plainly.
 

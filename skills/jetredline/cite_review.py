@@ -22,6 +22,7 @@ import argparse
 import base64
 import html
 import json
+import os
 import re
 import sys
 import urllib.request
@@ -331,7 +332,12 @@ _PDFJS_VIEWER_TEMPLATE = """\
 <style>
 html, body { margin:0; padding:0; background:#444; height:100%%; overflow:auto; }
 #pages { display:flex; flex-direction:column; align-items:center; gap:4px; padding:4px; }
-canvas { display:block; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+.pgwrap { position:relative; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+.pgwrap canvas { display:block; }
+.pgnum { position:absolute; top:2px; left:4px; font:10px/1 system-ui,sans-serif;
+  color:#999; z-index:2; }
+.hl-box { position:absolute; background:rgba(253,230,138,.55);
+  outline:2px solid #d4a017; border-radius:2px; z-index:1; pointer-events:none; }
 .target-page { outline:3px solid #5b8def; outline-offset:2px; }
 #loading { color:#ccc; font:14px/1.4 system-ui,sans-serif; text-align:center; padding:40px; }
 #search-bar { position:fixed; top:0; right:0; background:rgba(0,0,0,.75);
@@ -348,13 +354,65 @@ import * as pdfjsLib from '%(cdn)s/pdf.min.mjs';
 pdfjsLib.GlobalWorkerOptions.workerSrc = '%(cdn)s/pdf.worker.min.mjs';
 
 const PDF_DATA = '__PDF_BASE64__';
-// Read search term from URL hash: viewer.html#search=...
+// Hash params: #page=N (1-based landing page), #search=term (find the page
+// containing the term), #hl=quote (highlight the quote; defaults to search).
 const hashParams = new URLSearchParams(location.hash.slice(1));
+const PAGE = parseInt(hashParams.get('page') || '0', 10) || 0;
 const SEARCH = decodeURIComponent(hashParams.get('search') || '');
+const HL = decodeURIComponent(hashParams.get('hl') || '') || SEARCH;
+
+// Normalize for matching: straight/curly quotes, dash variants, collapsed
+// whitespace \u2014 PDF extraction and record quotes rarely agree byte-for-byte.
+function norm(s) {
+  return s
+    .replace(/[\\u2018\\u2019]/g, "'")
+    .replace(/[\\u201C\\u201D]/g, '"')
+    .replace(/[\\u2013\\u2014]/g, '-')
+    .replace(/\\u00a0/g, ' ')
+    .replace(/\\s+/g, ' ');
+}
+
+// norm() with a map from each normalized index back to the original index \u2014
+// whitespace collapsing changes lengths, so a match found in normalized
+// space must be translated before highlighting original-offset spans.
+function normWithMap(s) {
+  const fold = { '\\u2018': "'", '\\u2019': "'", '\\u201C': '"',
+                 '\\u201D': '"', '\\u2013': '-', '\\u2014': '-' };
+  let out = '', map = [], prevSpace = false;
+  for (let i = 0; i < s.length; i++) {
+    let c = fold[s[i]] || s[i];
+    if (/\\s/.test(c)) {
+      if (prevSpace) continue;
+      c = ' ';
+      prevSpace = true;
+    } else {
+      prevSpace = false;
+    }
+    out += c;
+    map.push(i);
+  }
+  return { out, map };
+}
+
+// Find a candidate in normalized text. Bare paragraph-number candidates
+// ("9.") only match at a word boundary so "19." and "2019." don't hit.
+function findCand(hayNorm, cand) {
+  const c = norm(cand);
+  if (/^\\d+\\.$/.test(c)) {
+    const m = new RegExp('(^|[\\\\s(\\\\[])' + c.replace('.', '\\\\.') + '\\\\s')
+      .exec(hayNorm);
+    return m ? m.index + m[1].length : -1;
+  }
+  return hayNorm.indexOf(c);
+}
 
 const raw = atob(PDF_DATA);
 const bytes = new Uint8Array(raw.length);
 for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+const bar = document.getElementById('search-bar');
+window.addEventListener('unhandledrejection',
+  e => { bar.textContent = 'Error: ' + (e.reason && e.reason.message || e.reason); });
 
 try {
   const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
@@ -362,41 +420,119 @@ try {
 
   const container = document.getElementById('pages');
   const scale = 1.5;
-  let targetCanvas = null;
+  const wraps = [];        // page number -> wrapper div
+  const rendered = new Set();
+
+  // First page sizes the placeholders so scroll geometry is stable before
+  // anything renders; per-page sizes correct themselves at render time.
+  const first = await pdf.getPage(1);
+  const firstVp = first.getViewport({ scale });
 
   for (let i = 1; i <= pdf.numPages; i++) {
+    const wrap = document.createElement('div');
+    wrap.className = 'pgwrap';
+    wrap.id = 'page-' + i;
+    wrap.style.width = firstVp.width + 'px';
+    wrap.style.height = firstVp.height + 'px';
+    wrap.innerHTML = '<span class="pgnum">' + i + '</span>';
+    container.appendChild(wrap);
+    wraps[i] = wrap;
+  }
+
+  async function renderPage(i, hlTerm) {
+    if (rendered.has(i)) return wraps[i];
+    rendered.add(i);
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale });
+    const wrap = wraps[i];
+    wrap.style.width = viewport.width + 'px';
+    wrap.style.height = viewport.height + 'px';
     const canvas = document.createElement('canvas');
-    canvas.id = 'page-' + i;
     canvas.width = viewport.width;
     canvas.height = viewport.height;
-    container.appendChild(canvas);
-
-    const ctx = canvas.getContext('2d');
-    await page.render({ canvasContext: ctx, viewport }).promise;
-
-    if (SEARCH && !targetCanvas) {
+    wrap.appendChild(canvas);
+    await page.render({ canvasContext: canvas.getContext('2d'),
+                        viewport }).promise;
+    if (hlTerm) {
+      // Overlay highlight boxes on every text item overlapping the match.
+      // hlTerm may hold ||-separated candidates; first hit wins.
       const tc = await page.getTextContent();
-      const text = tc.items.map(item => item.str).join('');
-      if (text.includes(SEARCH)) {
-        targetCanvas = canvas;
+      let joined = '', spans = [];
+      tc.items.forEach(item => {
+        spans.push({ start: joined.length, end: joined.length + item.str.length,
+                     item });
+        joined += item.str + ' ';
+      });
+      const nm = normWithMap(joined);
+      let at = -1, matched = '';
+      for (const cand of hlTerm.split('||')) {
+        at = findCand(nm.out, cand);
+        if (at > -1) { matched = cand; break; }
+      }
+      if (at > -1) {
+        // Translate the normalized-space match back to original offsets.
+        const nEnd = Math.min(at + norm(matched).length, nm.map.length) - 1;
+        const end = nm.map[nEnd] + 1;
+        at = nm.map[at];
+        spans.forEach(sp => {
+          if (sp.end <= at || sp.start >= end || !sp.item.str.trim()) return;
+          const tx = pdfjsLib.Util.transform(viewport.transform,
+                                             sp.item.transform);
+          const h = Math.hypot(tx[2], tx[3]);
+          const box = document.createElement('div');
+          box.className = 'hl-box';
+          box.style.left = tx[4] + 'px';
+          box.style.top = (tx[5] - h) + 'px';
+          box.style.width = (sp.item.width * scale) + 'px';
+          box.style.height = (h * 1.15) + 'px';
+          wrap.appendChild(box);
+        });
+        return wrap;
       }
     }
+    return wrap;
   }
 
-  if (targetCanvas) {
-    targetCanvas.classList.add('target-page');
-    targetCanvas.scrollIntoView({ block: 'start' });
-    document.getElementById('search-bar').textContent =
-      'Found on page ' + targetCanvas.id.replace('page-', '');
-    setTimeout(() => targetCanvas.classList.remove('target-page'), 3000);
-  } else if (SEARCH) {
-    document.getElementById('search-bar').textContent =
-      'Search term not found: ' + SEARCH;
+  // Lazy render pages as they scroll into view.
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) renderPage(Number(e.target.id.slice(5)), HL);
+    });
+  }, { rootMargin: '600px 0px' });
+  wraps.forEach(w => { if (w) io.observe(w); });
+
+  // Locate the target page: explicit #page wins; otherwise scan text (no
+  // canvas render needed) for the search/highlight term.
+  let targetPage = (PAGE >= 1 && PAGE <= pdf.numPages) ? PAGE : 0;
+  const term = SEARCH || HL;
+  if (!targetPage && term) {
+    bar.textContent = 'Searching\\u2026';
+    const cands = term.split('||');
+    outer:
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const tc = await (await pdf.getPage(i)).getTextContent();
+      const text = norm(tc.items.map(item => item.str).join(' '));
+      for (const cand of cands) {
+        if (findCand(text, cand) > -1) { targetPage = i; break outer; }
+      }
+    }
+    if (!targetPage) bar.textContent = 'Not found: ' + cands[0];
+  }
+
+  if (targetPage) {
+    const wrap = await renderPage(targetPage, HL);
+    wrap.classList.add('target-page');
+    wrap.scrollIntoView({ block: 'start' });
+    bar.textContent = 'Page ' + targetPage + ' of ' + pdf.numPages +
+      (term ? ' \\u2014 ' + term.split('||')[0] : '');
+    setTimeout(() => wrap.classList.remove('target-page'), 3000);
+  } else {
+    renderPage(1, HL);
   }
 } catch (err) {
-  document.getElementById('loading').textContent = 'Error loading PDF: ' + err.message;
+  const l = document.getElementById('loading');
+  if (l) l.textContent = 'Error loading PDF: ' + err.message;
+  else bar.textContent = 'Error: ' + err.message;
 }
 </script>
 </body>
@@ -761,8 +897,177 @@ def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path,
 
 
 # ---------------------------------------------------------------------------
-# HTML generation
+# Factual-assertion review (Pass 4 facts ledger) and local-PDF sources
 # ---------------------------------------------------------------------------
+
+def _normalize_result(raw: str | None) -> str:
+    """Collapse Pass 4 result phrasings to verified/discrepancy/unverified."""
+    s = (raw or "").strip().lower()
+    if "discrep" in s:
+        return "discrepancy"
+    if s.startswith("verif"):
+        return "verified"
+    return "unverified"
+
+
+def _load_facts(path: Path) -> list[dict]:
+    """Load and normalize the Pass 4 facts ledger.
+
+    Tolerates either a bare array or {"claims": [...]}. Each claim keeps its
+    raw result phrasing in result_label; result is the normalized enum.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    claims = raw.get("claims") if isinstance(raw, dict) else raw
+    facts = []
+    for c in claims or []:
+        if not isinstance(c, dict) or not c.get("claim"):
+            continue
+        sources = [s for s in c.get("sources") or [] if isinstance(s, dict)]
+        facts.append({
+            "para": str(c.get("para") or "").strip(),
+            "claim": str(c["claim"]).strip(),
+            "draft_quote": (c.get("draft_quote") or "").strip(),
+            "result": _normalize_result(c.get("result")),
+            "result_label": (c.get("result") or "").strip() or "unverified",
+            "note": (c.get("note") or "").strip(),
+            "sources": sources,
+        })
+    return facts
+
+
+def _load_manifest(path: Path) -> list[dict]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return [e for e in raw if isinstance(e, dict)] if isinstance(raw, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+_RECORD_ITEM_RE = re.compile(r"^R\.?\s*(\d+)$", re.IGNORECASE)
+
+
+def _resolve_fact_source(src: dict, record_dir: Path | None,
+                         manifest: list[dict], base_dir: Path,
+                         manifest_dir: Path | None = None) -> Path | None:
+    """Resolve one facts-ledger source ref to a PDF on disk.
+
+    Order: explicit file hint -> record item (R243 -> 'R243 - *.pdf' in the
+    record dir) -> docket number via the manifest -> name fragment matched
+    against manifest filenames, then against PDFs in the project dir.
+    Manifest filenames resolve against the manifest's own directory.
+    """
+    manifest_dir = manifest_dir or base_dir
+    hint = src.get("file")
+    if hint:
+        p = Path(hint)
+        if not p.is_absolute():
+            p = base_dir / p
+        if p.exists():
+            return p
+
+    item = (src.get("item") or src.get("raw") or "").strip()
+    m = _RECORD_ITEM_RE.match(item.split(",")[0].strip())
+    if m and record_dir and record_dir.is_dir():
+        # 'R243 - ' prefix: the space-dash boundary keeps R24 from matching R243
+        matches = sorted(record_dir.glob(f"R{m.group(1)} - *.pdf"))
+        if matches:
+            return matches[0]
+
+    token = item.split(",")[0].split("¶")[0].strip().rstrip(".")
+    if token.isdigit() and manifest:
+        want = int(token)
+        for e in manifest:
+            if e.get("docketId") == want and e.get("filename"):
+                p = manifest_dir / e["filename"]
+                if p.exists():
+                    return p
+
+    frag = re.sub(r"[^A-Za-z0-9-]", "", token.replace(" ", "-"))
+    if len(frag) >= 4:
+        for e in manifest:
+            fn = e.get("filename") or ""
+            if frag.lower() in re.sub(r"[^A-Za-z0-9-]", "", fn).lower():
+                p = manifest_dir / fn
+                if p.exists():
+                    return p
+        for p in sorted(base_dir.glob("*.pdf")):
+            if frag.lower() in re.sub(r"[^A-Za-z0-9-]", "", p.name).lower():
+                return p
+    return None
+
+
+def _viewer_name(pdf_path: Path, taken: set[str]) -> str:
+    """Stable, filesystem-safe sidecar name for a source PDF's viewer."""
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", pdf_path.stem).strip("_") or "doc"
+    name = stem[:60]
+    n = 1
+    while name in taken:
+        n += 1
+        name = f"{stem[:56]}~{n}"
+    taken.add(name)
+    return name
+
+
+def _generate_local_pdf_viewers(pdf_paths: list[Path], output_path: Path,
+                                link_pdfs: bool = False) -> dict[str, str]:
+    """Map each unique source PDF to an embeddable URL.
+
+    Default: a base64 PDF.js sidecar viewer (quote highlighting, exact-page
+    landing, any browser). --link-pdfs: a relative file URL for a native
+    iframe — zero-copy, but no quote highlight and #page support varies.
+    Keys are absolute path strings.
+    """
+    out: dict[str, str] = {}
+    uniq: list[Path] = []
+    for p in pdf_paths:
+        rp = p.resolve()
+        if str(rp) not in out and rp not in uniq:
+            uniq.append(rp)
+
+    if link_pdfs:
+        for p in uniq:
+            try:
+                rel = os.path.relpath(p, output_path.parent.resolve())
+            except ValueError:  # different drive (Windows)
+                rel = p.as_uri()
+            out[str(p)] = rel.replace(os.sep, "/")
+        return out
+
+    pdf_dir = output_path.parent / (output_path.stem + "_pdfs")
+    taken: set[str] = set()
+    for p in uniq:
+        try:
+            pdf_b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+        except OSError as e:
+            print(f"  Warning: could not read {p}: {e}", file=sys.stderr)
+            continue
+        pdf_dir.mkdir(exist_ok=True)
+        viewer_file = pdf_dir / (_viewer_name(p, taken) + ".html")
+        viewer_file.write_text(
+            _PDFJS_VIEWER_TEMPLATE.replace("__PDF_BASE64__", pdf_b64),
+            encoding="utf-8")
+        out[str(p)] = str(viewer_file.relative_to(output_path.parent))
+    return out
+
+
+def _fact_source_hash(src: dict) -> str:
+    """Build the viewer hash fragment for a fact source ref."""
+    parts = []
+    page = src.get("page")
+    if isinstance(page, int) and page > 0:
+        parts.append(f"page={page}")
+    qt = (src.get("quote") or "").strip()
+    para_pin = (src.get("para_pin") or "").strip()
+    if qt:
+        parts.append("hl=" + quote(qt[:200]))
+    elif para_pin:
+        m = re.search(r"\d+", para_pin)
+        if m:
+            # Candidate forms tried in order — court PDFs number paragraphs
+            # as "¶ 9", "¶9", "[¶9]", or plain "9." depending on the drafter.
+            n = m.group(0)
+            parts.append("search=" + quote(f"¶ {n}||¶{n}||[¶{n}]||{n}."))
+    return ("#" + "&".join(parts)) if parts else ""
 
 _CSS = """\
 :root {
@@ -1167,6 +1472,20 @@ main { display:flex; flex:1; overflow:hidden; }
 .help-box .row { display:flex; gap:12px; }
 .help-box .row .k { width:80px; text-align:right; color:var(--accent); }
 
+/* Factual-assertion entries (Pass 4 ledger) */
+.typ.fact-verified { color:var(--verified); }
+.typ.fact-discrepancy { color:var(--flagged); font-weight:700; }
+.typ.fact-unverified { color:var(--text-muted); }
+.fact-hdr .gname { color:var(--accent); }
+.fact-banner {
+  flex-shrink:0; padding:8px 14px; font-size:12px; line-height:1.5;
+  background:var(--surface-alt); border-bottom:1px solid var(--border);
+  max-height:110px; overflow-y:auto;
+}
+.fact-banner.discrepancy { border-left:3px solid var(--flagged); }
+.fact-banner.verified { border-left:3px solid var(--verified); }
+.fact-banner.unverified { border-left:3px solid var(--skipped); }
+
 ::-webkit-scrollbar { width:6px; }
 ::-webkit-scrollbar-track { background:transparent; }
 ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
@@ -1196,10 +1515,14 @@ _JS = """\
   }
 
   // Review state is keyed by character position (stable across page
-  // regenerations); index is the fallback for entries without one.
+  // regenerations); index is the fallback for entries without one. Fact
+  // entries get their own prefix so a fact anchored at the same offset as a
+  // citation never shares its status.
   function stateKey(idx) {
     const d = DATA[idx];
-    return (d && d.position != null) ? 'p' + d.position : 'i' + idx;
+    const pre = (d && d.kind === 'fact') ? 'f' : '';
+    return (d && d.position != null) ? pre + 'p' + d.position
+                                     : pre + 'i' + idx;
   }
 
   function getCiteState(idx) {
@@ -1223,6 +1546,7 @@ _JS = """\
   const groups = [];
   const groupByKey = {};
   DATA.forEach((d, i) => {
+    if (d.kind === 'fact') return;  // facts render in their own section below
     const key = d.authority || d.normalized || d.cite_text;
     let g = groupByKey[key];
     if (!g) {
@@ -1275,6 +1599,35 @@ _JS = """\
     });
   });
 
+  // Factual assertions section (Pass 4 ledger entries, kind === 'fact')
+  const factIdxs = [];
+  DATA.forEach((d, i) => { if (d.kind === 'fact') factIdxs.push(i); });
+  if (factIdxs.length) {
+    const hdr = document.createElement('div');
+    hdr.className = 'cite-group-hdr fact-hdr';
+    hdr.innerHTML =
+      '<span class="gname">Factual assertions</span>' +
+      '<span class="gcount">' + factIdxs.length + '</span>';
+    hdr.addEventListener('click', () => navigate(factIdxs[0]));
+    listEl.appendChild(hdr);
+    factIdxs.forEach(i => {
+      const d = DATA[i];
+      const item = document.createElement('div');
+      item.className = 'cite-item fact';
+      item.dataset.idx = i;
+      const cs = getCiteState(i);
+      item.innerHTML =
+        '<div class="dot' + (cs.status ? ' ' + cs.status : '') + '"></div>' +
+        '<span class="lbl">' + esc(d.claim) + '</span>' +
+        (d.para_num != null ? '<span class="ploc">&#xb6;' + d.para_num + '</span>' : '') +
+        '<span class="typ fact-' + d.result + '" title="' +
+          esc(d.result_label) + '">' + esc(d.result) + '</span>';
+      item.title = d.claim + (d.note ? ' \\u2014 ' + d.note : '');
+      item.addEventListener('click', () => navigate(i));
+      listEl.appendChild(item);
+    });
+  }
+
   function esc(s) {
     if (!s) return '';
     const el = document.createElement('span');
@@ -1293,6 +1646,41 @@ _JS = """\
   document.querySelectorAll('.opinion-para').forEach(el => {
     paraOriginals[el.id] = el.innerHTML;
   });
+
+  // Fold curly quotes and nbsp so a fact ledger quote matches the draft
+  // regardless of which form each side carries (length-preserving).
+  function foldQ(s) {
+    return s.replace(/[\\u2018\\u2019]/g, "'")
+            .replace(/[\\u201C\\u201D]/g, '"')
+            .replace(/\\u00a0/g, ' ');
+  }
+
+  // Highlight a verbatim quote inside a rendered paragraph by walking its
+  // text nodes — entity- and inline-markup-proof, unlike an HTML splice.
+  function highlightQuoteInPara(paraEl, quoteText) {
+    if (!quoteText) return;
+    const walker = document.createTreeWalker(paraEl, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    let joined = '';
+    while (walker.nextNode()) {
+      nodes.push({ node: walker.currentNode, start: joined.length });
+      joined += walker.currentNode.nodeValue;
+    }
+    const at = foldQ(joined).indexOf(foldQ(quoteText));
+    if (at < 0) return;
+    const end = at + quoteText.length;
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const ns = nodes[i].start;
+      const len = nodes[i].node.nodeValue.length;
+      if (ns + len <= at || ns >= end) continue;
+      const range = document.createRange();
+      range.setStart(nodes[i].node, Math.max(at - ns, 0));
+      range.setEnd(nodes[i].node, Math.min(end - ns, len));
+      const span = document.createElement('span');
+      span.className = 'cite-hl';
+      try { range.surroundContents(span); } catch (err) {}
+    }
+  }
 
   function navigate(idx) {
     if (idx < 0 || idx >= DATA.length) return;
@@ -1327,6 +1715,13 @@ _JS = """\
       const paraEl = document.getElementById('para-' + d.para_num);
       if (paraEl) {
         paraEl.classList.add('active-para');
+        if (d.kind === 'fact') {
+          // Fact entries highlight the verbatim draft quote via the text-node
+          // walker: quotes routinely contain apostrophes (HTML-escaped in the
+          // rendered markup) and can span inline citation links.
+          highlightQuoteInPara(paraEl, d.draft_quote);
+          paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
         // Highlight the exact occurrence of the citation text. d.occurrence
         // counts earlier appearances of the same string in this paragraph
         // (repeated short cites, multiple Id.s); fall back to the first
@@ -1352,6 +1747,7 @@ _JS = """\
           }
         }
         paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
       }
     }
 
@@ -1453,6 +1849,44 @@ _JS = """\
     // cited ¶ for every authority type, including the statutes and rules that
     // have no local reference and no court PDF.
     var modes = [];
+    if (d.kind === 'fact') {
+      // One mode per cited record/brief source (PDF embedded at the cited
+      // page with the evidence quote highlighted), then the Pass 4 detail.
+      var banner = '<div class="fact-banner ' + d.result + '">' +
+        '<b>' + esc(d.result_label) + '</b>' +
+        (d.note ? ' \\u2014 ' + esc(d.note) : '') + '</div>';
+      (d.sources || []).forEach(function(s) {
+        modes.push({
+          key: 'record', label: s.label, badge: 'record',
+          badgeTitle: 'Cited record/brief source, embedded from the case files.',
+          url: null,
+          render: function() {
+            srcBody.innerHTML = banner + (s.href
+              ? '<iframe src="' + esc(s.href) + '"></iframe>'
+              : '<div class="no-local"><p>Source PDF not found for ' +
+                esc(s.label) + '</p>' +
+                (s.quote ? '<blockquote>' + esc(s.quote) + '</blockquote>' : '') +
+                '</div>');
+          }});
+      });
+      modes.push({
+        key: 'factnote', label: 'Fact-check detail', badge: d.result,
+        badgeTitle: 'The Pass 4 fact-check finding for this claim.',
+        url: null,
+        render: function() {
+          var q = (d.sources || []).filter(function(s) { return s.quote; })
+            .map(function(s) {
+              return '<div class="passage-caption">' + esc(s.label) +
+                '</div><blockquote>' + esc(s.quote) + '</blockquote>';
+            }).join('');
+          srcBody.innerHTML = banner +
+            '<div class="passage-box">' +
+            '<div class="passage-caption">Claim (draft \\u00b6 ' +
+            esc(d.para_display || String(d.para_num || '')) +
+            ')</div><blockquote>' + esc(d.claim) + '</blockquote>' + q +
+            '</div>';
+        }});
+    } else {
     if (d.ndlaw_url) modes.push({
       key: 'ndlaw', label: 'ndlaw.org', badge: 'unofficial',
       badgeTitle: 'Compiled copy, not an official source. Verify against the '
@@ -1462,6 +1896,14 @@ _JS = """\
       key: 'official', label: 'Official source', badge: 'official',
       badgeTitle: 'The publisher\\'s own text.',
       url: d.url, render: renderOfficial});
+    if (d.authority_pdf) modes.push({
+      key: 'authpdf', label: 'Local PDF', badge: 'pdf',
+      badgeTitle: 'A PDF copy of this authority from the project directory.',
+      url: d.authority_pdf.external || null,
+      render: function() {
+        srcBody.innerHTML =
+          '<iframe src="' + esc(d.authority_pdf.href) + '"></iframe>';
+      }});
     if (sourceHtml) modes.push({
       key: 'local', label: 'Local reference', badge: 'offline',
       badgeTitle: 'Cached copy under ~/refs. Readable with no network.',
@@ -1470,6 +1912,7 @@ _JS = """\
       key: 'passage', label: 'Verification passage', badge: 'excerpt',
       badgeTitle: 'The exact text the citation check relied on.',
       url: d.url, render: renderPassage});
+    }
     if (!modes.length) modes.push({
       key: 'none', label: 'Source', badge: '', badgeTitle: '',
       url: null, render: renderNoSource});
@@ -1622,6 +2065,16 @@ _JS = """\
   window.exportReviewState = function() {
     const out = DATA.map((d, i) => {
       const cs = getCiteState(i);
+      if (d.kind === 'fact') {
+        return {
+          kind: 'fact',
+          claim: d.claim,
+          para_num: d.para_num,
+          machine_result: d.result_label,
+          status: cs.status,
+          notes: cs.notes
+        };
+      }
       return {
         cite_text: d.cite_text,
         cite_type: d.cite_type,
@@ -1759,6 +2212,21 @@ def _find_passage(passages: list[dict], cite: str,
     return None
 
 
+_QTRANS = str.maketrans({"‘": "'", "’": "'", "“": '"',
+                         "”": '"', " ": " "})
+
+
+def _find_quote_position(pp_text: str, quote_text: str) -> int | None:
+    """Locate a verbatim draft quote; length-preserving quote/nbsp folding
+    keeps the returned offset valid against the original text."""
+    if not quote_text:
+        return None
+    i = pp_text.find(quote_text)
+    if i == -1:
+        i = pp_text.translate(_QTRANS).find(quote_text.translate(_QTRANS))
+    return i if i >= 0 else None
+
+
 def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 file_key: str, opinion_text: str,
                 viewers: dict[str, str] | None = None,
@@ -1766,7 +2234,10 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 sources_meta: dict[str, dict] | None = None,
                 passages: list[dict] | None = None,
                 authority_alias: dict[str, str] | None = None,
-                ndlaw_base: str | None = _NDLAW_DEFAULT_BASE) -> str:
+                ndlaw_base: str | None = _NDLAW_DEFAULT_BASE,
+                facts: list[dict] | None = None,
+                fact_viewers: dict[str, str] | None = None,
+                link_pdfs: bool = False) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
     via_map = via_map or {}
@@ -1854,8 +2325,13 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         ndlaw_url = None
         if ndlaw_base and _ndlaw_eligible(c, meta):
             ndlaw_url = _ndlaw_url(authority, pin_anchor, ndlaw_base)
+        # Local-PDF authority (an obscure source dropped as a PDF in the
+        # project dir, declared in sources-meta): same viewer treatment as
+        # record items, surfaced as its own source-pane mode.
+        authority_pdf = meta.get("pdf_viewer") or None
         enriched.append({
             "ndlaw_url": ndlaw_url,
+            "authority_pdf": authority_pdf,
             "cite_text": c["cite_text"],
             "cite_type": c.get("cite_type", ""),
             "normalized": norm,
@@ -1879,6 +2355,58 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "source_key": lp if has_source else None,
             "passage": passage,
             "via": via,
+        })
+
+    # Factual assertions (Pass 4 facts ledger), appended after the citation
+    # entries so they share navigation, statuses, notes, and export.
+    facts = facts or []
+    fact_viewers = fact_viewers or {}
+    n_cites = len(enriched)
+    for f in facts:
+        position = None
+        para_num = None
+        occurrence = 0
+        dq = f.get("draft_quote") or ""
+        pos = _find_quote_position(pp_text, dq)
+        if pos is not None:
+            position = pos
+            para_num, occurrence = _locate_occurrence(
+                pp_paragraphs, pp_text, pos, dq)
+        if para_num is None:
+            m = re.search(r"\d+", f.get("para") or "")
+            para_num = int(m.group(0)) if m else None
+        srcs = []
+        for s in f.get("sources", []):
+            resolved = s.get("_resolved_path")
+            base_url = fact_viewers.get(resolved) if resolved else None
+            href = None
+            if base_url:
+                if link_pdfs:
+                    page = s.get("page")
+                    href = base_url + (f"#page={page}"
+                                       if isinstance(page, int) and page > 0
+                                       else "")
+                else:
+                    href = base_url + _fact_source_hash(s)
+            srcs.append({
+                "label": (s.get("raw") or s.get("item") or "source").strip(),
+                "href": href,
+                "page": s.get("page"),
+                "quote": (s.get("quote") or "").strip() or None,
+            })
+        enriched.append({
+            "kind": "fact",
+            "cite_text": f["claim"],
+            "claim": f["claim"],
+            "result": f["result"],
+            "result_label": f["result_label"],
+            "note": f["note"],
+            "para_display": f.get("para") or "",
+            "para_num": para_num,
+            "occurrence": occurrence,
+            "position": position,
+            "draft_quote": dq or None,
+            "sources": srcs,
         })
 
     data_json = json.dumps(enriched, ensure_ascii=False)
@@ -1915,7 +2443,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
 
 <main>
   <div class="sidebar">
-    <div class="sidebar-header">Citations ({len(enriched)})</div>
+    <div class="sidebar-header">Citations ({n_cites})</div>
     <div class="cite-list"></div>
   </div>
 
@@ -2032,6 +2560,35 @@ def main():
                              "the exact text each pinpoint verification "
                              "relied on. Shown in the source pane when no "
                              "full text is embedded for the citation.")
+    parser.add_argument("--facts-json",
+                        help="Path to the Pass 4 facts ledger: JSON array of "
+                             "{para, claim, draft_quote, result, note, "
+                             "sources:[{raw, item, file, page, para_pin, "
+                             "quote}]} objects. Adds a factual-assertion "
+                             "review section with the cited record/brief "
+                             "PDFs embedded at the cited spot.")
+    parser.add_argument("--record-dir",
+                        help="Directory of district-court record item PDFs "
+                             "named 'R<N> - <Type> <Title>.pdf'. Used to "
+                             "resolve record cites like 'R243' from the "
+                             "facts ledger.")
+    parser.add_argument("--case-manifest",
+                        help="Path to a case manifest JSON (array of "
+                             "{docketId, filename, ...}) mapping docket "
+                             "numbers and brief names to PDF files in the "
+                             "manifest's directory.")
+    parser.add_argument("--case-dir",
+                        help="Project directory holding the case PDFs and "
+                             "manifest.json (default: the opinion file's "
+                             "directory). Pass this when the opinion "
+                             "markdown lives in a temp dir.")
+    parser.add_argument("--link-pdfs", action="store_true",
+                        help="Reference record/authority PDFs via native "
+                             "iframes (relative file links + #page=N) "
+                             "instead of embedding base64 PDF.js viewer "
+                             "sidecars. Zero-copy, but no quote "
+                             "highlighting and page landing depends on the "
+                             "browser's built-in PDF viewer.")
     parser.add_argument("--ndlaw-base", default=_NDLAW_DEFAULT_BASE,
                         help="Base URL of the ndlaw citation site used for the "
                              "reading-copy pane (default: %(default)s). Point "
@@ -2082,6 +2639,14 @@ def main():
             print(f"Warning: could not read --passages-json ({e}); "
                   "rendering without verification passages.", file=sys.stderr)
 
+    facts: list[dict] = []
+    if args.facts_json:
+        try:
+            facts = _load_facts(Path(args.facts_json).expanduser())
+        except (OSError, ValueError) as e:
+            print(f"Warning: could not read --facts-json ({e}); "
+                  "rendering without factual assertions.", file=sys.stderr)
+
     if not citations:
         print("No citations found.", file=sys.stderr)
         sys.exit(1)
@@ -2094,6 +2659,72 @@ def main():
     title = args.title or opinion_path.stem
     file_key = opinion_path.stem
     out = Path(args.output)
+
+    # Resolve fact-ledger source refs and local-PDF authorities to files on
+    # disk, then build embeddable viewers for each unique PDF (base64 PDF.js
+    # sidecars by default; relative file links with --link-pdfs).
+    base_dir = (Path(args.case_dir).expanduser().resolve()
+                if args.case_dir else opinion_path.parent.resolve())
+    record_dir = (Path(args.record_dir).expanduser().resolve()
+                  if args.record_dir else None)
+    manifest_dir = base_dir
+    manifest: list[dict] = []
+    if args.case_manifest:
+        mp = Path(args.case_manifest).expanduser().resolve()
+        manifest = _load_manifest(mp)
+        manifest_dir = mp.parent
+    else:
+        default_manifest = base_dir / "manifest.json"
+        if default_manifest.exists():
+            manifest = _load_manifest(default_manifest)
+
+    fact_pdfs: list[Path] = []
+    unresolved = 0
+    for f in facts:
+        for s in f["sources"]:
+            p = _resolve_fact_source(s, record_dir, manifest, base_dir,
+                                     manifest_dir)
+            if p:
+                s["_resolved_path"] = str(p.resolve())
+                fact_pdfs.append(p)
+            else:
+                unresolved += 1
+    if unresolved:
+        print(f"  Note: {unresolved} fact source ref(s) did not resolve to a "
+              "PDF; shown as text-only.", file=sys.stderr)
+
+    for meta in sources_meta.values():
+        pdf = meta.get("pdf")
+        if not pdf:
+            continue
+        p = Path(pdf).expanduser()
+        if not p.is_absolute():
+            p = base_dir / p
+        if p.exists():
+            meta["_pdf_path"] = str(p.resolve())
+            fact_pdfs.append(p)
+        else:
+            print(f"  Warning: sources-meta pdf not found: {pdf}",
+                  file=sys.stderr)
+
+    fact_viewers = (_generate_local_pdf_viewers(fact_pdfs, out,
+                                                link_pdfs=args.link_pdfs)
+                    if fact_pdfs else {})
+
+    for meta in sources_meta.values():
+        pp = meta.pop("_pdf_path", None)
+        if pp and pp in fact_viewers:
+            base_url = fact_viewers[pp]
+            if args.link_pdfs:
+                page = meta.get("page")
+                href = base_url + (f"#page={page}"
+                                   if isinstance(page, int) and page > 0
+                                   else "")
+            else:
+                href = base_url + _fact_source_hash(
+                    {"page": meta.get("page"), "quote": meta.get("quote")})
+            meta["pdf_viewer"] = {"href": href, "external": base_url,
+                                  "label": Path(pp).name}
 
     # Download opinion PDFs and generate local PDF.js viewers for pinpoint search
     viewers = _generate_pdfjs_viewers(
@@ -2109,12 +2740,15 @@ def main():
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
                            via_map=via_map, sources_meta=sources_meta,
                            passages=passages, authority_alias=authority_alias,
-                           ndlaw_base=None if args.no_ndlaw else args.ndlaw_base)
+                           ndlaw_base=None if args.no_ndlaw else args.ndlaw_base,
+                           facts=facts, fact_viewers=fact_viewers,
+                           link_pdfs=args.link_pdfs)
 
     out.write_text(html_str, encoding="utf-8")
-    n_viewers = len(viewers)
+    n_viewers = len(viewers) + len(fact_viewers)
     extra = f", {n_viewers} PDF viewer(s)" if n_viewers else ""
-    print(f"Wrote {out} ({len(citations)} citations{extra})")
+    fact_note = f", {len(facts)} factual assertion(s)" if facts else ""
+    print(f"Wrote {out} ({len(citations)} citations{fact_note}{extra})")
 
 
 if __name__ == "__main__":

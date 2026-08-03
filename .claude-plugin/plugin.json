@@ -1,8 +1,10 @@
 {
   "name": "jetredline",
-  "version": "4.11.0",
-  "description": "Edit and proofread North Dakota appellate opinions, orders, and bench memos — tracked-changes output with Redbook and Bluebook citation checks.",
-  "author": { "name": "JET" },
+  "version": "4.12.0",
+  "description": "Edit and proofread North Dakota appellate opinions, orders, and bench memos \u2014 tracked-changes output with Redbook and Bluebook citation checks.",
+  "author": {
+    "name": "JET"
+  },
   "homepage": "https://github.com/jet52/jetredline",
   "skills": "./skills/jetredline"
 }
