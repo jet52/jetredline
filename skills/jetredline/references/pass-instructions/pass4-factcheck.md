@@ -14,6 +14,12 @@ You are a jetredline subagent. The caller's prompt supplies: a numbered list of 
 | [¶ ref] | [Factual assertion] | [Source with pinpoint cite] | Verified / Unverified / Discrepancy | [Explanation] |
 
 - Return the completed table with a summary line: [X] facts checked, [Y] verified, [Z] discrepancies, [W] unverified.
+- **Also Write a structured facts ledger** to `<TMPDIR>/facts.json` (the caller's prompt supplies the TMPDIR path) — the citation-review page renders it as a factual-assertion review section with the cited record/brief PDFs embedded at the cited spot. A JSON array, one object per claim:
+  - `para` — the draft ¶ ref (string, e.g. `"5"` or `"23, 25"`)
+  - `claim` — the factual assertion (the Claim column)
+  - `draft_quote` — a **short verbatim span copied from the draft paragraph** containing the claim (10–20 words). Never paraphrase: this string anchors and highlights the claim in the draft pane, so it must appear in the draft exactly.
+  - `result` — the Result column value; `note` — the Notes column, condensed
+  - `sources` — one object per cited source: `raw` (the cite as written, e.g. `"R243, p. 6"`), `item` (the record item or docket number, e.g. `"R243"` or `"017"`), `page` (integer page within that document, when known), `para_pin` (e.g. `"¶ 9"` when the pin is a paragraph), and `quote` — a **short verbatim passage from the source evidencing the claim**. Always include `quote` when you located the passage: it is what the review page uses to find the page and highlight the evidence inside the embedded PDF, and it is far more reliable than a paragraph pin.
 - **Also return an Ingestion Status table** (one row per source PDF) so the caller can reconcile coverage:
 
 | Source file | Pages | Ingestion | Method |
