@@ -20,14 +20,10 @@ from pathlib import Path
 try:
     import textstat
 except ImportError:
-    import platform
-    venv_hint = (
-        "~/.claude/skills/jetredline/.venv/Scripts/python.exe"
-        if platform.system() == "Windows"
-        else "~/.claude/skills/jetredline/.venv/bin/python"
-    )
+    # Point the hint at whatever interpreter ran us — the workflow always
+    # invokes this script with $VENV_PYTHON, so that's the venv to repair.
     print(f"Error: textstat not installed. Run: uv pip install textstat "
-          f"--python {venv_hint}",
+          f'--python "{sys.executable}"',
           file=sys.stderr)
     sys.exit(1)
 
