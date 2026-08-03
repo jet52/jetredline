@@ -65,17 +65,22 @@ Do not ask the user which mode to use — sense it from your available tools.
 At the start of each CLI session, set variables for platform-dependent paths. **Do not use `$(uname)` or other command substitution** — it triggers unnecessary permission prompts. Instead, check for platform-specific files directly:
 
 ```bash
-if [ -f ~/.claude/skills/jetredline/.venv/Scripts/python.exe ]; then
-  VENV_PYTHON=~/.claude/skills/jetredline/.venv/Scripts/python.exe   # Windows (Git Bash)
+if [ -f "${CLAUDE_SKILL_DIR}/.venv/Scripts/python.exe" ]; then
+  VENV_PYTHON="${CLAUDE_SKILL_DIR}/.venv/Scripts/python.exe"   # Windows (Git Bash)
 else
-  VENV_PYTHON=~/.claude/skills/jetredline/.venv/bin/python            # macOS / Linux
+  VENV_PYTHON="${CLAUDE_SKILL_DIR}/.venv/bin/python"           # macOS / Linux
 fi
 ```
 
 If running in **PowerShell** (Windows without Git Bash):
 ```powershell
-$VENV_PYTHON = "$HOME\.claude\skills\jetredline\.venv\Scripts\python.exe"
+$VENV_PYTHON = "${CLAUDE_SKILL_DIR}\.venv\Scripts\python.exe"
 ```
+
+(`${CLAUDE_SKILL_DIR}` above is replaced by the harness with this skill's
+absolute directory before you read this file; the commands you see contain a
+literal path. Keep paths double-quoted — on Windows the substituted path may
+contain spaces.)
 
 Use `$VENV_PYTHON` in all subsequent commands instead of hardcoded paths.
 
@@ -87,14 +92,20 @@ Use `$VENV_PYTHON` in all subsequent commands instead of hardcoded paths.
 
 **Web mode:** Skip the next four sections (Skill/Docx Paths, Python Environment, Node.js Environment, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
 
-At the start of each CLI session, detect the skill directory:
+The skill directory is `${CLAUDE_SKILL_DIR}` — the harness substitutes the
+absolute path (standalone install, plugin cache, or Cowork mount alike), and
+the "Base directory for this skill:" line at the top of this document carries
+the same value. Set it once, with probes as a fallback in case substitution
+ever fails (an unsubstituted placeholder expands to an empty string):
 
 ```bash
-# Detect skill directory
-if [ -d "$HOME/.claude/skills/jetredline" ]; then
-  SKILL_DIR="$HOME/.claude/skills/jetredline"
-elif [ -d "/mnt/.skills/skills/jetredline" ]; then
-  SKILL_DIR="/mnt/.skills/skills/jetredline"
+SKILL_DIR="${CLAUDE_SKILL_DIR}"
+if [ ! -d "$SKILL_DIR" ]; then
+  if [ -d "$HOME/.claude/skills/jetredline" ]; then
+    SKILL_DIR="$HOME/.claude/skills/jetredline"
+  elif [ -d "/mnt/.skills/skills/jetredline" ]; then
+    SKILL_DIR="/mnt/.skills/skills/jetredline"
+  fi
 fi
 ```
 
@@ -151,13 +162,13 @@ This skill has a persistent virtual environment. **Always use this venv python f
 Set `$VENV_PYTHON` with a fallback for read-only filesystems (Cowork):
 
 ```bash
-VENV_DIR="$SKILL_DIR/.venv"
+VENV_DIR="${CLAUDE_SKILL_DIR}/.venv"
 if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
   # Skill dir is read-only (Cowork) — use session-local venv
   VENV_DIR="/tmp/jetredline-venv"
     if [ ! -d "$VENV_DIR" ]; then
       python3 -m venv "$VENV_DIR"
-      "$VENV_DIR/bin/pip" install -r "$SKILL_DIR/requirements.txt" -q
+      "$VENV_DIR/bin/pip" install -r "${CLAUDE_SKILL_DIR}/requirements.txt" -q
     fi
 fi
 VENV_PYTHON="$VENV_DIR/bin/python"
@@ -165,8 +176,8 @@ VENV_PYTHON="$VENV_DIR/bin/python"
 
   If the venv does not exist or a package is missing in a writable environment, create/repair it:
   ```bash
-  uv venv "$SKILL_DIR/.venv"
-  uv pip install -r "$SKILL_DIR/requirements.txt" --python $VENV_PYTHON
+  uv venv "${CLAUDE_SKILL_DIR}/.venv"
+  uv pip install -r "${CLAUDE_SKILL_DIR}/requirements.txt" --python "$VENV_PYTHON"
   ```
 
 ## Temporary Files
@@ -197,7 +208,7 @@ The `docx` npm package is pre-installed in this skill's directory. **Do not run 
 
 When running Node scripts that use `docx`, set `NODE_PATH` so Node can find the package:
 ```bash
-NODE_PATH=~/.claude/skills/jetredline/node_modules node script.js
+NODE_PATH="${CLAUDE_SKILL_DIR}/node_modules" node script.js
 ```
 
 When running docx skill scripts (new-.docx creation path only; always include TMPDIR — use the literal absolute path from Step 0):
@@ -214,7 +225,7 @@ Note: `apply_edits.py` operates directly on the .docx ZIP archive — pure Pytho
 
 **Web mode:** Skip temp directory creation, update check, and directory scanning. The user will paste text or upload .docx/.pdf files directly in the conversation. Claude can read uploaded .docx and .pdf files natively. Proceed to Step 0.1.
 
-**Update check:** Run `python3 ~/.claude/skills/jetredline/check_update.py` silently. If it prints output, include it as a note to the user.
+**Update check:** Run `python3 "${CLAUDE_SKILL_DIR}/check_update.py"` silently. If it prints output, include it as a note to the user.
 
 **First, create the temp directory** with a unique random name:
 ```bash
@@ -237,17 +248,17 @@ If **no `.docx`** is found, ask the user to provide the document text.
 For PDF files **> 10 MB**, use `splitmarks` to split the PDF at its top-level bookmarks into individual documents:
 ```bash
 # Preview what bookmarks exist
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf --dry-run -vv
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" packet.pdf --dry-run -vv
 
 # Split into individual files in an output directory, flagging image-scanned output
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py packet.pdf -o split_output -v --check-text
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" packet.pdf -o split_output -v --check-text
 ```
 
 `--check-text` runs `pdftotext` over each output file and prints a `WARNING: <file> … appears image-scanned` line to stderr for anything under ~50 chars/page, naming the file and suggesting `ocrmypdf`. **Read those warnings — they tell you which files need the OCR ladder below before any subagent touches them.** The flag needs `pdftotext` on `PATH`; without poppler it degrades to "can't check," so its silence is not proof of a text layer.
 
 **Recursive split:** After the initial split, check the resulting files. If any single file is still **> 10 MB** (typically a record bundle containing many individual record items), split it again into a subdirectory:
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/splitmarks.py split_output/Record-Bundle.pdf -o split_output/record_items -v --check-text
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" split_output/Record-Bundle.pdf -o split_output/record_items -v --check-text
 ```
 This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
 
@@ -354,7 +365,7 @@ $VENV_PYTHON $SKILL_DIR/extract_text.py --input <draft.docx> --output <TMPDIR>/<
 10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
 10a. **Stamp a provenance footer on the analysis document** (CLI mode, after it is written to `<stem>-ANALYSIS.md`). This records which Claude model and which jetredline version generated the analysis, and on what date, for later validation and comparison as the model and skill change:
 ```bash
-python3 ~/.claude/skills/jetredline/provenance.py --file <stem>-ANALYSIS.md \
+python3 "${CLAUDE_SKILL_DIR}/provenance.py" --file <stem>-ANALYSIS.md \
   --model "{runtime model — friendly name and exact ID, e.g. Claude Opus 4.8 (claude-opus-4-8)}"
 ```
 Footer, e.g.: *Report generated by Claude Opus 4.8 (claude-opus-4-8) using jetredline v4.4.0 on 2026-06-05. AI-generated first draft for internal use; verify all citations and findings before relying.* Version and date are sourced deterministically by the script (version from frontmatter/`VERSION`, date from the system clock); you supply only `--model` from your runtime context — the script never guesses the model. The stamp is idempotent. **Stamp only the analysis document — never the tracked-changes `.docx`, which is the user's own opinion text and must not be altered with a footer.** In **audit mode** (no files written) and **web mode** (analysis returned inline, no filesystem), skip the script; in web mode you may append the same footer line manually as the report's last line.
@@ -362,7 +373,7 @@ Footer, e.g.: *Report generated by Claude Opus 4.8 (claude-opus-4-8) using jetre
 
     **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost).** Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance over Streamable HTTP (`NDLAW_URL` + `NDLAW_AUTH` env, or `--url`/`--auth`; for Claude Code users the URL and Basic-Auth header are in their MCP config — `claude mcp get ndlaw`). The script speaks to the server directly, so no opinion text passes through model context.
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/ndlaw_export.py \
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" \
   --opinion <opinion_md_path> \
   --refs-dir ~/refs \
   --meta-out <TMPDIR>/sources.json
@@ -377,7 +388,7 @@ $VENV_PYTHON ~/.claude/skills/jetredline/ndlaw_export.py \
 
     **11b. Generate the page.** Write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndlaw", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "local"}`:
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/cite_review.py \
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/cite_review.py" \
   --opinion <opinion_md_path> \
   --refs-dir ~/refs \
   --title "<case caption>" \
@@ -491,7 +502,7 @@ Adopt the persona of an experienced appellate attorney working for a state supre
 
 **Do not** read `references/nd-appellate-rules.md` or the pass-instruction file into the main context. Delegate to a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `~/.claude/skills/jetredline/references/pass-instructions/pass1-jurisdiction.md` and follow the **[opinion / memo]** variant. The draft is at `[path]`. Return only the concise findings summary those instructions specify.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass1-jurisdiction.md` and follow the **[opinion / memo]** variant. The draft is at `[path]`. Return only the concise findings summary those instructions specify.
 
 **Returns:** a concise summary of jurisdictional, procedural-posture, or standard-of-review findings — or an explicit all-clear. The memo variant may instead return a warning that the memo should confirm appellate jurisdiction.
 
@@ -524,7 +535,7 @@ Apply in priority order. Full details in `references/style-guide.md`.
 
 When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
 
-> Read `~/.claude/skills/jetredline/references/pass-instructions/pass2-style.md` and follow it. The draft opinion is at `[path]`. Return only the structured entry list those instructions specify.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The draft opinion is at `[path]`. Return only the structured entry list those instructions specify.
 
 **Returns:** a structured list of `¶ / OLD / NEW / REASON` edit entries and `¶ / COMMENT / ANCHOR` comment entries, in paragraph order.
 
@@ -558,7 +569,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `~/.claude/skills/jetredline/references/pass-instructions/pass3b-citations.md` and follow it. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3b-citations.md` and follow it. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
 
 **Returns:** the results table (`¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes`), a summary line with counts by type, the lookup-methods tally for case citations (`ndlaw / CourtListener / local / web / not found`), and an ND web-fallback note. The subagent also writes `<TMPDIR>/passages.json` (the passages ledger embedded in the citation-review HTML). Carry the tally and note into the analysis document alongside the results table. The instructions enforce the closed-loop case-name rule (correct same-cite typos only; never harmonize different citations) — Step 8a depends on the resulting Caption Check column and `name_similarity` values.
 
@@ -601,7 +612,7 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `~/.claude/skills/jetredline/references/pass-instructions/pass4-factcheck.md` and follow it. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass4-factcheck.md` and follow it. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
 
 **Returns:** the fact-check results table (`¶ | Claim | Source Document(s) | Result | Notes`) with a summary line, plus an **Ingestion Status table** (one row per source PDF: `Source file | Pages | Ingestion | Method`) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder, so image-only files are recovered, not skipped; a `not-ingested` or `OCR-low-confidence` file means its dependent facts are unverified, and the subagent says so plainly.
 
@@ -617,7 +628,7 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `~/.claude/skills/jetredline/references/pass-instructions/pass6-brief-matching.md` and follow it. The draft document is at `[path]`; the party briefs are: [brief paths, each with its Step 0 ingestion outcome].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass6-brief-matching.md` and follow it. The draft document is at `[path]`; the party briefs are: [brief paths, each with its Step 0 ingestion outcome].
 
 **Returns:** the brief-matching table (`¶ | Argument | Party | Brief Source | Addressed | Notes` — Yes/Partial/No per argument, with brief page ranges) with a summary line, plus an **Ingestion Status table** (one row per brief) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder; an unreadable brief is reported as **coverage unverified** for that party, never silently skipped.
 
@@ -633,7 +644,7 @@ When a dissent or concurrence is provided alongside the majority opinion, cross-
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `~/.claude/skills/jetredline/references/pass-instructions/pass7-dissent-crosscheck.md` and follow it. The majority opinion is at `[majority path]`; the dissent/concurrence is at `[dissent path]`.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass7-dissent-crosscheck.md` and follow it. The majority opinion is at `[majority path]`; the dissent/concurrence is at `[dissent path]`.
 
 **Returns:** the cross-check table (`¶ Majority | ¶ Dissent | Argument | Fair Characterization? | Addressed? | Notes`) and a summary counting dissent arguments reviewed, fair characterizations, potential straw-manning, unaddressed criticisms, and dissent mischaracterizations of the majority.
 
@@ -683,7 +694,7 @@ When the draft construes an N.D.C.C. section or a court rule as a point of decis
 
 **CLI mode:** Run the readability metrics script on the document:
 ```bash
-$VENV_PYTHON ~/.claude/skills/jetredline/readability_metrics.py --file <document_path>
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/readability_metrics.py" --file <document_path>
 ```
 Parse the JSON output and incorporate the results into the analysis document (see Readability Metrics section in the output template). Flag any sentences over 40 words, sections with passive voice above 25%, and sections with FK grade above 16.
 
