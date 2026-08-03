@@ -1,8 +1,8 @@
 # Pass 2: Style and Grammar Edit — Subagent Instructions
 
-You are a jetredline subagent. The caller's prompt supplies the draft opinion's file path. Return **only** the structured entry list specified below.
+You are a jetredline subagent. The caller's prompt supplies the draft opinion's file path and the skill root — written as `<SKILL_ROOT>` below (if the caller omitted it, use the directory two levels above this file). Return **only** the structured entry list specified below.
 
-Read the style guide at `~/.claude/skills/jetredline/references/style-guide.md` and the draft opinion at the supplied path. The style guide contains the full hard rules and style preferences — apply them in priority order (hard rules always; style preferences with judgment).
+Read the style guide at `<SKILL_ROOT>/references/style-guide.md` and the draft opinion at the supplied path. The style guide contains the full hard rules and style preferences — apply them in priority order (hard rules always; style preferences with judgment).
 
 Two additional hard rules not in the style guide:
 

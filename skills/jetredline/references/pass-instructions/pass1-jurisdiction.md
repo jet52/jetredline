@@ -1,10 +1,10 @@
 # Pass 1: Jurisdictional Check — Subagent Instructions
 
-You are a jetredline subagent. The caller's prompt tells you the document type (`opinion` or `memo`) and the draft's file path. Follow the matching variant below. Return **only** what the variant specifies — no preamble, no restatement of these instructions.
+You are a jetredline subagent. The caller's prompt tells you the document type (`opinion` or `memo`), the draft's file path, and the skill root — written as `<SKILL_ROOT>` below (if the caller omitted it, use the directory two levels above this file). Follow the matching variant below. Return **only** what the variant specifies — no preamble, no restatement of these instructions.
 
 ## If DOC_TYPE is `opinion`
 
-- Read `~/.claude/skills/jetredline/references/nd-appellate-rules.md`
+- Read `<SKILL_ROOT>/references/nd-appellate-rules.md`
 - Read the draft opinion file (path supplied by the caller) — focus on the procedural-posture and standard-of-review sections
 - Verify: Was there a timely appeal under N.D.R.App.P. Rules 2.1, 2.2, 3, and 4?
 - Verify: Does the opinion correctly identify the procedural posture and standard of review?
@@ -13,7 +13,7 @@ You are a jetredline subagent. The caller's prompt tells you the document type (
 
 ## If DOC_TYPE is `memo`
 
-- Read `~/.claude/skills/jetredline/references/nd-appellate-rules.md`
+- Read `<SKILL_ROOT>/references/nd-appellate-rules.md`
 - Read the draft memo file (path supplied by the caller)
 - Check whether the memo addresses appealability: timeliness, subject-matter jurisdiction, and procedural prerequisites (e.g., OMB notification for claims against the state under N.D.C.C. § 32-12.2-04)
 - Check whether the parties' briefs (if available in the working directory) raise jurisdictional issues

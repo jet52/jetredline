@@ -502,7 +502,7 @@ Adopt the persona of an experienced appellate attorney working for a state supre
 
 **Do not** read `references/nd-appellate-rules.md` or the pass-instruction file into the main context. Delegate to a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass1-jurisdiction.md` and follow the **[opinion / memo]** variant. The draft is at `[path]`. Return only the concise findings summary those instructions specify.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass1-jurisdiction.md` and follow the **[opinion / memo]** variant. The skill root is `${CLAUDE_SKILL_DIR}`. The draft is at `[path]`. Return only the concise findings summary those instructions specify.
 
 **Returns:** a concise summary of jurisdictional, procedural-posture, or standard-of-review findings — or an explicit all-clear. The memo variant may instead return a warning that the memo should confirm appellate jurisdiction.
 
@@ -535,7 +535,7 @@ Apply in priority order. Full details in `references/style-guide.md`.
 
 When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The draft opinion is at `[path]`. Return only the structured entry list those instructions specify.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft opinion is at `[path]`. Return only the structured entry list those instructions specify.
 
 **Returns:** a structured list of `¶ / OLD / NEW / REASON` edit entries and `¶ / COMMENT / ANCHOR` comment entries, in paragraph order.
 
@@ -569,7 +569,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3b-citations.md` and follow it. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3b-citations.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`; the venv python is `[the $VENV_PYTHON value from Step 0]`. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
 
 **Returns:** the results table (`¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes`), a summary line with counts by type, the lookup-methods tally for case citations (`ndlaw / CourtListener / local / web / not found`), and an ND web-fallback note. The subagent also writes `<TMPDIR>/passages.json` (the passages ledger embedded in the citation-review HTML). Carry the tally and note into the analysis document alongside the results table. The instructions enforce the closed-loop case-name rule (correct same-cite typos only; never harmonize different citations) — Step 8a depends on the resulting Caption Check column and `name_similarity` values.
 
@@ -612,7 +612,7 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass4-factcheck.md` and follow it. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass4-factcheck.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
 
 **Returns:** the fact-check results table (`¶ | Claim | Source Document(s) | Result | Notes`) with a summary line, plus an **Ingestion Status table** (one row per source PDF: `Source file | Pages | Ingestion | Method`) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder, so image-only files are recovered, not skipped; a `not-ingested` or `OCR-low-confidence` file means its dependent facts are unverified, and the subagent says so plainly.
 
@@ -628,7 +628,7 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass6-brief-matching.md` and follow it. The draft document is at `[path]`; the party briefs are: [brief paths, each with its Step 0 ingestion outcome].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass6-brief-matching.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft document is at `[path]`; the party briefs are: [brief paths, each with its Step 0 ingestion outcome].
 
 **Returns:** the brief-matching table (`¶ | Argument | Party | Brief Source | Addressed | Notes` — Yes/Partial/No per argument, with brief page ranges) with a summary line, plus an **Ingestion Status table** (one row per brief) that Step 11 reconciles for coverage. The instructions include the full detection + OCR recovery ladder; an unreadable brief is reported as **coverage unverified** for that party, never silently skipped.
 
@@ -644,7 +644,7 @@ When a dissent or concurrence is provided alongside the majority opinion, cross-
 
 **Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass7-dissent-crosscheck.md` and follow it. The majority opinion is at `[majority path]`; the dissent/concurrence is at `[dissent path]`.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass7-dissent-crosscheck.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The majority opinion is at `[majority path]`; the dissent/concurrence is at `[dissent path]`.
 
 **Returns:** the cross-check table (`¶ Majority | ¶ Dissent | Argument | Fair Characterization? | Addressed? | Notes`) and a summary counting dissent arguments reviewed, fair characterizations, potential straw-manning, unaddressed criticisms, and dissent mischaracterizations of the majority.
 

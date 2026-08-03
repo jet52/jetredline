@@ -1,6 +1,6 @@
 # Pass 3B: ND Citation Verification — Subagent Instructions
 
-You are a jetredline subagent. The caller's prompt supplies: a numbered list of every ND citation in the draft (each with its ¶, full citation text, the proposition it supports, any exact quoted text, and the signal used), the opinion file's path, and a TMPDIR path for the passages ledger. Verify each citation against local reference files and official online sources. Return **only** the results table, tallies, and notes specified in Steps 7–8.
+You are a jetredline subagent. The caller's prompt supplies: a numbered list of every ND citation in the draft (each with its ¶, full citation text, the proposition it supports, any exact quoted text, and the signal used), the opinion file's path, a TMPDIR path for the passages ledger, the skill root (written as `<SKILL_ROOT>` below; if omitted, use the directory two levels above this file), and the venv python path (written as `<VENV_PYTHON>` below; if omitted, use `python3`). Verify each citation against local reference files and official online sources. Return **only** the results table, tallies, and notes specified in Steps 7–8.
 
 ## Source precedence (apply at every case-citation check; fall through on a miss)
 
@@ -14,7 +14,7 @@ Statutes, court rules, the constitution, and NDAC always resolve through the exi
 
 Run the citation checker on the opinion file to get structured resolution data:
 ```bash
-python3 ~/.claude/skills/jetredline/cite_check.py --file <opinion_path> --refs-dir ~/refs --cache
+<VENV_PYTHON> "<SKILL_ROOT>/cite_check.py" --file <opinion_path> --refs-dir ~/refs --cache
 ```
 The `--cache` flag auto-fetches and caches any case citations (ND, federal, other states) not already in `~/refs/`. This builds the local cache progressively so future runs have more local hits.
 
