@@ -7,15 +7,25 @@ import re
 from jetcite._http import http_get
 
 
-def nd_opinion_url(year: str, number: str) -> str:
-    """Generate an ndcourts.gov search URL for an ND Supreme Court opinion.
+def _cit_type(court: str) -> str:
+    """Map a ND court abbreviation to the ndcourts.gov ``citType`` parameter.
 
-    This returns the search page URL. Use resolve_nd_opinion_url() to
-    follow through to the direct PDF URL.
+    The search endpoint keys the Court of Appeals on the unspaced ``NDApp``;
+    a percent-encoded ``ND%20App`` returns no results (verified 2026-08-03).
+    """
+    return "NDApp" if court.replace(" ", "") == "NDApp" else "ND"
+
+
+def nd_opinion_url(year: str, number: str, court: str = "ND") -> str:
+    """Generate an ndcourts.gov search URL for an ND opinion.
+
+    ``court`` is "ND" for the Supreme Court or "ND App" for the Court of
+    Appeals. This returns the search page URL; use resolve_nd_opinion_url()
+    to follow through to the direct PDF URL.
     """
     return (
         f"https://www.ndcourts.gov/supreme-court/opinions"
-        f"?cit1={year}&citType=ND&cit2={number}"
+        f"?cit1={year}&citType={_cit_type(court)}&cit2={number}"
         f"&pageSize=10&sortOrder=1"
     )
 
@@ -25,13 +35,13 @@ _OPINION_ID_RE = re.compile(
 )
 
 
-def resolve_nd_opinion_url(year: str, number: str) -> str | None:
+def resolve_nd_opinion_url(year: str, number: str, court: str = "ND") -> str | None:
     """Fetch the ndcourts.gov search page and extract the direct opinion URL.
 
     Returns the direct PDF URL (e.g., /supreme-court/opinions/171302),
     or None if the search returned no results or the request failed.
     """
-    search_url = nd_opinion_url(year, number)
+    search_url = nd_opinion_url(year, number, court=court)
     resp = http_get(search_url, timeout=10.0)
     if resp is None or resp.status_code >= 400:
         return None

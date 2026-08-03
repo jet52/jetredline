@@ -17,10 +17,15 @@ from jetcite.sources.ndcourts import nd_opinion_url
 # See TODO.md, "Plan: Page-break citation splice."
 _WS = r'(?:[^\S\n]*\n[^\S\n]*|[^\S\n]+)'
 
-# ND neutral: 2024 ND 156
+# ND neutral: 2024 ND 156 (Supreme Court) and 2005 ND App 8 (Court of Appeals).
+# Per the ND Supreme Court's Redbook supplement, the court abbreviation is "ND"
+# for the Supreme Court and "ND App" for the Court of Appeals. The two share a
+# year/number space — 2005 ND 7 and 2005 ND App 7 are different cases — so the
+# court token is carried in components and normalized, and keyed separately in
+# the local refs cache.
 # Pinpoint tail accepts both ", ¶ 12" and the Bluebook short form "at ¶ 12".
 _ND_NEUTRAL = re.compile(
-    r'([12]\d{3})' + _WS + r'ND' + _WS + r'(\d{1,3})'
+    r'([12]\d{3})' + _WS + r'ND(' + _WS + r'App)?' + _WS + r'(\d{1,3})'
     r'(?:(?:,?\s*|\s+at\s+)(?:¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)))?'  # optional pinpoint
 )
 
@@ -72,17 +77,19 @@ class NeutralCitationMatcher(BaseMatcher):
         # opinion PDF URL is resolved later (network) by scanner.scan_text when
         # resolve=True, so matching stays pure and offline-safe.
         for m in _ND_NEUTRAL.finditer(text):
-            year, number = m.group(1), m.group(2)
-            pinpoint = m.group(3)
-            sources = [Source("ndcourts", nd_opinion_url(year, number))]
+            year, number = m.group(1), m.group(3)
+            court = "ND App" if m.group(2) else "ND"
+            pinpoint = m.group(4)
+            sources = [Source("ndcourts", nd_opinion_url(year, number, court=court))]
             sources.append(Source("courtlistener",
-                                  courtlistener_neutral_url("ND", year, number)))
+                                  courtlistener_neutral_url(
+                                      court.replace(" ", "%20"), year, number)))
             results.append(Citation(
                 raw_text=m.group(0),
                 cite_type=CitationType.CASE,
                 jurisdiction="nd",
-                normalized=f"{year} ND {number}",
-                components={"year": year, "number": number},
+                normalized=f"{year} {court} {number}",
+                components={"year": year, "number": number, "court": court},
                 pinpoint=f"¶ {pinpoint}" if pinpoint else None,
                 sources=sources,
                 position=m.start(),

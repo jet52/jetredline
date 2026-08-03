@@ -37,6 +37,12 @@ class Citation:
     parent_normalized: str | None = None  # normalized form of the resolved parent full cite; None = unresolved
     pin_page: str | None = None  # page pinpoint of a pin cite ("363" or "363-65")
     pin_paragraph: str | None = None  # paragraph pinpoint of a pin cite ("12" or "12-15")
+    # ND style defect: this reporter cite is the parallel half of a ND
+    # public-domain cite AND carries a page pin cite. The ND Supreme Court's
+    # Redbook supplement gives the reporter's first page only in such a pair —
+    # the ¶ is the pinpoint — so "1997 ND 231, ¶ 10, 571 N.W.2d 358, 360" is
+    # improper. Set by the scanner, which sees the surrounding text.
+    improper_parallel_pincite: bool = False
 
     def to_dict(self) -> dict:
         """Convert to a plain dictionary suitable for JSON serialization."""
@@ -50,6 +56,8 @@ class Citation:
             d["pinpoint"] = self.pinpoint
         if self.parallel_cites:
             d["parallel_cites"] = self.parallel_cites
+        if self.improper_parallel_pincite:
+            d["improper_parallel_pincite"] = True
         if self.antecedent_name:
             d["antecedent_name"] = self.antecedent_name
         if self.is_repeat:

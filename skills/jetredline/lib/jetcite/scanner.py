@@ -12,6 +12,38 @@ from jetcite.patterns import get_matchers
 from jetcite.resolver import resolve_nd_opinion_urls
 
 
+_ND_NEUTRAL_NORM = re.compile(r"^[12]\d{3} ND(?: App)? \d{1,3}$")
+# A page pin cite trailing a reporter cite: ", 360" / ", 360-62" / ", 360, 365".
+_TRAILING_PAGE_PIN = re.compile(r"^\s*,\s*\d+(?:\s*[-–]\s*\d+)?")
+
+
+def _flag_improper_parallel_pincite(cite_a: Citation, cite_b: Citation,
+                                    text: str) -> None:
+    """Flag a page pin cite on the reporter half of a ND public-domain pair.
+
+    Per the ND Supreme Court's Redbook supplement, a full public-domain cite
+    gives the North Western Reporter's *first page only* — the ¶ carries the
+    pinpoint — so ``1997 ND 231, ¶ 10, 571 N.W.2d 358, 360`` is improper and
+    ``…, 571 N.W.2d 358`` is correct.
+
+    Scoped to ND pairs: other states' medium-neutral conventions are not
+    jetcite's to assert. Detection reads the text *after* the reporter cite
+    rather than widening the reporter pattern, so no existing match, raw_text,
+    or offset changes.
+    """
+    # Orientation: the ND neutral cite leads, its reporter parallel follows.
+    # Keying on cite_a's normalized form (not jurisdiction) is deliberate —
+    # regional reporters carry jurisdiction "us", so N.W.2d halves of a ND pair
+    # would otherwise never qualify.
+    if not _ND_NEUTRAL_NORM.match(cite_a.normalized):
+        return
+    if _ND_NEUTRAL_NORM.match(cite_b.normalized):
+        return  # two neutral cites — not a reporter parallel
+    after = text[cite_b.position + len(cite_b.raw_text):]
+    if _TRAILING_PAGE_PIN.match(after):
+        cite_b.improper_parallel_pincite = True
+
+
 def _detect_parallel_citations(citations: list[Citation], text: str) -> None:
     """Detect parallel citations and link them.
 
@@ -68,6 +100,8 @@ def _detect_parallel_citations(citations: list[Citation], text: str) -> None:
             cite_a.parallel_cites.append(cite_b.normalized)
         if cite_a.normalized not in cite_b.parallel_cites:
             cite_b.parallel_cites.append(cite_a.normalized)
+
+        _flag_improper_parallel_pincite(cite_a, cite_b, text)
 
         # Merge sources: each citation gets the other's sources it doesn't have
         a_source_names = {s.name for s in cite_a.sources}

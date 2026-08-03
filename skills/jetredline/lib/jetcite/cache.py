@@ -87,7 +87,10 @@ def _citation_path(citation: Citation) -> Path | None:
 
     if citation.cite_type == CitationType.CASE:
         if citation.jurisdiction == "nd" and "year" in c and "number" in c:
-            return Path("opin/ND") / c["year"] / f"{c['year']}ND{c['number']}.md"
+            # Court of Appeals opinions are keyed separately: 2005 ND 7 and
+            # 2005 ND App 7 are different cases and must not share a path.
+            court = c.get("court", "ND").replace(" ", "")
+            return Path("opin") / court / c["year"] / f"{c['year']}{court}{c['number']}.md"
         elif "reporter" in c and "volume" in c and "page" in c:
             rdir = _reporter_dir(c["reporter"])
             return Path("opin") / rdir / c["volume"] / f"{c['page']}.md"

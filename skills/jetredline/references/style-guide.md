@@ -66,10 +66,21 @@
 - Signal usage: check that "see," "see also," "cf.," "but see," "accord" are used correctly per Bluebook rules 1.2-1.4.
 
 ### North Dakota-Specific Conventions
-- North Dakota Supreme Court cases (full / first reference): *Party v. Party*, year ND volume, ¶ pinpoint, parallel N.W. cite — e.g., *State v. Smith*, 2024 ND 45, ¶ 12, 4 N.W.3d 100. Court of Appeals uses `ND App`.
-- The parallel N.W.2d/N.W.3d cite **is included** in full ND cites (1997–present public-domain form), giving the reporter's first page only — **no pin cite to the reporter** (the ¶ is the pinpoint). Treat a missing parallel in a full cite as a defect to correct.
-- Short forms omit the N.W. parallel entirely: *Smith*, 2024 ND 45, ¶ 12; *id.* at ¶ 12.
-- North Dakota Century Code: N.D.C.C. § XX-XX-XX.
+
+**Case, statute, and session-law citation form is governed by the Court's own
+Redbook supplement — `references/nd-citation-style.md` in this skill.** Read
+that file before checking any ND citation. It controls the era-specific forms,
+`ND` vs `ND App`, the parallel-cite rule (first page only, no pin cite to the
+reporter), short forms, `Id. at ¶ N`, the special same-paragraph short form, and
+the N.D.C.C. / N.D.R.C. / session-law forms.
+
+Do not restate those rules here — this file previously carried a partial copy
+that had already drifted. `nd-citation-style.md` is vendored from the jetcite
+repo; edit it there and re-run `make vendor-citestyle`.
+
+Still checked here (not in the supplement):
+
+- A **missing** N.W. parallel in a full (first-reference) ND cite is a defect to correct.
 - North Dakota Constitution: N.D. Const. art. X, § X.
 - North Dakota Rules of Civil Procedure: N.D.R.Civ.P. Rule XX.
 - North Dakota Rules of Criminal Procedure: N.D.R.Crim.P. Rule XX.

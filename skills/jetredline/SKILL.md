@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.10.1
+version: 4.11.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -540,7 +540,7 @@ Pass 3 has three parts: (A) Bluebook format checking, in main context; (B) subst
 
 Perform these checks in main context as part of Passes 2/5 work:
 - Verify Bluebook format for all citations
-- Check ND-specific conventions (formats in `references/style-guide.md`)
+- Check ND-specific conventions — read `references/nd-citation-style.md` (the Court's Redbook supplement: era-specific forms, `ND` vs `ND App`, the no-reporter-pin-cite rule in a public-domain parallel, short forms, `Id. at ¶ N`, N.D.C.C. / N.D.R.C. / session laws). Non-ND formats stay in `references/style-guide.md`.
 - Verify pinpoint citations include paragraph or page numbers
 - Check signal usage (see, see also, cf., but see, accord)
 - Confirm case names are italicized

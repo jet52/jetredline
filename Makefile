@@ -5,11 +5,13 @@ JETCITE_SRC := ../jetcite/src/jetcite
 JETCITE_DEST := skills/jetredline/lib/jetcite
 SPLITMARKS_SRC := ../splitmarks/splitmarks.py
 SPLITMARKS_DEST := skills/jetredline/splitmarks.py
+CITESTYLE_SRC := ../jetcite/reference/nd-citation-style.md
+CITESTYLE_DEST := skills/jetredline/references/nd-citation-style.md
 
 PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
 WEB_ZIP := $(SKILL_NAME)-web-$(VERSION).zip
 
-.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks drift-check version-check
+.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks vendor-citestyle drift-check version-check
 
 # Public package targets clean first (so zip -r never updates a stale archive),
 # then delegate to a build-* recipe. package-all cleans once and builds all three
@@ -74,6 +76,13 @@ vendor-splitmarks:
 	cp $(SPLITMARKS_SRC) $(SPLITMARKS_DEST)
 	@echo "Vendored splitmarks from $(SPLITMARKS_SRC)"
 
+# The ND Supreme Court's Redbook supplement. Canonical copy lives in the jetcite
+# repo so jetmemo, jetredline, and jetrehearing cite one identical rule set.
+vendor-citestyle:
+	@test -f $(CITESTYLE_SRC) || (echo "FAIL: citation-style source not found at $(CITESTYLE_SRC)" && exit 1)
+	cp $(CITESTYLE_SRC) $(CITESTYLE_DEST)
+	@echo "Vendored nd-citation-style.md from $(CITESTYLE_SRC)"
+
 # Fail if the vendored splitmarks copy has drifted from its canonical source.
 # Tolerant of canonical being absent (e.g. on an install-only machine).
 drift-check:
@@ -82,6 +91,12 @@ drift-check:
 	  echo "splitmarks: in sync with canonical."; \
 	else \
 	  echo "splitmarks: canonical repo not present ($(SPLITMARKS_SRC)); skipping drift check."; \
+	fi
+	@if [ -f $(CITESTYLE_SRC) ]; then \
+	  cmp -s $(CITESTYLE_SRC) $(CITESTYLE_DEST) || { echo "DRIFT: $(CITESTYLE_DEST) differs from canonical $(CITESTYLE_SRC) — run 'make vendor-citestyle'"; exit 1; }; \
+	  echo "nd-citation-style: in sync with canonical."; \
+	else \
+	  echo "nd-citation-style: canonical repo not present ($(CITESTYLE_SRC)); skipping drift check."; \
 	fi
 
 # The version lives in three places that must agree: VERSION (canonical, drives

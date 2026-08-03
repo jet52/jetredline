@@ -93,10 +93,11 @@ def resolve_nd_opinion_urls(citations: list[Citation]) -> None:
         number = cite.components.get("number")
         if not year or not number:
             continue
+        court = cite.components.get("court", "ND")
         # Find the ndcourts source and replace its URL
         for src in cite.sources:
             if src.name == "ndcourts":
-                resolved = resolve_nd_opinion_url(year, number)
+                resolved = resolve_nd_opinion_url(year, number, court=court)
                 if resolved:
                     src.url = resolved
                 break

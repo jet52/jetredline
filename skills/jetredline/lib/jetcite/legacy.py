@@ -179,6 +179,12 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
         "position": c.position,
     }
 
+    if c.improper_parallel_pincite:
+        # ND style defect: the reporter half of a public-domain pair carries a
+        # page pin cite. Consumers surface this as a correctable citation-form
+        # error (see the ND Redbook supplement, nd-citation-style.md).
+        entry["improper_parallel_pincite"] = True
+
     if c.is_repeat:
         # Repeat occurrences carry no refs file of their own; consumers
         # follow parent_normalized to the first-occurrence entry.

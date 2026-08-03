@@ -48,7 +48,7 @@ _REGIONAL_PIN = re.compile(
 # Neutral "at ¶" short form. The full-cite pattern in neutral.py also accepts
 # "at ¶" now; this candidate matters when the same cite appeared earlier and
 # dedup swallows the second full match — the pin entry preserves its pinpoint.
-_ND_AT_PIN = re.compile(r"\b([12]\d{3})\s+ND\s+(\d{1,3})\s+at\s+" + _PARA)
+_ND_AT_PIN = re.compile(r"\b([12]\d{3})\s+ND(\s+App)?\s+(\d{1,3})\s+at\s+" + _PARA)
 
 # Shape 3 — bare-name candidates. One or two capitalized words (no digits —
 # keeps reporter fragments like "F.3d" from qualifying) followed by an
@@ -57,6 +57,12 @@ _ND_AT_PIN = re.compile(r"\b([12]\d{3})\s+ND\s+(\d{1,3})\s+at\s+" + _PARA)
 _NAME = r"[A-Z][A-Za-z.'’\-]{2,}(?:\s+[A-Z][A-Za-z.'’\-]+)?"
 _NAME_AT_PIN = re.compile(rf"\b({_NAME}),?\s+at\s+" + _PAGE + r"(?=[\s.,;:)\]]|$)")
 _NAME_PARA_PIN = re.compile(rf"\b({_NAME}),\s*" + _PARA)
+# ND special short form (Redbook supplement): where "id." is unavailable but the
+# full form appeared earlier in the same paragraph, the cite collapses to the
+# first party's name + "at" + pinpoint — "Kuntz, at ¶ 11" for a public-domain
+# cite, "Falcon, at 836" for a reporter cite (the latter is _NAME_AT_PIN, whose
+# _PAGE requires digits and so never matches a ¶ pinpoint).
+_NAME_AT_PARA_PIN = re.compile(rf"\b({_NAME}),?\s+at\s+" + _PARA)
 
 # Id. forms. The backreferenced (?P=mk) tolerates markdown italics (*Id.*)
 # from pdf→markdown extraction; the lookbehind blocks word tails ("valid.",
@@ -187,13 +193,14 @@ class PinCiteMatcher(BaseMatcher):
                 pin_page=m.group(4),
             ))
 
-        # ND neutral "at ¶" short form
+        # ND neutral "at ¶" short form (Supreme Court and Court of Appeals)
         for m in _ND_AT_PIN.finditer(text):
             results.append(_pin(
                 m.group(0), m.start(), jurisdiction="nd",
                 components={"shape": "reporter_pin", "year": m.group(1),
-                            "number": m.group(2)},
-                pin_paragraph=m.group(3),
+                            "court": "ND App" if m.group(2) else "ND",
+                            "number": m.group(3)},
+                pin_paragraph=m.group(4),
             ))
 
         # Id. forms
@@ -236,7 +243,9 @@ class PinCiteMatcher(BaseMatcher):
         def overlaps(start: int, end: int) -> bool:
             return any(s < end and start < e for s, e in taken)
 
-        for pattern, group_kind in ((_NAME_AT_PIN, "page"), (_NAME_PARA_PIN, "para")):
+        for pattern, group_kind in ((_NAME_AT_PIN, "page"),
+                                    (_NAME_AT_PARA_PIN, "para"),
+                                    (_NAME_PARA_PIN, "para")):
             for m in pattern.finditer(text):
                 if overlaps(m.start(), m.end()):
                     continue
