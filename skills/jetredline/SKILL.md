@@ -60,29 +60,45 @@ Determine your runtime environment from available capabilities:
 
 Do not ask the user which mode to use — sense it from your available tools.
 
-## Platform Detection
+## Python Environment (Bootstrap)
 
-At the start of each CLI session, set variables for platform-dependent paths. **Do not use `$(uname)` or other command substitution** — it triggers unnecessary permission prompts. Instead, check for platform-specific files directly:
+**Web mode:** skip — CLI only.
+
+At the start of each CLI session, run the bootstrap script once with any
+system Python (`python3`, or `python` on Windows/PowerShell):
 
 ```bash
-if [ -f "${CLAUDE_SKILL_DIR}/.venv/Scripts/python.exe" ]; then
-  VENV_PYTHON="${CLAUDE_SKILL_DIR}/.venv/Scripts/python.exe"   # Windows (Git Bash)
-else
-  VENV_PYTHON="${CLAUDE_SKILL_DIR}/.venv/bin/python"           # macOS / Linux
-fi
+python3 "${CLAUDE_SKILL_DIR}/bootstrap_env.py"
 ```
 
-If running in **PowerShell** (Windows without Git Bash):
-```powershell
-$VENV_PYTHON = "${CLAUDE_SKILL_DIR}\.venv\Scripts\python.exe"
+(`${CLAUDE_SKILL_DIR}` here and throughout is replaced by the harness with
+this skill's absolute directory before you read this file; the commands you
+see contain a literal path. Keep paths double-quoted — on Windows the
+substituted path may contain spaces.)
+
+The script finds or builds the skill's virtual environment and prints one line:
+
+```
+VENV_PYTHON=<absolute path>
 ```
 
-(`${CLAUDE_SKILL_DIR}` above is replaced by the harness with this skill's
-absolute directory before you read this file; the commands you see contain a
-literal path. Keep paths double-quoted — on Windows the substituted path may
-contain spaces.)
+**Capture that path as a literal string** and use it in place of
+`$VENV_PYTHON` in every Python command below (same pattern as `TMPDIR`; no
+command substitution). It works in every install layout: a prebuilt `.venv`
+inside the skill directory (used and, if a package is missing, repaired in
+place), else a cached venv at `~/.cache/jet-skills/jetredline/<version>/`
+(built on first use), else a temp-dir venv (read-only home, e.g. Cowork).
+Packages provided: `defusedxml`, `httpx[socks]`, `pdfplumber`, `pypdf`,
+`textstat`. Never create a venv in the working directory.
 
-Use `$VENV_PYTHON` in all subsequent commands instead of hardcoded paths.
+The script is idempotent and cheap after the first run. If it fails outright
+(exit 1 — no writable location or no network for the first build), fall back
+to manual creation and use its python the same way:
+
+```bash
+python3 -m venv /tmp/jetredline-venv
+/tmp/jetredline-venv/bin/pip install -r "${CLAUDE_SKILL_DIR}/requirements.txt" -q
+```
 
 **Environment variable syntax** differs by shell:
 - Bash (macOS/Linux/Git Bash): `VAR=val command`
@@ -90,7 +106,7 @@ Use `$VENV_PYTHON` in all subsequent commands instead of hardcoded paths.
 
 ## Skill and Docx Plugin Path Discovery
 
-**Web mode:** Skip the next four sections (Skill/Docx Paths, Python Environment, Node.js Environment, Temporary Files) — they apply only in CLI mode. Proceed to Workflow.
+**Web mode:** Skip this section and the Node.js Environment and Temporary Files sections (and the Python bootstrap above) — they apply only in CLI mode. Proceed to Workflow.
 
 The skill directory is `${CLAUDE_SKILL_DIR}` — the harness substitutes the
 absolute path (standalone install, plugin cache, or Cowork mount alike), and
@@ -135,10 +151,10 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 |----------|------|
 | This skill | `$SKILL_DIR` |
 | Docx skill | `$DOCX_SKILL` (conditional — new-.docx creation only) |
-| Venv python | `$VENV_PYTHON` (see Python Environment below) |
+| Venv python | `$VENV_PYTHON` (from `bootstrap_env.py` — see Python Environment above) |
 | Text extraction | `$SKILL_DIR/extract_text.py` |
 | splitmarks | `$SKILL_DIR/splitmarks.py` |
-| Node modules | `$SKILL_DIR/node_modules/` |
+| Node modules | `$NODE_PATH` (from `bootstrap_env.py --node` — new-.docx creation only) |
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
 | Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
@@ -151,34 +167,6 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 The opinions directory contains markdown copies of published ND Supreme Court opinions organized as `<year>/<year>ND<number>.md` (e.g., `2022/2022ND210.md` for *Feickert v. Feickert*, 2022 ND 210). Paragraphs are marked `[¶N]`. Use `$OPINIONS_MD` in commands; fall back to the hardcoded path if the variable is unset.
 
 The `~/refs/` directory contains a local repository of legal materials in markdown format: opinions (`opin/{reporter}/`), statutes (`statute/NDCC/`, `statute/USC/`), constitutions (`cnst/ND/`, `cnst/US/`), regulations (`reg/NDAC/`, `reg/CFR/`), and court rules (`rule/{set}/`). The citation checker resolves these paths automatically via jetcite.
-
-## Python Environment
-
-This skill has a persistent virtual environment. **Always use this venv python for all Python operations — never create a new venv in the working directory.**
-
-- **Pre-installed packages:** `defusedxml`, `httpx[socks]`, `pypdf`, `textstat`
-- **Bundled scripts:** `splitmarks.py` (vendored; no install needed — `pypdf` satisfies its only dependency)
-
-Set `$VENV_PYTHON` with a fallback for read-only filesystems (Cowork):
-
-```bash
-VENV_DIR="${CLAUDE_SKILL_DIR}/.venv"
-if ! mkdir -p "$VENV_DIR" 2>/dev/null; then
-  # Skill dir is read-only (Cowork) — use session-local venv
-  VENV_DIR="/tmp/jetredline-venv"
-    if [ ! -d "$VENV_DIR" ]; then
-      python3 -m venv "$VENV_DIR"
-      "$VENV_DIR/bin/pip" install -r "${CLAUDE_SKILL_DIR}/requirements.txt" -q
-    fi
-fi
-VENV_PYTHON="$VENV_DIR/bin/python"
-```
-
-  If the venv does not exist or a package is missing in a writable environment, create/repair it:
-  ```bash
-  uv venv "${CLAUDE_SKILL_DIR}/.venv"
-  uv pip install -r "${CLAUDE_SKILL_DIR}/requirements.txt" --python "$VENV_PYTHON"
-  ```
 
 ## Temporary Files
 
@@ -204,11 +192,17 @@ TMPDIR=/path/to/cases/smith/.tmp-a1b2c3d4e5f6
 
 ## Node.js Environment
 
-The `docx` npm package is pre-installed in this skill's directory. **Do not run `npm install` — it is already available.**
+Needed **only** for the new-.docx creation path (Step 9 alternative). The `docx` npm package is either bundled in this skill's directory or installed once into the user cache by the bootstrap script:
 
-When running Node scripts that use `docx`, set `NODE_PATH` so Node can find the package:
 ```bash
-NODE_PATH="${CLAUDE_SKILL_DIR}/node_modules" node script.js
+python3 "${CLAUDE_SKILL_DIR}/bootstrap_env.py" --node
+```
+
+Capture the printed `NODE_PATH=<path>` value as a literal (alongside the `VENV_PYTHON=` line). `NODE_PATH=NONE` means npm is unavailable — the docx-creation path is then off the table; note it and continue with the direct-edit path. Never run `npm install` yourself; the script handles it.
+
+When running Node scripts that use `docx`, set `NODE_PATH` to the captured value:
+```bash
+NODE_PATH=<captured NODE_PATH> node script.js
 ```
 
 When running docx skill scripts (new-.docx creation path only; always include TMPDIR — use the literal absolute path from Step 0):
