@@ -164,6 +164,16 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
 
     ct = legacy_cite_type(c)
     url = primary_url(c)
+    # Link-only official-print PDF (see sources/usreports.py). Carried as its
+    # own field: `url` stays the fetchable source, and legacy entries do not
+    # otherwise expose the sources list.
+    official_pdf_url = next(
+        (s.url for s in c.sources if s.name == "official_pdf"), None)
+    # Frameable scholarly reading copy for U.S. Const. cites (Avalon Project,
+    # Yale — see sources/avalon.py). Same treatment as official_pdf_url:
+    # link-only, its own field, never the primary url.
+    avalon_url = next(
+        (s.url for s in c.sources if s.name == "avalon"), None)
 
     entry = {
         "cite_text": c.raw_text.strip(),
@@ -178,6 +188,12 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
         # mapping positions back to the document must preprocess identically.
         "position": c.position,
     }
+
+    if official_pdf_url:
+        entry["official_pdf_url"] = official_pdf_url
+
+    if avalon_url:
+        entry["avalon_url"] = avalon_url
 
     if c.improper_parallel_pincite:
         # ND style defect: the reporter half of a public-domain pair carries a

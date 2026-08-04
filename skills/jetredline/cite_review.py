@@ -316,6 +316,64 @@ _IFRAME_OK_DOMAINS = frozenset({
     "www.ndconst.org",
 })
 
+# Web-source provenance, keyed by host (leading "www." stripped). "official"
+# is reserved for the government entity that issued or publishes the cited
+# text; everything else is an unofficial copy and the badge says so. Unknown
+# hosts default to unofficial.
+#   host → (pane label, badge text, badge class, tooltip)
+_URL_SOURCE_INFO = {
+    "ndcourts.gov": ("ndcourts.gov", "official", "is-official",
+                     "The court's own published text."),
+    "ndlegis.gov": ("ndlegis.gov", "official", "is-official",
+                    "The Legislative Branch's published text."),
+    "supremecourt.gov": ("supremecourt.gov", "official", "is-official",
+                         "The Supreme Court's own publication."),
+    "govinfo.gov": ("govinfo.gov", "official", "is-official",
+                    "U.S. Government Publishing Office text."),
+    "ecfr.gov": ("eCFR", "official", "is-official",
+                 "The Office of the Federal Register's eCFR."),
+    "azleg.gov": ("azleg.gov", "official", "is-official",
+                  "The Arizona Legislature's published text."),
+    "apps.azsos.gov": ("azsos.gov", "official", "is-official",
+                       "The Arizona Secretary of State's published text."),
+    "azcourts.gov": ("azcourts.gov", "official", "is-official",
+                     "The Arizona courts' published text."),
+    "legis.iowa.gov": ("legis.iowa.gov", "official", "is-official",
+                       "The Iowa Legislature's published text."),
+    "tile.loc.gov": ("U.S. Reports (LOC)", "official scan", "is-official",
+                     "Scan of the official U.S. Reports print, hosted by "
+                     "the Library of Congress."),
+    "constitution.congress.gov": ("congress.gov", "official", "is-official",
+                                  "Constitution Annotated — the official "
+                                  "U.S. Constitution text published by the "
+                                  "Library of Congress for Congress."),
+    "ndconst.org": ("ndconst.org", "unofficial", "",
+                    "Compiled copy, not an official source. Verify against "
+                    "the official text before relying on it."),
+    "courtlistener.com": ("CourtListener", "unofficial", "",
+                          "Free Law Project copy, not the official text."),
+    "supreme.justia.com": ("Justia", "unofficial", "",
+                           "Commercial republication, not the official text."),
+    "law.cornell.edu": ("Cornell LII", "unofficial", "",
+                        "Legal Information Institute copy, not the official "
+                        "text."),
+    "constitutioncenter.org": ("Constitution Center", "unofficial", "",
+                               "National Constitution Center copy, not the "
+                               "official text."),
+}
+
+
+def _url_source_info(url: str) -> tuple[str, str, str, str]:
+    """(label, badge, badge_class, tooltip) for a web source URL's host."""
+    host = (urlparse(url).netloc or "").lower()
+    bare = host[4:] if host.startswith("www.") else host
+    info = _URL_SOURCE_INFO.get(bare) or _URL_SOURCE_INFO.get(host)
+    if info:
+        return info
+    return (bare or "Web source", "unofficial", "",
+            "Unrecognized source — not verified as official.")
+
+
 # PDF.js CDN version
 _PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38"
 
@@ -576,8 +634,9 @@ _NDLAW_DEFAULT_BASE = "https://ndlaw.org"
 
 
 def _ndlaw_url(citation: str | None, pin_anchor: str | None,
-               base: str = _NDLAW_DEFAULT_BASE) -> str | None:
-    """Resolver URL for an ND citation, with the pinpoint ¶ as a fragment.
+               base: str = _NDLAW_DEFAULT_BASE,
+               page_anchor: str | None = None) -> str | None:
+    """Resolver URL for an ND citation, with the pinpoint as a fragment.
 
     The fragment survives the resolver's 301: a browser reattaches the
     original fragment when the redirect target carries none (RFC 7231
@@ -586,15 +645,18 @@ def _ndlaw_url(citation: str | None, pin_anchor: str | None,
     ``/2020ND30#p14``, scrolled to the ``[¶14]`` marker.
 
     Only opinions get a fragment — ``#p{n}`` matches the ¶ anchors ndlaw
-    renders in opinion bodies. Provision pages have no subsection anchors, and
-    the resolver drops the subdivision, so a fragment there would scroll
-    nowhere.
+    renders in opinion bodies, and ``#star{n}`` matches the star-page anchors
+    it renders for pre-neutral-cite opinions (page pins like "at 776").
+    Provision pages have no subsection anchors, and the resolver drops the
+    subdivision, so a fragment there would scroll nowhere.
     """
     if not citation:
         return None
     url = f"{base.rstrip('/')}/cite/{quote(citation, safe='')}"
     if pin_anchor:
         url += f"#p{pin_anchor}"
+    elif page_anchor:
+        url += f"#star{page_anchor}"
     return url
 
 
@@ -639,8 +701,13 @@ def _needs_pdfjs_viewer(url: str, pinpoint: str | None) -> bool:
 
 
 def _pinpoint_search_term(pinpoint: str | None) -> str:
-    """Convert a pinpoint like '¶ 15' to a PDF search term like '[¶15]'."""
-    if not pinpoint:
+    """Convert a pinpoint like '¶ 15' to a PDF search term like '[¶15]'.
+
+    Page pins ("at 627") return no term: the ndcourts PDFs this searches are
+    ¶-numbered opinions, and searching a bare page number would land on
+    arbitrary digits.
+    """
+    if not pinpoint or "¶" not in pinpoint:
         return ""
     m = re.search(r"\d+", pinpoint)
     if not m:
@@ -677,6 +744,9 @@ def _read_local_markdown(local_path: str | None) -> str | None:
 # Lightweight markdown → HTML for legal texts
 _MD_HEADING = re.compile(r"^(#{1,4})\s+(.*)", re.MULTILINE)
 _MD_PARA_MARKER = re.compile(r"\[¶\s*(\d+)\]")
+# West star pagination in cached opinion markdown: [*774] marks where
+# reporter page 774 begins.
+_MD_STAR_PAGE = re.compile(r"\[\*(\d+)\]")
 _MD_SECTION = re.compile(r"§\s*([\d\w.-]+)")
 _MD_BOLD = re.compile(r"\*\*(.+?)\*\*")
 _MD_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
@@ -766,6 +836,11 @@ def _md_to_html(md: str) -> str:
 
     def _inline(text: str) -> str:
         text = html.escape(text)
+        # Star-page markers first, with the asterisk written as &#42; so the
+        # bold/italic passes can't pair asterisks across two markers.
+        text = _MD_STAR_PAGE.sub(
+            r'<span class="star-anchor" id="pg-\1">[&#42;\1]</span>', text
+        )
         text = _MD_BOLD.sub(r"<strong>\1</strong>", text)
         text = _MD_ITALIC.sub(r"<em>\1</em>", text)
         # Add anchors for ¶ markers
@@ -1353,8 +1428,10 @@ main { display:flex; flex:1; overflow:hidden; }
 }
 .src-mode.cycles::after { content:' \\21bb'; opacity:.55; }
 /* ndlaw.org is a domain, not a label — show it as written, per its own
-   spelling, rather than shouting it in caps like the other two states. */
-.src-mode.mode-ndlaw { text-transform:none; letter-spacing:0; }
+   spelling, rather than shouting it in caps like the other two states.
+   is-domain does the same for the web-source modes whose labels are
+   domains or citation forms (ndcourts.gov, U.S. Reports (LOC)). */
+.src-mode.mode-ndlaw, .src-mode.is-domain { text-transform:none; letter-spacing:0; }
 .src-badge {
   font-family:'SF Mono',monospace; font-size:10px; letter-spacing:.04em;
   text-transform:uppercase; cursor:help; flex:none;
@@ -1396,6 +1473,9 @@ main { display:flex; flex:1; overflow:hidden; }
 }
 .local-ref-html .sec-anchor {
   font-weight:600; color:#2255aa; scroll-margin-top:40px;
+}
+.local-ref-html .star-anchor {
+  font-weight:700; color:#8a6d1a; scroll-margin-top:40px;
 }
 .local-ref-html .pinpoint-active {
   background:#fde68a; padding:3px 8px; border-radius:4px;
@@ -1773,11 +1853,16 @@ _JS = """\
       wrap.className = 'local-ref-html';
       wrap.innerHTML = sourceHtml;
       srcBody.appendChild(wrap);
-      // Scroll to pinpoint anchor (opinion ¶ only — page pinpoints like
-      // "at 363" have no [¶N] anchor and show the source from the top)
+      // Scroll to the pinpoint anchor: opinion [¶N] markers, or the [*N]
+      // star-page marker for page pinpoints like "at 776". A source with
+      // neither shows from the top.
       var target = null;
       if (d.pin_anchor) {
         target = wrap.querySelector('#pin-' + d.pin_anchor);
+      }
+      if (!target && d.page_anchor) {
+        // Star-page anchor for page pinpoints ("at 776" → [*776] marker)
+        target = wrap.querySelector('#pg-' + d.page_anchor);
       }
       if (!target && d.search_hint) {
         // Statute § section anchor. CSS.escape because case-cite hints
@@ -1812,12 +1897,22 @@ _JS = """\
       } else {
         html = '<div class="no-local">' +
           '<p>' + (d.url ? esc(host) + ' cannot be displayed inline'
-                         : 'No official source URL for this citation') + '</p>' +
+                         : 'No source URL for this citation') + '</p>' +
           (d.url ? '<a class="open-tab-btn" href="' + esc(d.url) +
-                   '" target="_blank">Open official source &#x2197;</a>' : '') +
+                   '" target="_blank">Open on ' +
+                   esc(d.url_label || 'source site') + ' &#x2197;</a>' : '') +
           '</div>';
       }
       srcBody.innerHTML = html;
+    }
+
+    // Link-only official-print PDF (LOC per-case scan or supremecourt.gov
+    // bound volume). Both hosts allow framing; the browser's PDF viewer
+    // provides paging and search. A bound volume opens at its front matter —
+    // the header URL opens it in a full tab for serious reading.
+    function renderOfficialPdf() {
+      srcBody.innerHTML =
+        '<iframe src="' + esc(d.official_pdf.url) + '"></iframe>';
     }
 
     function renderNdlaw() {
@@ -1847,7 +1942,8 @@ _JS = """\
     // Order here is both the cycle order and the default (modes[0] opens).
     // ndlaw leads for ND authority: it is the only view that opens at the
     // cited ¶ for every authority type, including the statutes and rules that
-    // have no local reference and no court PDF.
+    // have no local reference and no court PDF. Avalon plays the same role
+    // for U.S. Const. cites (the two never coexist on one entry).
     var modes = [];
     if (d.kind === 'fact') {
       // One mode per cited record/brief source (PDF embedded at the cited
@@ -1892,9 +1988,26 @@ _JS = """\
       badgeTitle: 'Compiled copy, not an official source. Verify against the '
                 + 'official text before relying on it.',
       url: d.ndlaw_url, render: renderNdlaw});
+    if (d.avalon_url) modes.push({
+      // Default reading pane for U.S. Const. cites: the only reliable
+      // Constitution source that allows framing, opened at the cited
+      // section anchor. congress.gov stays the official (link-out) mode.
+      key: 'avalon', label: 'Avalon (Yale)', badge: 'unofficial',
+      badgeTitle: 'Yale Law Library\\'s Avalon Project transcription, not '
+                + 'an official source. Verify against the official text '
+                + 'before relying on it.',
+      url: d.avalon_url, render: function() {
+        srcBody.innerHTML = '<iframe src="' + esc(d.avalon_url) + '"></iframe>';
+      }});
+    if (d.official_pdf) modes.push({
+      key: 'officialpdf', label: d.official_pdf.label,
+      badge: d.official_pdf.badge, badgeCls: d.official_pdf.badge_cls,
+      badgeTitle: d.official_pdf.title,
+      url: d.official_pdf.url, render: renderOfficialPdf});
     if (d.url) modes.push({
-      key: 'official', label: 'Official source', badge: 'official',
-      badgeTitle: 'The publisher\\'s own text.',
+      key: 'weburl', label: d.url_label || 'Web source',
+      badge: d.url_badge || 'unofficial', badgeCls: d.url_badge_cls || '',
+      badgeTitle: d.url_badge_title || '',
       url: d.url, render: renderOfficial});
     if (d.authority_pdf) modes.push({
       key: 'authpdf', label: 'Local PDF', badge: 'pdf',
@@ -1923,7 +2036,11 @@ _JS = """\
       var m = modes[curMode];
       var cycles = modes.length > 1;
       modeBtn.textContent = m.label;
-      modeBtn.className = 'ptitle src-mode mode-' + m.key + (cycles ? ' cycles' : '');
+      // Labels containing a dot are domains or citation forms ("ndcourts.gov",
+      // "U.S. Reports (LOC)") — show them as written, not uppercased.
+      modeBtn.className = 'ptitle src-mode mode-' + m.key +
+        (m.label.indexOf('.') > -1 ? ' is-domain' : '') +
+        (cycles ? ' cycles' : '');
       modeBtn.disabled = !cycles;
       modeBtn.title = cycles
         ? 'Showing ' + m.label + ' — click for '
@@ -1933,7 +2050,8 @@ _JS = """\
         modeBadge.hidden = false;
         modeBadge.textContent = m.badge;
         modeBadge.title = m.badgeTitle;
-        modeBadge.className = 'src-badge is-' + m.key.replace('local', 'offline');
+        modeBadge.className = 'src-badge ' + (m.badgeCls !== undefined
+          ? m.badgeCls : 'is-' + m.key.replace('local', 'offline'));
       } else {
         modeBadge.hidden = true;
       }
@@ -2296,8 +2414,10 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         viewer_path = viewers.get(url) if url else None
         search_term = _pinpoint_search_term(pinpoint) if pinpoint and viewer_path else ""
         has_source = lp is not None and lp in sources_map
-        # Anchor for scrolling the embedded source: opinion ¶ only — a page
-        # pinpoint ("at 363") has no [¶N] anchor in the markdown.
+        # Anchors for scrolling the embedded source: opinion ¶ markers, or —
+        # for page pinpoints like "at 776" — the [*776] star-page marker in
+        # the cached markdown (#pg-N locally, #starN on ndlaw.org). A range
+        # pin ("at 776-77") anchors on its first page.
         pin_anchor = None
         if c.get("pin_paragraph"):
             m = re.search(r"\d+", c["pin_paragraph"])
@@ -2305,6 +2425,14 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         elif pinpoint and "¶" in pinpoint:
             m = re.search(r"\d+", pinpoint)
             pin_anchor = m.group(0) if m else None
+        page_anchor = None
+        if pin_anchor is None:
+            page_src = c.get("pin_page")
+            if not page_src and pinpoint and re.match(r"(?i)at\s+\d", pinpoint):
+                page_src = pinpoint
+            if page_src:
+                m = re.search(r"\d+", page_src)
+                page_anchor = m.group(0) if m else None
         via = via_map.get(_via_key(norm)) or via_map.get(_via_key(c["cite_text"]))
         if not via and meta.get("via"):
             via = meta["via"]
@@ -2324,11 +2452,41 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         # pinpoint, so every occurrence opens at its own ¶.
         ndlaw_url = None
         if ndlaw_base and _ndlaw_eligible(c, meta):
-            ndlaw_url = _ndlaw_url(authority, pin_anchor, ndlaw_base)
+            ndlaw_url = _ndlaw_url(authority, pin_anchor, ndlaw_base,
+                                   page_anchor=page_anchor)
         # Local-PDF authority (an obscure source dropped as a PDF in the
         # project dir, declared in sources-meta): same viewer treatment as
         # record items, surfaced as its own source-pane mode.
         authority_pdf = meta.get("pdf_viewer") or None
+        # Web-source provenance for the URL mode: label the pane with the
+        # actual source and badge it official only when the host is the
+        # issuing/publishing government entity.
+        url_label = url_badge = url_badge_cls = url_badge_title = None
+        if url:
+            url_label, url_badge, url_badge_cls, url_badge_title = \
+                _url_source_info(url)
+        # Link-only official-print PDF (jetcite official_pdf_url: LOC
+        # per-case scan or supremecourt.gov bound volume for U.S. Reports).
+        official_pdf = None
+        pdf_url = c.get("official_pdf_url")
+        if pdf_url:
+            # LOC per-case scans start at the case's first reporter page, so
+            # a page pin maps to a PDF page: page_anchor − first + 1. Chrome's
+            # viewer honors #page= in iframes; a bad guess still shows the PDF.
+            if page_anchor and "tile.loc.gov" in pdf_url:
+                m = re.search(r"\d+\s+U\.S\.\s+(\d+)", parent_norm or norm)
+                if m:
+                    offset = int(page_anchor) - int(m.group(1)) + 1
+                    if offset > 1:
+                        pdf_url += f"#page={offset}"
+            _pl, _pb, _pc, _pt = _url_source_info(pdf_url)
+            official_pdf = {"url": pdf_url, "label": _pl, "badge": _pb,
+                            "badge_cls": _pc or "is-official", "title": _pt}
+        # Frameable scholarly reading copy for U.S. Const. cites (Avalon
+        # Project, Yale) — the default pane; congress.gov stays the official
+        # link-out. Pin/repeat entries inherit their parent's sources at scan
+        # time, so the field is already present on them.
+        avalon_url = c.get("avalon_url")
         enriched.append({
             "ndlaw_url": ndlaw_url,
             "authority_pdf": authority_pdf,
@@ -2339,6 +2497,12 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "antecedent_name": c.get("antecedent_name"),
             "case_name": case_name,
             "url": url or None,
+            "url_label": url_label,
+            "url_badge": url_badge,
+            "url_badge_cls": url_badge_cls,
+            "url_badge_title": url_badge_title,
+            "official_pdf": official_pdf,
+            "avalon_url": avalon_url,
             "iframe_ok": host in _IFRAME_OK_DOMAINS,
             "para_num": para_num,
             "occurrence": occurrence,
@@ -2350,6 +2514,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "search_hint": c.get("search_hint", ""),
             "pinpoint": pinpoint,
             "pin_anchor": pin_anchor,
+            "page_anchor": page_anchor,
             "viewer_path": viewer_path,
             "search_term": search_term,
             "source_key": lp if has_source else None,

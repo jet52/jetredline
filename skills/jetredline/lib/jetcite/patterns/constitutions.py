@@ -5,6 +5,14 @@ import re
 from jetcite.models import Citation, CitationType, Source
 from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
+from jetcite.sources.avalon import (
+    avalon_amendment_url,
+    avalon_article_url,
+)
+from jetcite.sources.congressgov import (
+    congress_amendment_url,
+    congress_article_url,
+)
 from jetcite.sources.constitutioncenter import (
     us_constitution_amendment_url,
     us_constitution_article_url,
@@ -52,8 +60,13 @@ class USConstitutionMatcher(BaseMatcher):
                 jurisdiction="us",
                 normalized=f"U.S. Const. art. {article.upper()}, § {section}",
                 components={"article": article.upper(), "section": section},
-                sources=[Source("constitutioncenter",
-                                us_constitution_article_url(article, section))],
+                sources=[
+                    Source("congressgov",
+                           congress_article_url(article, section)),
+                    Source("avalon", avalon_article_url(article, section)),
+                    Source("constitutioncenter",
+                           us_constitution_article_url(article, section)),
+                ],
                 position=m.start(),
             ))
 
@@ -65,8 +78,12 @@ class USConstitutionMatcher(BaseMatcher):
                 jurisdiction="us",
                 normalized=f"U.S. Const. art. {article.upper()}",
                 components={"article": article.upper()},
-                sources=[Source("constitutioncenter",
-                                us_constitution_article_url(article))],
+                sources=[
+                    Source("congressgov", congress_article_url(article)),
+                    Source("avalon", avalon_article_url(article)),
+                    Source("constitutioncenter",
+                           us_constitution_article_url(article)),
+                ],
                 position=m.start(),
             ))
 
@@ -84,8 +101,13 @@ class USConstitutionMatcher(BaseMatcher):
                 jurisdiction="us",
                 normalized=normalized,
                 components=components,
-                sources=[Source("constitutioncenter",
-                                us_constitution_amendment_url(amendment))],
+                sources=[
+                    Source("congressgov",
+                           congress_amendment_url(amendment, section)),
+                    Source("avalon", avalon_amendment_url(amendment)),
+                    Source("constitutioncenter",
+                           us_constitution_amendment_url(amendment)),
+                ],
                 position=m.start(),
             ))
 
@@ -97,8 +119,12 @@ class USConstitutionMatcher(BaseMatcher):
                 jurisdiction="us",
                 normalized=f"U.S. Const. amend. {amendment.upper()}",
                 components={"amendment": amendment.upper()},
-                sources=[Source("constitutioncenter",
-                                us_constitution_amendment_url(amendment))],
+                sources=[
+                    Source("congressgov", congress_amendment_url(amendment)),
+                    Source("avalon", avalon_amendment_url(amendment)),
+                    Source("constitutioncenter",
+                           us_constitution_amendment_url(amendment)),
+                ],
                 position=m.start(),
             ))
 
