@@ -30,6 +30,7 @@ resolving to the direct opinion **PDF URL**.
 | `apps.azsos.gov` | `apps.azsos.gov` | A.A.C. chapter PDFs |
 | `www.azcourts.gov` | `www.azcourts.gov` | Arizona court rules index |
 | `www.legis.iowa.gov` | `www.legis.iowa.gov` | Iowa Code, Iowa Admin. Code, Iowa Court Rules, Iowa Constitution |
+| `constitution.congress.gov` | `constitution.congress.gov` | U.S. Constitution (Constitution Annotated, Library of Congress — official) |
 | `constitutioncenter.org` | `constitutioncenter.org` | U.S. Constitution |
 
 **Minimum:** add `*.ndcourts.gov`. It is the only host needed for the default

@@ -612,6 +612,99 @@ class TestNdlawUrl:
     def test_no_citation_no_url(self):
         assert _ndlaw_url(None, "14", "https://ndlaw.org") is None
 
+    def test_page_pin_becomes_star_fragment(self):
+        """Page pins on pre-neutral-cite opinions ride ndlaw's [*N] star-page
+        anchors (id="starN")."""
+        url = _ndlaw_url("217 N.W.2d 771", None, "https://ndlaw.org",
+                         page_anchor="776")
+        assert url == "https://ndlaw.org/cite/217%20N.W.2d%20771#star776"
+
+    def test_paragraph_anchor_wins_over_page_anchor(self):
+        url = _ndlaw_url("2020 ND 30", "14", "https://ndlaw.org",
+                         page_anchor="776")
+        assert url.endswith("#p14")
+
+
+class TestStarPageAnchors:
+    OPINION = ("[¶1] See Johnson v. Hassett, 217 N.W.2d 771 (N.D. 1974). "
+               "More text. Id. at 776-77.\n")
+
+    @pytest.fixture
+    def entries(self, tmp_path):
+        from cite_check import scan_opinion
+        return scan_opinion(self.OPINION, refs_dir=str(tmp_path),
+                            cache_missing=False)
+
+    def test_md_to_html_anchors_star_pages(self):
+        from cite_review import _md_to_html
+        out = _md_to_html("Some text [*774] more text.")
+        assert '<span class="star-anchor" id="pg-774">[&#42;774]</span>' in out
+
+    def test_star_marker_pairs_do_not_become_italics(self):
+        """Two markers in one paragraph must not let the italic pass pair
+        their asterisks across the intervening text."""
+        from cite_review import _md_to_html
+        out = _md_to_html("start [*773] middle [*774] end.")
+        assert "<em>" not in out
+        assert 'id="pg-773"' in out and 'id="pg-774"' in out
+
+    def test_page_pin_gets_page_anchor_and_star_fragment(self, entries):
+        # A regional-reporter ND case is ndlaw-eligible only through its
+        # ndlaw_export metadata entry (jurisdiction is "us").
+        from cite_review import _via_key
+        meta = {_via_key("217 N.W.2d 771"): {
+            "case_name": "Johnson v. Hassett", "via": "ndlaw"}}
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION,
+                                 sources_meta=meta))
+        pin = next(d for d in data if d["cite_type"] == "pin_cite")
+        assert pin["page_anchor"] == "776"
+        assert pin["pin_anchor"] is None
+        assert pin["ndlaw_url"].endswith("#star776")
+
+    def test_full_cite_trailing_pin_gets_page_anchor(self):
+        """An initial full cite with a trailing page pin ("259 N.W.2d 621,
+        627") opens the source at the pinned page, same as a short form."""
+        opinion = ("[¶1] State ex rel. Olson v. Maxwell, 259 N.W.2d 621, 627 "
+                   "(N.D. 1977).\n")
+        from cite_check import scan_opinion
+        from cite_review import _via_key
+        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
+                            cache_missing=False)
+        meta = {_via_key("259 N.W.2d 621"): {
+            "case_name": "State ex rel. Olson v. Maxwell", "via": "ndlaw"}}
+        paras = _split_paragraphs(opinion)
+        data = _data(_build_html("t", ents, paras, "k", opinion,
+                                 sources_meta=meta))
+        d = next(x for x in data if x["normalized"] == "259 N.W.2d 621")
+        assert d["pinpoint"] == "at 627"
+        assert d["page_anchor"] == "627"
+        assert d["ndlaw_url"].endswith("#star627")
+
+    def test_us_reports_pin_opens_loc_pdf_at_page(self):
+        """A pinned U.S. Reports cite opens the LOC per-case scan at the
+        pinned PDF page (pin − first page + 1)."""
+        opinion = "[¶1] R.A.V. v. St. Paul, 505 U.S. 377, 391 (1992).\n"
+        from cite_check import scan_opinion
+        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
+                            cache_missing=False)
+        paras = _split_paragraphs(opinion)
+        data = _data(_build_html("t", ents, paras, "k", opinion))
+        d = next(x for x in data if x["normalized"] == "505 U.S. 377")
+        assert d["official_pdf"]["url"].endswith("usrep505377.pdf#page=15")
+
+    def test_paragraph_pins_unaffected(self, entries):
+        opinion = "[¶1] See Olson v. Olson, 2024 ND 156, ¶ 7.\n"
+        from cite_check import scan_opinion
+        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
+                            cache_missing=False)
+        paras = _split_paragraphs(opinion)
+        data = _data(_build_html("t", ents, paras, "k", opinion))
+        d = next(x for x in data if x["normalized"] == "2024 ND 156")
+        assert d["pin_anchor"] == "7"
+        assert d["page_anchor"] is None
+        assert d["ndlaw_url"].endswith("#p7")
+
 
 class TestNdlawEligibility:
     def test_nd_jurisdiction_eligible(self):
@@ -689,7 +782,7 @@ class TestNdlawInHtml:
         assert 'class="src-badge"' in html_str
         assert "modeBtn.onclick" in html_str
         assert "window._cycleSource" in html_str
-        for label in ("ndlaw.org", "Official source", "Local reference"):
+        for label in ("ndlaw.org", "Web source", "Local reference"):
             assert label in html_str, label
 
     def test_mode_order_puts_ndlaw_first_and_local_last(self, entries):
@@ -698,8 +791,54 @@ class TestNdlawInHtml:
         html_str = _build_html("t", entries, paras, "k", self.OPINION)
         block = html_str[html_str.index("var modes = []"):
                          html_str.index("var curMode = 0")]
-        assert block.index("'ndlaw'") < block.index("'official'") < \
+        assert block.index("'ndlaw'") < block.index("'avalon'") < \
+            block.index("'officialpdf'") < block.index("'weburl'") < \
             block.index("'local'")
+
+    def test_web_source_provenance_labels(self, entries):
+        """The web-source pane names the actual host and reserves the
+        "official" badge for the issuing government entity — CourtListener
+        and Justia are labeled unofficial."""
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION))
+        by_norm = {d["normalized"]: d for d in data}
+        us = by_norm["347 U.S. 483"]
+        assert us["url_label"] == "Justia"
+        assert us["url_badge"] == "unofficial"
+        rule = by_norm["N.D.R.App.P. 4"]
+        assert rule["url_label"] == "ndcourts.gov"
+        assert rule["url_badge"] == "official"
+
+    def test_us_constitution_gets_official_congress_gov(self):
+        """U.S. Const. cites link to the Constitution Annotated
+        (constitution.congress.gov) as the official source, with the section
+        anchor in the fragment."""
+        opinion = "[¶1] See U.S. Const. amend. XIV, § 1.\n"
+        from cite_check import scan_opinion
+        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
+                            cache_missing=False)
+        paras = _split_paragraphs(opinion)
+        data = _data(_build_html("t", ents, paras, "k", opinion))
+        d = next(x for x in data if x["cite_type"] == "constitution")
+        assert d["url"] == ("https://constitution.congress.gov/constitution/"
+                            "amendment-14/#amendment-14-section-1")
+        assert d["url_label"] == "congress.gov"
+        assert d["url_badge"] == "official"
+        # Avalon (frameable Yale transcription) is the embedded reading pane
+        assert d["avalon_url"] == (
+            "https://avalon.law.yale.edu/18th_century/amend1.asp#14")
+
+    def test_us_reports_cite_carries_official_print_pdf(self, entries):
+        """A U.S. Reports cite within LOC coverage gets a link-only
+        official-print PDF mode (per-case scan)."""
+        paras = _split_paragraphs(self.OPINION)
+        data = _data(_build_html("t", entries, paras, "k", self.OPINION))
+        us = {d["normalized"]: d for d in data}["347 U.S. 483"]
+        assert us["official_pdf"]["url"].endswith("usrep347483.pdf")
+        assert us["official_pdf"]["badge_cls"] == "is-official"
+        # ND authorities have no official_pdf source
+        nd = {d["normalized"]: d for d in data}["2024 ND 156"]
+        assert nd["official_pdf"] is None
 
     def test_body_renderers_do_not_repeat_the_header_url(self, entries):
         """The header owns the URL for the current view. An in-body link bar

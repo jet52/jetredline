@@ -7,6 +7,7 @@ from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
 from jetcite.sources.courtlistener import courtlistener_url
 from jetcite.sources.justia import us_reports_url
+from jetcite.sources.usreports import us_reports_official_pdf
 
 # U.S. Reports: 505 U.S. 377 (also West's spaced "260 U. S. 22")
 _US_REPORTS = re.compile(r'(\d+)\s+U\.\s?S\.\s+(\d+)')
@@ -72,19 +73,25 @@ class FederalCaseMatcher(BaseMatcher):
     def find_all(self, text: str) -> list[Citation]:
         results = []
 
-        # U.S. Reports -> Justia
+        # U.S. Reports -> Justia (fetchable), plus a link-only official-print
+        # PDF (LOC per-case scan, or the Court's bound volume). Appended last
+        # so fetch_and_cache never downloads it.
         for m in _US_REPORTS.finditer(text):
             volume, page = m.group(1), m.group(2)
+            sources = [
+                Source("justia", us_reports_url(volume, page)),
+                Source("courtlistener", courtlistener_url("U.S.", volume, page)),
+            ]
+            official = us_reports_official_pdf(volume, page)
+            if official:
+                sources.append(Source("official_pdf", official))
             results.append(Citation(
                 raw_text=m.group(0),
                 cite_type=CitationType.CASE,
                 jurisdiction="us",
                 normalized=f"{volume} U.S. {page}",
                 components={"volume": volume, "reporter": "U.S.", "page": page},
-                sources=[
-                    Source("justia", us_reports_url(volume, page)),
-                    Source("courtlistener", courtlistener_url("U.S.", volume, page)),
-                ],
+                sources=sources,
                 position=m.start(),
             ))
 

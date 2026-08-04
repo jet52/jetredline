@@ -30,12 +30,21 @@ EGRESS_ALLOWLIST: dict[str, str] = {
     "apps.azsos.gov": "A.A.C. chapter PDFs",
     "www.azcourts.gov": "Arizona court rules index",
     "www.legis.iowa.gov": "Iowa Code, Iowa Admin. Code, Iowa Court Rules, Iowa Constitution",
+    "constitution.congress.gov": "U.S. Constitution (Constitution Annotated, "
+                                 "Library of Congress — official)",
     "constitutioncenter.org": "U.S. Constitution",
 }
 
 #: Hosts that appear in source text but are never fetched (e.g. the project
-#: URL baked into the User-Agent string). Excluded from the egress audit.
-NON_FETCH_HOSTS: frozenset[str] = frozenset({"github.com"})
+#: URL baked into the User-Agent string, or link-only sources surfaced to
+#: reviewers and opened in their own browser — see sources/usreports.py).
+#: Excluded from the egress audit.
+NON_FETCH_HOSTS: frozenset[str] = frozenset({
+    "github.com",
+    "tile.loc.gov",           # U.S. Reports per-case scans (link-only)
+    "www.supremecourt.gov",   # U.S. Reports bound volumes (link-only)
+    "avalon.law.yale.edu",    # U.S. Constitution reading copy (iframe-only)
+})
 
 
 def covers(host: str) -> bool:

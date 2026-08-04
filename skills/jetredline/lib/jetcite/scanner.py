@@ -16,6 +16,39 @@ _ND_NEUTRAL_NORM = re.compile(r"^[12]\d{3} ND(?: App)? \d{1,3}$")
 # A page pin cite trailing a reporter cite: ", 360" / ", 360-62" / ", 360, 365".
 _TRAILING_PAGE_PIN = re.compile(r"^\s*,\s*\d+(?:\s*[-–]\s*\d+)?")
 
+# A full cite's own trailing page pin: "259 N.W.2d 621, 627 (N.D. 1977)",
+# with an optional footnote ("501 N.W.2d 739, 744 n.3" / "nn.3-4"). The
+# letter lookahead refuses ", 627 N.W.2d" and ", 627 U.S." — a number
+# followed by letters (or §) is the next citation's volume or a statute, not
+# a pin; the footnote alternative is matched before that lookahead applies.
+# The (?![0-9]) digit boundary keeps the engine from backtracking a blocked
+# "627" down to "62" to dodge that lookahead.
+_TRAILING_FULL_CITE_PIN = re.compile(
+    r"^\s*,\s*(\d+(?:\s*[-–]\s*\d+)?"
+    r"(?:\s*nn?\.\s*\d+(?:\s*[-–]\s*\d+)?)?)(?![0-9])(?!\s*[A-Za-z§])")
+
+
+def _capture_trailing_page_pins(citations: list[Citation], text: str) -> None:
+    """Attach trailing page pins to full case cites lacking a pinpoint.
+
+    Reporter matchers capture only "vol reporter page"; the pin in
+    ``259 N.W.2d 621, 627 (N.D. 1977)`` was previously lost, so consumers
+    could not open the source at the cited page the way short forms
+    (``id. at 627``, carrying pin_page) allow. Reads the text *after* each
+    cite — same statute as _flag_improper_parallel_pincite: no existing
+    match, raw_text, or offset changes. Stored as ``pinpoint = "at 627"``,
+    matching the pin-cite pinpoint style. Multi-page pins ("627, 630") keep
+    their first page; ¶-pinned cites (neutral form) already carry a pinpoint
+    and are left alone.
+    """
+    for c in citations:
+        if c.cite_type != CitationType.CASE or c.is_pin_cite or c.pinpoint:
+            continue
+        after = text[c.position + len(c.raw_text):]
+        m = _TRAILING_FULL_CITE_PIN.match(after)
+        if m:
+            c.pinpoint = f"at {m.group(1)}"
+
 
 def _flag_improper_parallel_pincite(cite_a: Citation, cite_b: Citation,
                                     text: str) -> None:
@@ -259,6 +292,50 @@ def _inherit_pinpoint(pin: Citation, antecedent: Citation) -> None:
         pin.components["pinpoint_inherited"] = True
 
 
+# Curly double quotes. Straight quotes are deliberately not paired: without
+# the open/close distinction a single stray mark inverts every span after it.
+_QUOTE_OPEN = "“"   # “
+_QUOTE_CLOSE = "”"  # ”
+
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of double-quoted matter, sorted by position.
+
+    A citation inside quoted text is part of the quotation, not a citation
+    by the author — it must not capture a following ``Id.`` (Bluebook: id.
+    tracks the author's own citation sequence; quoted citations are why
+    "(citations omitted)" exists).
+
+    Pairing is per line: extract_text.py emits one paragraph per line, and
+    the Bluebook multi-paragraph quotation convention re-opens each
+    paragraph with ``“`` while closing only the last — so an opening quote
+    with no close before the line break extends its span to the line end.
+    A ``“`` inside an open span and a stray ``”`` with no open are ignored.
+
+    Known gap: indented block quotes carry no quotation marks and survive
+    extraction as plain text, so they are invisible here. The page-pin type
+    guard in _resolve_pin_cites covers part of that; full coverage needs
+    blockquote markers from extract_text.
+    """
+    spans: list[tuple[int, int]] = []
+    open_pos: int | None = None
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            if open_pos is not None:
+                spans.append((open_pos, i))
+                open_pos = None
+        elif ch == _QUOTE_OPEN:
+            if open_pos is None:
+                open_pos = i
+        elif ch == _QUOTE_CLOSE:
+            if open_pos is not None:
+                spans.append((open_pos, i + 1))
+                open_pos = None
+    if open_pos is not None:
+        spans.append((open_pos, len(text)))
+    return spans
+
+
 def _resolve_pin_cites(
     pin_candidates: list[Citation],
     citations: list[Citation],
@@ -296,6 +373,19 @@ def _resolve_pin_cites(
     # and name pins stay case-only: their anchors (volume+reporter, party
     # name) are inherently case-shaped.
     id_antecedents = list(citations)
+
+    # Quoted-matter spans and authority types, for the id-branch guards.
+    _qspans = _quoted_spans(text)
+
+    def _in_quote(pos: int) -> bool:
+        for s, e in _qspans:
+            if s <= pos < e:
+                return True
+            if s > pos:
+                break
+        return False
+
+    norm_type = {c.normalized: c.cite_type for c in citations}
 
     by_vol_rep: dict[tuple[str, str], list[Citation]] = {}
     by_norm: dict[str, list[Citation]] = {}
@@ -348,12 +438,13 @@ def _resolve_pin_cites(
             pool.sort(key=lambda m: 0 if _is_neutral(m) else 1)
         return pool[0] if pool else parent
 
-    def ambiguous_string_cite(nearest: Citation, pos: int) -> bool:
+    def ambiguous_string_cite(nearest: Citation, pos: int,
+                              pool: list[Citation]) -> bool:
         """True when the citation preceding ``pos`` sits in a string cite, so
         an Id. reference to it is ambiguous. Parallel pairs are one authority,
         not ambiguous."""
         second = None
-        for c in id_antecedents:
+        for c in pool:
             if c is nearest or c.position >= pos:
                 continue
             if second is None or c.position > second.position:
@@ -481,8 +572,31 @@ def _resolve_pin_cites(
                 resolved.append(pin)
 
         elif shape == "id":
-            nearest_full = nearest_preceding(id_antecedents, start)
-            nearest_pin = nearest_preceding(resolved, start)
+            # Two guards on the antecedent pools:
+            #   1. Quoted-matter exclusion — a citation inside a quotation is
+            #      the quoted author's, not this writer's, so it cannot
+            #      capture an id. outside the quote. An id. that is itself
+            #      inside a quote resolves within the quoted world (filter
+            #      skipped).
+            #   2. Page-pin type guard — "id. at 146" references a paginated
+            #      source; constitutions, statutes, and rules take
+            #      subdivision pins, not page pins. Case antecedents only.
+            #      Also catches quotes the span detector cannot see
+            #      (unmarked block quotes).
+            pin_in_quote = _in_quote(start)
+            fulls = id_antecedents if pin_in_quote else [
+                c for c in id_antecedents if not _in_quote(c.position)]
+            chain = resolved if pin_in_quote else [
+                p for p in resolved if not _in_quote(p.position)]
+            if pin.pin_page and not pin.pin_paragraph:
+                fulls = [c for c in fulls if c.cite_type == CitationType.CASE]
+                chain = [p for p in chain
+                         if p.parent_normalized is None
+                         or norm_type.get(p.parent_normalized,
+                                          CitationType.CASE)
+                         == CitationType.CASE]
+            nearest_full = nearest_preceding(fulls, start)
+            nearest_pin = nearest_preceding(chain, start)
             if nearest_pin is not None and (
                 nearest_full is None or nearest_pin.position > nearest_full.position
             ):
@@ -492,7 +606,7 @@ def _resolve_pin_cites(
                     _inherit_pinpoint(pin, nearest_pin)
                 resolved.append(pin)
             elif nearest_full is not None:
-                if ambiguous_string_cite(nearest_full, start):
+                if ambiguous_string_cite(nearest_full, start, fulls):
                     resolved.append(pin)  # kept unresolved — ambiguous antecedent
                 else:
                     member = parallel_member_for(pin, nearest_full, start)
@@ -633,6 +747,10 @@ def scan_text(
     # Run over the full occurrence list so the backward-search window for
     # each cite is clamped at the true preceding citation.
     _detect_antecedent_names(occurrences, text)
+
+    # Full-cite trailing page pins ("259 N.W.2d 621, 627"): every occurrence,
+    # repeats included, gets its own pin from its own position in the text.
+    _capture_trailing_page_pins(occurrences, text)
 
     # Resolve ND opinion URLs to direct PDF links (first occurrences only;
     # repeats inherit the resolved sources below)
