@@ -27,6 +27,7 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -259,6 +260,45 @@ def ensure_node(skill_dir: Path, cache_root: Path) -> Path | None:
     return None
 
 
+def stable_path(python: Path) -> Path:
+    """Prefer the spelling the caller *invoked* us by, over the resolved one.
+
+    The skill directory is commonly a symlink to a dev checkout, so
+    Path(__file__).resolve() yields a path nobody types and no permission rule
+    is written against -- e.g. ~/.claude/skills/jetredline resolves to
+    ~/code/jetredline/skills/jetredline. Printing the resolved form makes every
+    downstream command miss its allowlist entry and prompt.
+
+    So: if the unresolved skill directory (CLAUDE_SKILL_DIR, else this file's
+    own uninterpreted parent) contains an equivalent interpreter, print that
+    instead. Equivalence is checked with samefile() so a wrong guess can never
+    hand back an interpreter that isn't the one we just built.
+
+    Portable by construction: in Cowork the skill is a real directory under
+    /mnt/.skills (no symlink, so the candidate equals the resolved path), and a
+    cache- or temp-built venv lives outside the skill dir entirely (so no
+    candidate matches). Both fall through to `python` unchanged.
+    """
+    candidates = []
+    env_dir = os.environ.get("CLAUDE_SKILL_DIR")
+    if env_dir:
+        candidates.append(Path(env_dir))
+    candidates.append(Path(__file__).parent)
+
+    for skill_dir in candidates:
+        try:
+            candidate = skill_dir / ".venv" / python.relative_to(
+                Path(__file__).resolve().parent / ".venv")
+        except ValueError:
+            continue  # venv lives outside the skill dir (cache/temp build)
+        try:
+            if candidate.exists() and candidate.samefile(python):
+                return candidate
+        except OSError:
+            continue
+    return python
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--node", action="store_true",
@@ -275,7 +315,7 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: could not create a usable venv in any location",
               file=sys.stderr)
         return 1
-    print(f"VENV_PYTHON={python}")
+    print(f"VENV_PYTHON={stable_path(python)}")
 
     if args.node:
         node_path = ensure_node(skill_dir, args.cache_root)

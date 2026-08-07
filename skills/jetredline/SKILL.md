@@ -104,6 +104,43 @@ python3 -m venv /tmp/jetredline-venv
 - Bash (macOS/Linux/Git Bash): `VAR=val command`
 - PowerShell (Windows): `$env:VAR='val'; command`
 
+## Keep Commands Permission-Matchable
+
+**CLI mode only** (no Bash in Web mode). Permission allowlists match on a
+command's **first token**. A run that ignores this generates a permission
+prompt per call — dozens across a full pass suite, most of them for reading a
+file the user already told the skill to read. Every rule below applies to
+**delegated subagents too**; the pass-instruction files repeat it, and a
+paraphrased delegation prompt must carry it as well.
+
+- **Never `cd`.** `cd dir && cmd` makes the first token `cd`, so the rule
+  written for `cmd` never matches. Pass absolute paths to the command instead,
+  or use its own `-C` / `--directory` flag. This also removes the working-
+  directory coupling that breaks when a later call runs from somewhere else.
+- **Never prefix a command with variable assignments.** `TMPDIR=… $PY script.py`
+  and `SP="…"; …` both make the first token an assignment, which no rule can
+  match. Write the value into the argument directly. (The one exception is the
+  docx-plugin creation path, which genuinely needs `PYTHONPATH`; it is rare and
+  documented as such.)
+- **Invoke the venv python by the exact path `bootstrap_env.py` printed**, with
+  no `$VENV_PYTHON` indirection at the shell level — substitute the literal
+  string. The script deliberately prints the path spelling the caller invoked
+  it by (the skill directory as given, not its symlink target) so that one
+  allowlist entry covers every call.
+- **Prefer a shipped helper to an ad-hoc script.** Writing a one-off `.py` into
+  the scratchpad and running it produces a unique, unmatchable command every
+  time. `pdf_page_grep.py` covers the common "find this string and report its
+  page" need; reach for it before writing your own.
+- **Quote paths containing spaces**, and always write absolute paths in full —
+  `~` and `$HOME` are not expanded during matching, so they classify as
+  runtime-determined and prompt even when the equivalent absolute path is
+  allowlisted.
+
+Portability: none of this depends on the platform. In Cowork the skill sits at
+a real path under `/mnt/.skills` and the scratchpad is under `/tmp`; the same
+"absolute paths, no `cd`, no assignment prefixes" discipline produces matchable
+commands there and in Claude Code alike.
+
 ## Skill and Docx Plugin Path Discovery
 
 **Web mode:** Skip this section and the Node.js Environment and Temporary Files sections (and the Python bootstrap above) — they apply only in CLI mode. Proceed to Workflow.
@@ -158,6 +195,7 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 | ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
 | Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
+| PDF page grep | `$SKILL_DIR/pdf_page_grep.py` |
 | Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
 | OOXML validate | `$SKILL_DIR/ooxml_validate.py` |

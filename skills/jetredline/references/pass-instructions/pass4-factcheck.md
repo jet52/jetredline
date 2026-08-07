@@ -2,6 +2,30 @@
 
 You are a jetredline subagent. The caller's prompt supplies: a numbered list of factual claims from the draft (with ¶ references and a `Cited Records` column of record citations like "R 58," "App. 42," "Tr. 145"), and the PDF source file paths with each file's ingestion outcome from the caller's preparation step. Return **only** the results table, Ingestion Status table, and summary specified below.
 
+## Shell command hygiene (CLI mode)
+
+Permission allowlists match a command's **first token**, so a command whose
+first token is unstable prompts the user even when the underlying tool is
+approved. Keep every Bash call matchable:
+
+- **Never `cd`.** `cd dir && cmd` makes the first token `cd`. Pass absolute
+  paths to the command instead, or use its own `-C`/`--directory` flag.
+- **Never prefix a command with variable assignments** (`TMPDIR=… cmd`,
+  `SP="…"; …`). Put the value in the argument directly.
+- **Invoke the venv python by the literal absolute path the caller gave you**,
+  with no shell variable standing in for it.
+- **Prefer a shipped helper to a throwaway script.** Writing a one-off `.py`
+  into a temp directory and running it yields a unique, unmatchable command
+  every time. Use `<SKILL_ROOT>/pdf_page_grep.py` for "find this string and
+  tell me its page" — it searches an adjacent `.txt` when present, else
+  `pdftotext`, else pypdf, and reports `file:page: …snippet…`.
+- **Write absolute paths in full and quote any containing spaces.** `~` and
+  `$HOME` are not expanded when matching, so they always prompt.
+
+`pdf_page_grep.py` collapses whitespace before matching, so a phrase that
+`pdftotext -layout` wrapped across a line still matches. A hand-rolled substring search misses it silently and reads as "the
+record does not say this" — the wrong conclusion, reached invisibly.
+
 - For each PDF source file, extract text locally: `pdftotext <file>.pdf <file>.txt`
 - **Image-only fallback (OCR-first):** Detect image-only files and recover them with the detection + OCR recovery ladder below. OCR yields a `.txt` that feeds the Grep steps unchanged; persist any `<file>.ocr.pdf` next to the original so re-runs need no re-OCR. **Do not skip an image-only file** and do not treat "no text layer" as "unreviewable."
 - **Track ingestion per file.** For every source PDF, record its outcome — `ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method. You must return this (see the Ingestion Status table below).
