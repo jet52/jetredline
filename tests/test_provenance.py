@@ -26,6 +26,7 @@ def pass_prompt(stem, extra=SECRET):
 
 
 def task_record(stem, model="claude-opus-4-8[1m]", **overrides):
+    """A synchronous agent's self-contained completion record."""
     result = {
         "agentId": "agent_01",
         "agentType": "general-purpose",
@@ -45,6 +46,48 @@ def task_record(stem, model="claude-opus-4-8[1m]", **overrides):
     }
     result.update(overrides)
     return {"type": "user", "toolUseResult": result}
+
+
+# --- background agents: the launch record and its later notification are two
+# separate transcript entries, joined on agentId. Shapes copied from a real run.
+
+def launch_record(stem, agent_id="ae6c2d3904330e472", description="Pass 1 jurisdiction check",
+                  model="claude-opus-5[1m]", **overrides):
+    result = {
+        "isAsync": True,
+        "status": "async_launched",
+        "agentId": agent_id,
+        "description": description,
+        "resolvedModel": model,
+        "prompt": pass_prompt(stem),
+        "outputFile": f"/tmp/tasks/{SECRET}/{agent_id}.output",
+        "canReadOutputFile": True,
+    }
+    result.update(overrides)
+    return {"type": "user", "toolUseResult": result}
+
+
+def notification_record(agent_id="ae6c2d3904330e472", tokens=124_136, tools=37,
+                        duration_ms=288_504, status="completed", result_text=None):
+    usage = ""
+    if tokens is not None:
+        usage += f"<subagent_tokens>{tokens}</subagent_tokens>"
+    if tools is not None:
+        usage += f"<tool_uses>{tools}</tool_uses>"
+    if duration_ms is not None:
+        usage += f"<duration_ms>{duration_ms}</duration_ms>"
+    text = (
+        "<task-notification>\n"
+        f"<task-id>{agent_id}</task-id>\n"
+        "<tool-use-id>toolu_01Dzo5w9JKVEDG7u4LWHUFhS</tool-use-id>\n"
+        f"<output-file>/tmp/tasks/{SECRET}/{agent_id}.output</output-file>\n"
+        f"<status>{status}</status>\n"
+        f'<summary>Agent "Pass 1 jurisdiction check" finished</summary>\n'
+        f"<result>{result_text or f'Findings about {SECRET} in detail.'}</result>\n"
+        f"<usage>{usage}</usage>\n"
+        "</task-notification>"
+    )
+    return {"type": "attachment", "attachment": {"type": "task_notification", "prompt": text}}
 
 
 def write_transcript(tmp_path, records, name="session.jsonl"):
@@ -133,8 +176,8 @@ def test_collects_one_row_per_delegated_pass(tmp_path):
         "1 — Jurisdiction", "3B — Citations", "7 — Dissent cross-check",
     ]
     assert rows[0]["model"] == "claude-opus-4-8[1m]"
-    assert rows[0]["output"] == 11_807
-    assert rows[0]["cache_read"] == 152_790
+    assert rows[0]["tokens"] == 175_922
+    assert rows[0]["tools"] == 14
 
 
 def test_ignores_unrelated_subagents(tmp_path):
@@ -184,12 +227,20 @@ def test_identify_pass_on_unrelated_prompt():
     assert provenance.identify_pass("Search the repo for the cite parser.") is None
 
 
-def test_missing_resolved_model_reads_unknown(tmp_path):
+def test_missing_resolved_model_reads_dash(tmp_path):
+    """Synchronous records omit resolvedModel entirely."""
     rec = task_record("pass4-factcheck")
     del rec["toolUseResult"]["resolvedModel"]
     rows = provenance.collect_subagent_rows(write_transcript(tmp_path, [rec]))
-    assert rows[0]["model"] == "unknown"
-    assert "| unknown |" in provenance.subagent_table(rows)
+    assert rows[0]["model"] == "—"
+    assert "| 4 — Fact check | — |" in provenance.subagent_table(rows)
+
+
+def test_token_total_falls_back_to_summing_usage(tmp_path):
+    rec = task_record("pass2-style")
+    del rec["toolUseResult"]["totalTokens"]
+    rows = provenance.collect_subagent_rows(write_transcript(tmp_path, [rec]))
+    assert rows[0]["tokens"] == 2 + 11_807 + 11_323 + 152_790
 
 
 def test_non_completed_status_is_flagged(tmp_path):
@@ -201,11 +252,141 @@ def test_non_completed_status_is_flagged(tmp_path):
 
 def test_missing_usage_degrades_to_dashes(tmp_path):
     rec = task_record("pass2-style")
-    del rec["toolUseResult"]["usage"]
-    del rec["toolUseResult"]["totalToolUseCount"]
+    for field in ("usage", "totalTokens", "totalToolUseCount", "totalDurationMs"):
+        del rec["toolUseResult"][field]
     rows = provenance.collect_subagent_rows(write_transcript(tmp_path, [rec]))
     table = provenance.subagent_table(rows)
-    assert "| 2 — Style | claude-opus-4-8[1m] | — | — | — | — |" in table
+    assert "| 2 — Style | claude-opus-4-8[1m] | — | — | — |" in table
+
+
+# --- background agents: launch record joined to its notification -------------
+
+def test_background_agent_row_joins_launch_and_notification(tmp_path):
+    transcript = write_transcript(tmp_path, [
+        launch_record("pass1-jurisdiction"),
+        notification_record(),
+    ])
+    rows = provenance.collect_subagent_rows(transcript)
+    assert len(rows) == 1
+    assert rows[0] == {
+        "pass": "1 — Jurisdiction",
+        "model": "claude-opus-5[1m]",
+        "tokens": 124_136,
+        "tools": 37,
+        "duration_ms": 288_504,
+        "status": None,
+    }
+    assert ("| 1 — Jurisdiction | claude-opus-5[1m] | 124.1k | 37 | 4m 48s |"
+            in provenance.subagent_table(rows))
+
+
+def test_background_agent_still_running_is_dropped(tmp_path):
+    """No notification yet: an in-flight agent contributes no row."""
+    transcript = write_transcript(tmp_path, [launch_record("pass1-jurisdiction")])
+    assert provenance.collect_subagent_rows(transcript) == []
+
+
+def test_notification_without_a_launch_is_ignored(tmp_path):
+    transcript = write_transcript(tmp_path, [notification_record()])
+    assert provenance.collect_subagent_rows(transcript) == []
+
+
+def test_resumed_agent_uses_its_last_notification(tmp_path):
+    """A task-id may notify more than once; the final figures are cumulative."""
+    transcript = write_transcript(tmp_path, [
+        launch_record("pass4-factcheck"),
+        notification_record(tokens=50_000, tools=10, duration_ms=60_000),
+        notification_record(tokens=124_136, tools=37, duration_ms=288_504),
+    ])
+    rows = provenance.collect_subagent_rows(transcript)
+    assert len(rows) == 1
+    assert rows[0]["tokens"] == 124_136
+
+
+def test_background_agents_join_on_their_own_ids(tmp_path):
+    transcript = write_transcript(tmp_path, [
+        launch_record("pass1-jurisdiction", agent_id="a1"),
+        launch_record("pass4-factcheck", agent_id="a2"),
+        notification_record(agent_id="a2", tokens=111_400, tools=29, duration_ms=566_000),
+        notification_record(agent_id="a1", tokens=124_136, tools=37, duration_ms=288_504),
+    ])
+    rows = {r["pass"]: r for r in provenance.collect_subagent_rows(transcript)}
+    assert rows["1 — Jurisdiction"]["tokens"] == 124_136
+    assert rows["4 — Fact check"]["tokens"] == 111_400
+
+
+def test_failed_background_agent_is_flagged(tmp_path):
+    transcript = write_transcript(tmp_path, [
+        launch_record("pass6-brief-matching"),
+        notification_record(status="failed"),
+    ])
+    rows = provenance.collect_subagent_rows(transcript)
+    assert rows[0]["status"] == "failed"
+    assert "1 — Jurisdiction (failed)" not in provenance.subagent_table(rows)
+    assert "6 — Brief matching (failed)" in provenance.subagent_table(rows)
+
+
+def test_notification_missing_usage_fields_degrades(tmp_path):
+    transcript = write_transcript(tmp_path, [
+        launch_record("pass2-style"),
+        notification_record(tokens=None, tools=None, duration_ms=None),
+    ])
+    table = provenance.subagent_table(provenance.collect_subagent_rows(transcript))
+    assert "| 2 — Style | claude-opus-5[1m] | — | — | — |" in table
+
+
+# --- tier 3: the agent's display label --------------------------------------
+
+def test_description_labels_an_agent_the_prompt_cannot_identify(tmp_path):
+    """Sibling skills delegate un-numbered agents; the launch description names them."""
+    rec = launch_record("pass1-jurisdiction", description="Agent D precedent lookup")
+    rec["toolUseResult"]["prompt"] = "Verify these citations against the record."
+    transcript = write_transcript(tmp_path, [rec, notification_record()])
+    rows = provenance.collect_subagent_rows(transcript)
+    assert rows[0]["pass"] == "Agent D precedent lookup"
+
+
+def test_pass_identification_outranks_the_description(tmp_path):
+    rec = launch_record("pass1-jurisdiction", description="something vague")
+    transcript = write_transcript(tmp_path, [rec, notification_record()])
+    assert provenance.collect_subagent_rows(transcript)[0]["pass"] == "1 — Jurisdiction"
+
+
+def test_agent_with_neither_marker_is_dropped(tmp_path):
+    rec = launch_record("pass1-jurisdiction", description="")
+    rec["toolUseResult"]["prompt"] = "Search the repo for the cite parser."
+    transcript = write_transcript(tmp_path, [rec, notification_record()])
+    assert provenance.collect_subagent_rows(transcript) == []
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("Pass 4 fact check", "Pass 4 fact check"),
+    ("  Pass 4   fact\ncheck  ", "Pass 4 fact check"),
+    ("**Pass 4** <b>fact</b> check", "Pass 4 b fact /b check"),
+    ("| injected | table | row |", "injected table row"),
+    ("", None),
+    ("   ", None),
+    (None, None),
+    (42, None),
+])
+def test_description_is_sanitised(raw, expected):
+    assert provenance._clean_description(raw) == expected
+
+
+def test_long_description_is_truncated():
+    cleaned = provenance._clean_description("Pass " + "x" * 200)
+    assert len(cleaned) <= provenance._DESC_MAX
+    assert cleaned.endswith("…")
+
+
+def test_description_cannot_break_the_table(tmp_path):
+    """A pipe in a description would otherwise forge extra columns."""
+    rec = launch_record("pass9-unknown", description="evil | col | col")
+    rec["toolUseResult"]["prompt"] = "no pass marker here"
+    transcript = write_transcript(tmp_path, [rec, notification_record()])
+    body = provenance.subagent_table(provenance.collect_subagent_rows(transcript)).splitlines()[-1]
+    assert body.count("|") == 6          # 5 columns => 6 delimiters, no more
+    assert "evil col col" in body
 
 
 def test_repeated_pass_yields_both_rows(tmp_path):
@@ -264,6 +445,24 @@ def test_no_prompt_or_result_text_reaches_the_report(report, tmp_path):
     assert "findings mentioning" not in text
     # And nothing prompt-derived survives in the row dicts themselves.
     assert not any(SECRET in str(v) for row in rows for v in row.values())
+
+
+def test_background_notification_findings_never_reach_the_report(report, tmp_path):
+    """A notification embeds the agent's full <result> — the case analysis itself."""
+    transcript = write_transcript(tmp_path, [
+        launch_record("pass1-jurisdiction"),
+        notification_record(result_text=(
+            "## Pass 1 findings\n\nR31 terminating parental rights was entered "
+            f"June 12, 2026 in {SECRET}; the appeal is timely by one day."
+        )),
+    ])
+    rows = provenance.collect_subagent_rows(transcript)
+    text = stamp_it(report, rows)
+
+    assert rows and rows[0]["tokens"] == 124_136      # the row was in fact built
+    for leaked in (SECRET, "parental rights", "June 12", "timely", "/tmp/tasks",
+                   "toolu_", "output-file", "task-notification"):
+        assert leaked not in text
 
 
 # --- formatting ------------------------------------------------------------

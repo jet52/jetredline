@@ -60,7 +60,7 @@ _FOOTER_RE = re.compile(
 
 # --- delegated-pass usage ---------------------------------------------------
 #
-# Identifying which pass a subagent ran, in two tiers.
+# Identifying which pass a subagent ran, in three tiers.
 #
 # Tier 1 (authoritative): since v4.8.0 every delegated pass is launched with a
 # prompt that begins "Read <skill root>/references/pass-instructions/passN-*.md
@@ -71,11 +71,21 @@ _FOOTER_RE = re.compile(
 # paraphrased prompt may do the same. A bare pass number is too generic to
 # trust alone, so tier 2 also requires the prompt to name the skill.
 #
-# Either way the label comes from a fixed table -- no prompt text is ever
-# carried into the report.
+# Tiers 1 and 2 resolve to a fixed label table -- no prompt text reaches the
+# report. Tier 3 (see row_label) falls back to the launch record's short
+# `description`, which is the orchestrator's own display label for the agent
+# ("Pass 4 fact check"), not analysis text; it is sanitised to one short plain
+# line. That tier is what lets sibling skills with un-numbered analysis agents
+# (jetmemo, jetrehearing) render a table at all.
 _PASS_FILE_RE = re.compile(r"pass-instructions/(pass\d+[a-z]?-[a-z0-9-]+)\.md", re.I)
 _PASS_PROSE_RE = re.compile(r"\bPass\s+(\d+[AB]?)\b", re.I)
 _PROSE_SCAN_CHARS = 400
+
+# Column header for the first column, and the noun used in the heading. Sibling
+# skills delegate un-numbered analysis agents rather than numbered passes.
+ROW_LABEL = "Pass"
+_DESC_MAX = 60
+_DESC_SAFE_RE = re.compile(r"[^\w .,:;()/&'-]+")
 
 PASS_LABELS = {
     "pass1-jurisdiction": "1 — Jurisdiction",
@@ -100,15 +110,34 @@ PASS_NUMBER_LABELS = {
 
 def identify_pass(prompt: str):
     """Label for the pass this prompt delegated, or None if it isn't one."""
+    if not isinstance(prompt, str):
+        return None
     match = _PASS_FILE_RE.search(prompt)
     if match:
         return PASS_LABELS.get(match.group(1).lower())
-    if "jetredline" not in prompt.lower():
+    if SKILL_NAME not in prompt.lower():
         return None
     match = _PASS_PROSE_RE.search(prompt[:_PROSE_SCAN_CHARS])
     if match:
         return PASS_NUMBER_LABELS.get(match.group(1).upper())
     return None
+
+
+def _clean_description(description):
+    """One short plain line from an agent's display label, or None."""
+    if not isinstance(description, str):
+        return None
+    text = _DESC_SAFE_RE.sub(" ", description).strip()
+    text = re.sub(r"\s+", " ", text)
+    if not text:
+        return None
+    return text if len(text) <= _DESC_MAX else text[: _DESC_MAX - 1].rstrip() + "…"
+
+
+def row_label(prompt, description):
+    """Best available label for a delegated agent, or None to drop the row."""
+    return identify_pass(prompt) or _clean_description(description)
+
 
 _TABLE_HEADING = "**Delegated passes**"
 
@@ -153,52 +182,134 @@ def _duration(ms) -> str:
     return f"{secs // 3600}h {(secs % 3600) // 60:02d}m"
 
 
+# A background agent's completion arrives as a <task-notification> block whose
+# <task-id> is the launch record's agentId.
+_NOTIF_ID_RE = re.compile(r"<task-id>\s*([A-Za-z0-9_-]+)\s*</task-id>")
+_NOTIF_STATUS_RE = re.compile(r"<status>\s*([a-z_]+)\s*</status>", re.I)
+_NOTIF_TOKENS_RE = re.compile(r"<subagent_tokens>\s*(\d+)\s*</subagent_tokens>")
+_NOTIF_TOOLS_RE = re.compile(r"<tool_uses>\s*(\d+)\s*</tool_uses>")
+_NOTIF_MS_RE = re.compile(r"<duration_ms>\s*(\d+)\s*</duration_ms>")
+
+
+def _int_or_none(match):
+    return int(match.group(1)) if match else None
+
+
+def _sum_usage(usage):
+    """Total tokens across a legacy `usage` dict, or None."""
+    if not isinstance(usage, dict):
+        return None
+    parts = [
+        usage.get(k)
+        for k in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    ]
+    nums = [p for p in parts if isinstance(p, int)]
+    return sum(nums) if nums else None
+
+
 def collect_subagent_rows(transcript_path) -> list:
     """Per-pass model and usage, read from the session transcript.
 
-    Claude Code records a `toolUseResult` object for every completed Task call,
-    carrying `resolvedModel`, `usage`, `totalToolUseCount`, and
-    `totalDurationMs`. That is an internal format with no compatibility
-    guarantee, so every field is treated as optional and any failure yields an
-    empty list -- a missing table, never a failed run.
+    Two record shapes exist and both are handled, because which one a run
+    produces depends only on whether its agents ran in the background:
 
-    Privacy: the prompt is read only to identify the pass against a fixed label
-    table (see identify_pass). No prompt or result text is ever returned,
-    because the stamped report goes into the case file.
+    * Synchronous (`run_in_background: false`) -- one `toolUseResult` carrying
+      `agentType`, `prompt`, `usage`/`totalTokens`, `totalToolUseCount` and
+      `totalDurationMs`. Self-contained; no `resolvedModel`.
+
+    * Background (the default since ~2026-07) -- the record is split in two.
+      The launch `toolUseResult` has `isAsync`, `status: "async_launched"`,
+      `agentId`, `description`, `prompt` and `resolvedModel`, but no usage,
+      because nothing has run yet. Completion arrives later as an attachment
+      holding a `<task-notification>` whose `<task-id>` is that `agentId` and
+      whose `<usage>` block reports `subagent_tokens`, `tool_uses` and
+      `duration_ms`. The two halves are joined here on the agent id.
+
+      Note the notification reports a single token total -- there is no
+      input/output/cache breakdown -- which is why the rendered table is
+      token-total only for both shapes.
+
+    An agent may notify more than once (it can be resumed); the last
+    notification wins. Agents that never notified are dropped, so an in-flight
+    or abandoned agent contributes no row.
+
+    All of this is an internal format with no compatibility guarantee, so every
+    field is optional and any failure yields an empty list -- a missing table,
+    never a failed run.
+
+    Privacy: prompts are read only to identify the pass against a fixed label
+    table, and `description` is the orchestrator's own short display label. No
+    prompt body or result text is ever returned, because the stamped report
+    goes into the case file.
     """
-    rows = []
+    launches = []          # background agents, in launch order
+    notifications = {}     # agentId -> parsed <task-notification>
+    rows = []              # synchronous agents, in completion order
     try:
         with open(transcript_path, "r", encoding="utf-8") as fh:
             for line in fh:
                 # Cheap prefilter -- transcripts run to hundreds of thousands
-                # of lines and only a handful are Task results.
-                if '"agentType"' not in line:
+                # of lines and only a handful concern subagents.
+                if '"agentType"' not in line and '"agentId"' not in line \
+                        and "task-notification" not in line:
                     continue
                 try:
                     record = json.loads(line)
                 except ValueError:
                     continue
-                result = record.get("toolUseResult")
-                if not isinstance(result, dict) or "agentType" not in result:
+
+                # --- completion notification (background) ---
+                if record.get("type") == "attachment":
+                    attachment = record.get("attachment")
+                    if not isinstance(attachment, dict):
+                        continue
+                    text = attachment.get("prompt")
+                    if not isinstance(text, str) or "<task-notification>" not in text:
+                        continue
+                    ident = _NOTIF_ID_RE.search(text)
+                    if not ident:
+                        continue
+                    status = _NOTIF_STATUS_RE.search(text)
+                    notifications[ident.group(1)] = {
+                        "tokens": _int_or_none(_NOTIF_TOKENS_RE.search(text)),
+                        "tools": _int_or_none(_NOTIF_TOOLS_RE.search(text)),
+                        "duration_ms": _int_or_none(_NOTIF_MS_RE.search(text)),
+                        "status": status.group(1).lower() if status else None,
+                    }
                     continue
 
-                prompt = result.get("prompt")
-                if not isinstance(prompt, str):
+                result = record.get("toolUseResult")
+                if not isinstance(result, dict):
                     continue
-                label = identify_pass(prompt)
+                label = row_label(result.get("prompt"), result.get("description"))
                 if not label:
                     continue
 
-                usage = result.get("usage")
-                usage = usage if isinstance(usage, dict) else {}
+                # --- background launch: defer until its notification is seen ---
+                if result.get("isAsync") or result.get("status") == "async_launched":
+                    agent_id = result.get("agentId")
+                    if agent_id:
+                        launches.append((agent_id, label,
+                                         result.get("resolvedModel") or "—"))
+                    continue
+
+                # --- synchronous completion: self-contained ---
+                if "agentType" not in result:
+                    continue
                 status = result.get("status")
+                tokens = result.get("totalTokens")
+                if not isinstance(tokens, int):
+                    tokens = _sum_usage(result.get("usage"))
                 rows.append(
                     {
                         "pass": label,
-                        "model": result.get("resolvedModel") or "unknown",
-                        "input": usage.get("input_tokens"),
-                        "output": usage.get("output_tokens"),
-                        "cache_read": usage.get("cache_read_input_tokens"),
+                        "model": result.get("resolvedModel") or "—",
+                        "tokens": tokens,
                         "tools": result.get("totalToolUseCount"),
                         "duration_ms": result.get("totalDurationMs"),
                         "status": status if status != "completed" else None,
@@ -206,18 +317,39 @@ def collect_subagent_rows(transcript_path) -> list:
                 )
     except (OSError, ValueError):
         return []
+
+    for agent_id, label, model in launches:
+        notification = notifications.get(agent_id)
+        if not notification:
+            continue  # still running, or never reported
+        status = notification.get("status")
+        rows.append(
+            {
+                "pass": label,
+                "model": model,
+                "tokens": notification.get("tokens"),
+                "tools": notification.get("tools"),
+                "duration_ms": notification.get("duration_ms"),
+                "status": status if status != "completed" else None,
+            }
+        )
     return rows
 
 
 def subagent_table(rows: list) -> str:
-    """Render the delegated-pass rows as a markdown table (empty string if none)."""
+    """Render the delegated-pass rows as a markdown table (empty string if none).
+
+    Token-total only: background agents report a single `subagent_tokens`
+    figure with no input/output/cache breakdown, so a wider schema could not be
+    filled for the common case.
+    """
     if not rows:
         return ""
     lines = [
         _TABLE_HEADING,
         "",
-        "| Pass | Model | In | Out | Cache read | Tools | Time |",
-        "|---|---|---|---|---|---|---|",
+        f"| {ROW_LABEL} | Model | Tokens | Tools | Time |",
+        "|---|---|---|---|---|",
     ]
     for r in rows:
         label = r["pass"]
@@ -225,12 +357,10 @@ def subagent_table(rows: list) -> str:
             label += f" ({r['status']})"
         tools = r.get("tools")
         lines.append(
-            "| {} | {} | {} | {} | {} | {} | {} |".format(
+            "| {} | {} | {} | {} | {} |".format(
                 label,
                 r["model"],
-                _human(r.get("input")),
-                _human(r.get("output")),
-                _human(r.get("cache_read")),
+                _human(r.get("tokens")),
                 tools if isinstance(tools, int) else "—",
                 _duration(r.get("duration_ms")),
             )
