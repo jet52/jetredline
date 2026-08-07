@@ -22,6 +22,10 @@ Output (default), one line per hit:
     order.pdf:3: ...the parties filed a written stipulation...
 
 Exit status: 0 if at least one hit, 1 if none, 2 on a usage or read error.
+
+An unreadable file is status 2 even when other files produced hits, because
+"1" means "searched everything, found nothing" — the finding a fact-checking
+pass acts on. A mistyped path must never be able to say that.
 """
 
 import argparse
@@ -180,6 +184,8 @@ def main() -> int:
             print(f"pdf_page_grep: could not extract text: {path}",
                   file=sys.stderr)
 
+    if unreadable:
+        return 2
     return 0 if results else 1
 
 

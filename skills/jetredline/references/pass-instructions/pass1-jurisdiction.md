@@ -23,8 +23,9 @@ approved. Keep every Bash call matchable:
   `$HOME` are not expanded when matching, so they always prompt.
 
 `pdf_page_grep.py` collapses whitespace before matching, so a phrase that
-`pdftotext -layout` wrapped across a line still matches. A hand-rolled substring search misses it silently and reads as "the
-record does not say this" — the wrong conclusion, reached invisibly.
+`pdftotext -layout` wrapped across a line still matches. A hand-rolled
+substring search misses it silently and reads as "the record does not say
+this" — the wrong conclusion, reached invisibly.
 
 ## If DOC_TYPE is `opinion`
 

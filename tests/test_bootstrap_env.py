@@ -176,3 +176,82 @@ def test_main_prints_venv_python_line(tmp_path, monkeypatch, capsys):
 def test_main_exit_1_when_no_venv(monkeypatch, capsys):
     monkeypatch.setattr(bootstrap_env, "ensure_venv", lambda *a, **k: None)
     assert bootstrap_env.main([]) == 1
+
+
+# ---------------------------------------------------------------------------
+# stable_path: print the spelling the caller used, not the resolved one
+#
+# The skill directory is normally a symlink to a dev checkout, so a resolved
+# path is one nobody types and no permission rule is written against. Printing
+# it made every downstream command miss its allowlist entry and prompt.
+# ---------------------------------------------------------------------------
+
+def _fake_skill(tmp_path, name="skills/jetredline"):
+    """A skill dir with a .venv, plus a symlink to it — the real layout."""
+    real = tmp_path / name
+    (real / ".venv" / "bin").mkdir(parents=True)
+    python = real / ".venv" / "bin" / "python"
+    python.write_text("#!/bin/sh\n")
+    link = tmp_path / "linked-skill"
+    link.symlink_to(real)
+    return real, link, python
+
+
+def test_stable_path_prefers_the_symlinked_spelling(tmp_path, monkeypatch):
+    real, link, python = _fake_skill(tmp_path)
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.setenv("CLAUDE_SKILL_DIR", str(link))
+    assert bootstrap_env.stable_path(python) == link / ".venv" / "bin" / "python"
+
+
+def test_stable_path_result_is_the_same_interpreter(tmp_path, monkeypatch):
+    """The whole point is a different spelling, never a different file."""
+    real, link, python = _fake_skill(tmp_path)
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.setenv("CLAUDE_SKILL_DIR", str(link))
+    assert bootstrap_env.stable_path(python).samefile(python)
+
+
+def test_stable_path_rejects_a_lookalike_that_is_a_different_file(tmp_path, monkeypatch):
+    """A directory that merely *looks* like the skill dir must not be trusted."""
+    real, _, python = _fake_skill(tmp_path)
+    impostor = tmp_path / "impostor"
+    (impostor / ".venv" / "bin").mkdir(parents=True)
+    (impostor / ".venv" / "bin" / "python").write_text("#!/bin/sh\n# a different python\n")
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.setenv("CLAUDE_SKILL_DIR", str(impostor))
+    assert bootstrap_env.stable_path(python) == python
+
+
+def test_stable_path_passes_through_a_real_directory(tmp_path, monkeypatch):
+    """Cowork mounts the skill at a real path — no alternate spelling exists."""
+    real, _, python = _fake_skill(tmp_path)
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.setenv("CLAUDE_SKILL_DIR", str(real))
+    assert bootstrap_env.stable_path(python) == python
+
+
+def test_stable_path_passes_through_a_cache_built_venv(tmp_path, monkeypatch):
+    """A venv outside the skill dir has no in-skill counterpart to prefer."""
+    real, link, _ = _fake_skill(tmp_path)
+    cached = tmp_path / "cache" / "venv" / "bin" / "python"
+    cached.parent.mkdir(parents=True)
+    cached.write_text("#!/bin/sh\n")
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.setenv("CLAUDE_SKILL_DIR", str(link))
+    assert bootstrap_env.stable_path(cached) == cached
+
+
+def test_stable_path_without_the_env_var(tmp_path, monkeypatch):
+    """Falls back to this file's own uninterpreted parent."""
+    real, _, python = _fake_skill(tmp_path)
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.delenv("CLAUDE_SKILL_DIR", raising=False)
+    assert bootstrap_env.stable_path(python) == python
+
+
+def test_stable_path_ignores_an_env_var_pointing_nowhere(tmp_path, monkeypatch):
+    real, _, python = _fake_skill(tmp_path)
+    monkeypatch.setattr(bootstrap_env, "__file__", str(real / "bootstrap_env.py"))
+    monkeypatch.setenv("CLAUDE_SKILL_DIR", str(tmp_path / "does-not-exist"))
+    assert bootstrap_env.stable_path(python) == python
