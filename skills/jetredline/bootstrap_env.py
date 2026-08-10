@@ -37,8 +37,10 @@ from pathlib import Path
 # requirements.txt names -> import names to verify, keyed on the requirement
 # with version specifiers stripped. Extras matter: httpx[socks] is satisfied
 # for import purposes without socksio, but Cowork's SOCKS proxy needs it, so
-# verify the extra explicitly. PyMuPDF's import name is fitz.
+# verify the extra explicitly. PyMuPDF's import name is fitz;
+# beautifulsoup4's is bs4.
 _IMPORT_OVERRIDES = {
+    "beautifulsoup4": ["bs4"],
     "httpx[socks]": ["httpx", "socksio"],
     "PyMuPDF": ["fitz"],
 }
