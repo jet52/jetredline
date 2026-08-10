@@ -2144,6 +2144,36 @@ _JS = """\
     else if (e.key === 'Escape') closeHelp();
   });
 
+  // Keep j/k working: embedded frames (Chrome's PDF viewer, PDF.js with
+  // #search) grab keyboard focus when they finish loading, which silently
+  // routes every subsequent keypress into the frame. Reclaim focus when a
+  // frame takes it uninvited; respect a deliberate click into the pane.
+  // "Uninvited" = the frame loaded within the last moment (load-time
+  // focus steal) or the pointer is not even over a frame (programmatic
+  // steal). A deliberate click leaves focus in the frame — clicking
+  // anywhere outside it hands the keys back.
+  var lastFrameLoad = 0;
+  var pointerInFrame = false;
+  document.addEventListener('load', function(e) {
+    if (e.target && e.target.tagName === 'IFRAME') lastFrameLoad = Date.now();
+  }, true);
+  document.addEventListener('mouseover', function(e) {
+    if (e.target.tagName === 'IFRAME') pointerInFrame = true;
+  });
+  document.addEventListener('mouseout', function(e) {
+    if (e.target.tagName === 'IFRAME') pointerInFrame = false;
+  });
+  window.addEventListener('blur', function() {
+    setTimeout(function() {
+      var ae = document.activeElement;
+      if (ae && ae.tagName === 'IFRAME' &&
+          (Date.now() - lastFrameLoad < 1500 || !pointerInFrame)) {
+        ae.blur();
+        window.focus();
+      }
+    }, 0);
+  });
+
   // Button clicks
   document.querySelector('.v-btn').addEventListener('click', () => setStatus('verified', true));
   document.querySelector('.f-btn').addEventListener('click', () => setStatus('flagged', true));
