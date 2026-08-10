@@ -155,10 +155,186 @@ def _escape_with_links(text: str) -> str:
     return "".join(parts)
 
 
-def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
+def _format_spans_from_docx(
+        docx_path, opinion_text: str,
+) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Recover formatting spans from the original .docx.
+
+    The extracted opinion markdown is plain text; italics (case names, Id.,
+    signals, added emphasis) and block-quote indentation live only in the
+    .docx. Walk the document's paragraphs, locate each paragraph's text
+    inside ``opinion_text``, and return two absolute (start, end) span
+    lists: (italic_spans, quote_spans). Quote paragraphs are detected by a
+    quote-ish paragraph style (BlockQuote, Quote, IntenseQuote, BlockText)
+    or a direct left indent ≥ 430 twips. Purely presentational — the
+    citation scanner and position mapping never see these spans. Failures
+    degrade to plain rendering, never an error.
+    """
+    import zipfile
+    from defusedxml.minidom import parseString
+    try:
+        with zipfile.ZipFile(docx_path) as z:
+            dom = parseString(z.read("word/document.xml").decode("utf-8"))
+    except Exception as e:  # zip/XML/read errors — render without formatting
+        print(f"Warning: could not read --docx for formatting ({e}); "
+              "rendering plain.", file=sys.stderr)
+        return [], []
+    body = dom.getElementsByTagName("w:body")
+    if not body:
+        return [], []
+    spans: list[list[int]] = []
+    quote_spans: list[tuple[int, int]] = []
+    cursor = 0
+    for p in body[0].getElementsByTagName("w:p"):
+        style_val, indent_left = "", 0
+        ppr = next((c for c in p.childNodes if c.nodeName == "w:pPr"), None)
+        if ppr is not None:
+            ps = ppr.getElementsByTagName("w:pStyle")
+            if ps:
+                style_val = ps[0].getAttribute("w:val") or ""
+            ind = ppr.getElementsByTagName("w:ind")
+            if ind:
+                for attr in ("w:left", "w:start"):
+                    v = ind[0].getAttribute(attr)
+                    if v:
+                        try:
+                            indent_left = max(indent_left, int(v))
+                        except ValueError:
+                            pass
+        sv = style_val.lower()
+        is_quote = ("quote" in sv or "blocktext" in sv or indent_left >= 430)
+        parts: list[str] = []
+        italic_runs: list[tuple[int, int]] = []
+        pos = 0
+        for r in p.getElementsByTagName("w:r"):
+            anc, deleted = r.parentNode, False
+            while anc is not None and anc is not p:
+                if anc.nodeName == "w:del":
+                    deleted = True
+                    break
+                anc = anc.parentNode
+            if deleted:
+                continue
+            rtext = ""
+            for child in r.childNodes:
+                if child.nodeName == "w:t":
+                    rtext += child.firstChild.nodeValue if child.firstChild else ""
+                elif child.nodeName == "w:tab":
+                    rtext += "\t"
+            if not rtext:
+                continue
+            italic = False
+            rpr = [c for c in r.childNodes if c.nodeName == "w:rPr"]
+            if rpr:
+                for i_el in rpr[0].getElementsByTagName("w:i"):
+                    italic = i_el.getAttribute("w:val") not in ("0", "false", "none")
+                    break
+            if italic:
+                italic_runs.append((pos, pos + len(rtext)))
+            parts.append(rtext)
+            pos += len(rtext)
+        para_text = "".join(parts)
+        stripped = para_text.strip()
+        if not stripped:
+            continue
+        idx = opinion_text.find(stripped, cursor)
+        if idx < 0:
+            idx = opinion_text.find(stripped)
+        if idx < 0:
+            continue
+        if is_quote:
+            quote_spans.append((idx, idx + len(stripped)))
+        if italic_runs:
+            base = idx - (len(para_text) - len(para_text.lstrip()))
+            for s, e in italic_runs:
+                a = max(base + s, idx)
+                b = min(base + e, idx + len(stripped))
+                if b <= a:
+                    continue
+                if spans and spans[-1][1] == a:
+                    spans[-1][1] = b
+                else:
+                    spans.append([a, b])
+        cursor = idx + len(stripped)
+    return [(s, e) for s, e in spans], quote_spans
+
+
+def _render_with_italics(segment: str, abs_start: int,
+                         italic_spans: list[tuple[int, int]] | None) -> str:
+    """Escape a text segment, wrapping the italic spans it overlaps in <em>.
+
+    ``abs_start`` is the segment's offset in the full opinion text, the
+    coordinate system of ``italic_spans``.
+    """
+    if not italic_spans:
+        return _escape_with_links(segment)
+    end_abs = abs_start + len(segment)
+    rel = sorted((max(s, abs_start) - abs_start, min(e, end_abs) - abs_start)
+                 for s, e in italic_spans if s < end_abs and e > abs_start)
+    if not rel:
+        return _escape_with_links(segment)
+    parts: list[str] = []
+    cur = 0
+    for s, e in rel:
+        s = max(s, cur)
+        if e <= s:
+            continue
+        parts.append(_escape_with_links(segment[cur:s]))
+        parts.append("<em>" + _escape_with_links(segment[s:e]) + "</em>")
+        cur = e
+    parts.append(_escape_with_links(segment[cur:]))
+    return "".join(parts)
+
+
+def _render_body(body: str, body_start: int,
+                 italic_spans: list[tuple[int, int]] | None,
+                 quote_spans: list[tuple[int, int]] | None) -> str:
+    """Render a paragraph body, wrapping quote spans in <blockquote>.
+
+    Block-quote paragraphs sit between two ¶ markers, so _split_paragraphs
+    absorbs them into the preceding paragraph's body; without the spans they
+    render as one flowing paragraph. Everything stays inside the caller's
+    .opinion-para div so anchors and highlighting are unaffected.
+    """
+    end_abs = body_start + len(body)
+    q = sorted((max(s, body_start), min(e, end_abs))
+               for s, e in (quote_spans or []) if s < end_abs and e > body_start)
+    if not q:
+        return _render_with_italics(body, body_start, italic_spans)
+    parts: list[str] = []
+    cur = body_start
+    for s, e in q:
+        s = max(s, cur)
+        if e <= s:
+            continue
+        seg = body[cur - body_start:s - body_start]
+        if seg.strip():
+            parts.append(_render_with_italics(seg, cur, italic_spans))
+        parts.append(
+            '<blockquote class="opinion-quote">'
+            + _render_with_italics(body[s - body_start:e - body_start],
+                                   s, italic_spans)
+            + '</blockquote>')
+        cur = e
+    tail = body[cur - body_start:]
+    if tail.strip():
+        parts.append(_render_with_italics(tail, cur, italic_spans))
+    return "".join(parts)
+
+
+# A section heading ("I", "II", ...) sits between two ¶ markers, so
+# _split_paragraphs absorbs it into the tail of the preceding paragraph.
+# Detected at render time and emitted as its own heading div instead.
+_ROMAN_HEADING_RE = re.compile(r"\n\s*([IVXLCDM]{1,7})\s*$")
+
+
+def _opinion_to_html(text: str, paragraphs: list[dict],
+                     italic_spans: list[tuple[int, int]] | None = None,
+                     quote_spans: list[tuple[int, int]] | None = None) -> str:
     """Convert opinion text to HTML fragment with paragraph anchors."""
     if not paragraphs or paragraphs[0]["num"] is None:
-        return f'<div class="opinion-text">{_escape_with_links(text)}</div>'
+        return (f'<div class="opinion-text">'
+                f'{_render_body(text, 0, italic_spans, quote_spans)}</div>')
 
     parts = []
     # Header text before the first paragraph marker.  _split_paragraphs
@@ -167,18 +343,33 @@ def _opinion_to_html(text: str, paragraphs: list[dict]) -> str:
     if first_start > 0:
         header = text[:first_start].strip()
         if header:
+            hdr_start = text.find(header)
             parts.append(
-                f'<div class="opinion-header">{_escape_with_links(header)}</div>'
+                f'<div class="opinion-header">'
+                f'{_render_with_italics(header, hdr_start, italic_spans)}</div>'
             )
 
     for p in paragraphs:
         pid = f'para-{p["num"]}' if p["num"] is not None else "para-0"
-        escaped = _escape_with_links(p["text"])
+        body = p["text"]
+        headings = []
+        while True:
+            m = _ROMAN_HEADING_RE.search(body)
+            if not m:
+                break
+            headings.insert(0, m.group(1))
+            body = body[:m.start()].rstrip()
+        # Absolute offset of the (stripped) body within ``text`` — the
+        # coordinate system the formatting spans are expressed in.
+        body_start = text.find(body, p["start"]) if body else p["start"]
+        escaped = _render_body(body, body_start, italic_spans, quote_spans)
         parts.append(
             f'<div class="opinion-para" id="{pid}">'
             f'<span class="para-marker">[¶{p["num"]}]</span> '
             f'{escaped}</div>'
         )
+        for h in headings:
+            parts.append(f'<div class="opinion-heading">{html.escape(h)}</div>')
     return "\n".join(parts)
 
 
@@ -1323,6 +1514,14 @@ main { display:flex; flex:1; overflow:hidden; }
   color:var(--accent); font-weight:600;
   font-family:'SF Mono','Cascadia Code',monospace; font-size:12px;
 }
+.opinion-heading {
+  text-align:center; font-weight:600;
+  margin:14px 0 4px; padding:0 16px;
+}
+.opinion-quote {
+  margin:10px 32px; padding:0;
+  font-size:14px;
+}
 .draft-link {
   color:var(--text); text-decoration:none;
   border-bottom:1px dotted var(--text-muted);
@@ -1736,8 +1935,10 @@ _JS = """\
   }
 
   // Highlight a verbatim quote inside a rendered paragraph by walking its
-  // text nodes — entity- and inline-markup-proof, unlike an HTML splice.
-  function highlightQuoteInPara(paraEl, quoteText) {
+  // text nodes — entity- and inline-markup-proof, unlike an HTML splice
+  // (case names render inside <em> tags, so cite text spans inline markup).
+  // occurrence selects the nth match; falls back to the first if absent.
+  function highlightQuoteInPara(paraEl, quoteText, occurrence) {
     if (!quoteText) return;
     const walker = document.createTreeWalker(paraEl, NodeFilter.SHOW_TEXT);
     const nodes = [];
@@ -1746,7 +1947,14 @@ _JS = """\
       nodes.push({ node: walker.currentNode, start: joined.length });
       joined += walker.currentNode.nodeValue;
     }
-    const at = foldQ(joined).indexOf(foldQ(quoteText));
+    const hay = foldQ(joined), needle = foldQ(quoteText);
+    let at = -1, from = 0;
+    for (let n = 0; n <= (occurrence || 0); n++) {
+      at = hay.indexOf(needle, from);
+      if (at === -1) break;
+      from = at + needle.length;
+    }
+    if (at === -1) at = hay.indexOf(needle);
     if (at < 0) return;
     const end = at + quoteText.length;
     for (let i = nodes.length - 1; i >= 0; i--) {
@@ -1802,31 +2010,13 @@ _JS = """\
           highlightQuoteInPara(paraEl, d.draft_quote);
           paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
-        // Highlight the exact occurrence of the citation text. d.occurrence
-        // counts earlier appearances of the same string in this paragraph
-        // (repeated short cites, multiple Id.s); fall back to the first
-        // match if the nth isn't found in the rendered HTML.
-        const escapedCite = esc(d.cite_text);
-        const original = paraEl.innerHTML;
-        const markerEnd = original.indexOf('</span>');
-        if (markerEnd > -1) {
-          const cutpoint = markerEnd + 7;
-          const before = original.slice(0, cutpoint);
-          const after = original.slice(cutpoint);
-          let at = -1, from = 0;
-          for (let n = 0; n <= (d.occurrence || 0); n++) {
-            at = after.indexOf(escapedCite, from);
-            if (at === -1) break;
-            from = at + escapedCite.length;
-          }
-          if (at === -1) at = after.indexOf(escapedCite);
-          if (at > -1) {
-            paraEl.innerHTML = before + after.slice(0, at) +
-              '<span class="cite-hl">' + escapedCite + '</span>' +
-              after.slice(at + escapedCite.length);
-          }
-        }
-        paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Citation occurrences use the same markup-proof walker: the cite
+          // text routinely spans <em> case names and draft links, which an
+          // innerHTML splice cannot match. d.occurrence counts earlier
+          // appearances of the same string in this paragraph (repeated short
+          // cites, multiple Id.s).
+          highlightQuoteInPara(paraEl, d.cite_text, d.occurrence || 0);
+          paraEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }
     }
@@ -2385,7 +2575,9 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 ndlaw_base: str | None = _NDLAW_DEFAULT_BASE,
                 facts: list[dict] | None = None,
                 fact_viewers: dict[str, str] | None = None,
-                link_pdfs: bool = False) -> str:
+                link_pdfs: bool = False,
+                italic_spans: list[tuple[int, int]] | None = None,
+                quote_spans: list[tuple[int, int]] | None = None) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
     via_map = via_map or {}
@@ -2613,7 +2805,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
           .replace("__SOURCES__", sources_json)
           .replace("__FILE_KEY__", file_key_json))
     escaped_title = html.escape(title)
-    opinion_html = _opinion_to_html(opinion_text, paragraphs)
+    opinion_html = _opinion_to_html(opinion_text, paragraphs, italic_spans,
+                                    quote_spans)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -2727,6 +2920,11 @@ def main():
     )
     parser.add_argument("--opinion", "-o", required=True,
                         help="Path to opinion markdown file")
+    parser.add_argument("--docx",
+                        help="Original .docx the opinion markdown was "
+                        "extracted from. Used solely to recover italics "
+                        "(case names, Id., signals, added emphasis) for the "
+                        "draft pane; no effect on citation scanning.")
     parser.add_argument("--cite-json", "-c",
                         help="Path to pre-generated cite_check.py JSON "
                              "(if omitted, runs cite_check internally)")
@@ -2932,12 +3130,27 @@ def main():
         local_only=args.local_only,
     )
 
+    italic_spans: list[tuple[int, int]] = []
+    quote_spans: list[tuple[int, int]] = []
+    if args.docx:
+        docx_path = Path(args.docx).expanduser()
+        if docx_path.exists():
+            italic_spans, quote_spans = _format_spans_from_docx(docx_path, text)
+            if italic_spans or quote_spans:
+                print(f"  Formatting recovered from {docx_path.name}: "
+                      f"{len(italic_spans)} italic span(s), "
+                      f"{len(quote_spans)} block quote(s)", file=sys.stderr)
+        else:
+            print(f"Warning: --docx not found: {docx_path}; "
+                  "rendering plain.", file=sys.stderr)
+
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
                            via_map=via_map, sources_meta=sources_meta,
                            passages=passages, authority_alias=authority_alias,
                            ndlaw_base=None if args.no_ndlaw else args.ndlaw_base,
                            facts=facts, fact_viewers=fact_viewers,
-                           link_pdfs=args.link_pdfs)
+                           link_pdfs=args.link_pdfs, italic_spans=italic_spans,
+                           quote_spans=quote_spans)
 
     out.write_text(html_str, encoding="utf-8")
     n_viewers = len(viewers) + len(fact_viewers)
