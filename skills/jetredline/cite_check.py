@@ -33,15 +33,24 @@ try:
         add_parallel_info,
         to_legacy_dict,
     )
-except ImportError:
-    print(
-        "ERROR: jetcite import failed. Bundled copy expected at:\n"
-        f"  {_BUNDLED_LIB / 'jetcite'}\n"
-        "Ensure httpx is installed:  pip install httpx[socks]\n"
-        "Or install jetcite via pip:\n"
-        "  pip install git+https://github.com/jet52/jetcite.git",
-        file=sys.stderr,
-    )
+except ImportError as e:
+    _jetcite_dir = _BUNDLED_LIB / "jetcite"
+    if not _jetcite_dir.is_dir():
+        print(
+            "ERROR: jetcite not found. Expected bundled copy at:\n"
+            f"  {_jetcite_dir}\n"
+            "Run 'make vendor-jetcite' to re-vendor, or install via pip:\n"
+            "  pip install git+https://github.com/jet52/jetcite.git",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"ERROR: jetcite found at {_jetcite_dir} but failed to import:\n"
+            f"  {e}\n"
+            "Install the skill dependencies:\n"
+            f"  pip install -r {Path(__file__).resolve().parent / 'requirements.txt'}",
+            file=sys.stderr,
+        )
     sys.exit(1)
 
 
