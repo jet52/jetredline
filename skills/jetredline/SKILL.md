@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.15.0
+version: 4.16.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -34,8 +34,9 @@ Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a 
 
    **Part 1 — Mechanical edits (JSON).** A fenced ` ```json ` block containing an array of *style/grammar* edits only — the direct `replace` edits from Pass 2. Each entry:
    ```json
-   { "type": "replace", "para": 7, "old": "<exact text, full sentence for unique match>", "new": "<replacement>", "comment": "<rule, e.g. Redbook §11.3>", "source_pass": "style" }
+   { "type": "replace", "para": 7, "old": "<shortest span unique within its paragraph>", "new": "<replacement>", "comment": "<optional — rule, e.g. Redbook §11.3; omit when the diff is self-evident>", "source_pass": "style" }
    ```
+   Keep `old` as short as it can be while remaining unique in its paragraph — the redline deletes and reinserts exactly that span. Omit `comment` for edits whose rationale the diff already shows.
    Include here **only** safe, mechanical Pass 2 replacements. Do **not** put analytical rewrites, restructuring proposals, or anything from Passes 1/3C/4/5/6 in this block. If a Pass 2 item is better expressed as a note than a direct substitution, route it to Part 2 instead.
 
    **Part 2 — Substantive Concerns (markdown).** Everything that needs human (caller) judgment, grouped under these headings (omit a heading if it has no findings):
@@ -462,16 +463,15 @@ Pass `--docx` whenever the draft arrived as a .docx (the same original file Step
     {
         "type": "replace",
         "para": 3,
-        "old": "It is well settled that the court must consider",
-        "new": "The court must consider",
+        "old": "It is well settled that the court",
+        "new": "The court",
         "comment": "Cut throat-clearing (Redbook § 11.3)"
     },
     {
         "type": "replace",
         "para": 7,
         "old": "and/or",
-        "new": "or",
-        "comment": "Never use 'and/or' (Redbook § 11.2)"
+        "new": "or"
     },
     {
         "type": "comment",
@@ -483,9 +483,23 @@ Pass `--docx` whenever the draft arrived as a .docx (the same original file Step
 ```
 Write this JSON to `<TMPDIR>/edits.json`.
 
+**Span width.** `old` and `new` are applied literally: the tracked deletion covers exactly `old` and the insertion covers exactly `new`. Use the **shortest span that is unique within its paragraph** — a phrase or clause, not the surrounding sentence — so the strikethrough covers only what actually changed. If `old` turns out to repeat within its paragraph, the first occurrence is edited and the result carries `"matches": N`; lengthen the span and re-run if that picked the wrong one.
+
+**Comments are optional.** Attach `comment` only when a reader might question the change. Omit it when the diff is self-evident (`and/or` → `or`, an added Oxford comma, a cut throat-clearer). Repeated boilerplate comments on mechanical edits make the redline slower to review, not faster.
+
 **9b. Run apply_edits.py** directly on the original .docx (no unpack step):
 ```bash
 $VENV_PYTHON $SKILL_DIR/apply_edits.py --input <input.docx> --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx>
+```
+
+**Nonbreaking spaces.** The space after `¶`/`§` should be a nonbreaking space (U+00A0), but this is **never** proposed as a tracked change — a change bar on every citation drowns out the substantive edits. Two dispositions, in order of preference:
+
+1. **Default — report it.** Count the offending spaces in the extracted markdown and note them in the analysis document (see the Analysis document template). The user fixes them in Word with one find/replace.
+2. **On request only — normalize deterministically.** If the user asks for the nonbreaking spaces to be applied, add `--normalize-nbsp` to the 9b command. It rewrites the space after each `¶`/`§` **without tracked changes** (no change bars), leaves struck text alone, and is idempotent. Report the `nbsp_normalized` count from the summary in your Step 12 message — an untracked change must always be disclosed. Never pass this flag unprompted.
+
+To count for disposition 1 (locale-proof — bracket expressions over multibyte characters are unreliable in BSD grep):
+```bash
+$VENV_PYTHON -c "import re,sys; print(len(re.findall(r'[¶§]{1,2} ', open(sys.argv[1]).read())))" <TMPDIR>/<draft>.md
 ```
 
 The script operates directly on the .docx ZIP archive — no unpack/pack pipeline, no dependency on the docx plugin. It:
@@ -495,7 +509,7 @@ The script operates directly on the .docx ZIP archive — no unpack/pack pipelin
 - Builds the output ZIP preserving original entry metadata
 - Produces files Word opens cleanly (no encoding or ZIP metadata issues)
 
-**9c. Check the output.** Parse the JSON summary from apply_edits.py. If any edits failed, report them.
+**9c. Check the output.** Parse the JSON summary from apply_edits.py. If any edits failed, report them. Also check each result for a `matches` count above 1 — that edit landed on the first of several identical spans, so confirm it hit the intended one. If `--normalize-nbsp` was used, note `nbsp_normalized` for the Step 12 disclosure.
 
 **9d. Citation hyperlinks (optional).** When the user asks for clickable / linked citations, add `hyperlink` edits to the same `edits.json` — one per citation, anchored to the citation text, using the verified URL (prefer ndlaw `absolute_url`, else the CourtListener URL, else the `url` from `cite_check.py`):
 ```json
@@ -568,7 +582,8 @@ Apply in priority order. Full details in `references/style-guide.md`.
 - Never use Latin-derived words when plain English carries equal precision
 - Always use the Oxford comma
 - Constitutions protect, guarantee, or preserve rights — never "create" or "grant" (unless the text clearly declares a new right)
-- Replace any ordinary space following a paragraph symbol (¶) or section symbol (§) with a nonbreaking space (Unicode U+00A0). In OOXML, use `&#160;` in the XML text. Apply as tracked changes in the output.
+
+**Do not propose nonbreaking-space edits.** The space after `¶`/`§` should be a nonbreaking space (U+00A0), but never raise it as a tracked change: a change bar on every citation buries the substantive edits. It is handled deterministically instead — see "Nonbreaking spaces" under Step 9.
 
 **Style preferences (apply with judgment):**
 - Lead with the point; conclusion before reasoning
@@ -850,6 +865,12 @@ One or more provided source files could not be fully read. Fact-check and brief-
 ## Summary of Edits
 [Brief overview of the types and volume of changes]
 
+[Nonbreaking spaces — include this line only when the count is above zero, and only if --normalize-nbsp was NOT used:]
+**Nonbreaking spaces:** [N] ordinary spaces follow `¶`/`§`. Not redlined — a change bar on every citation would bury the substantive edits. Fix globally in Word: Find `¶ ` → Replace `¶^s`; Find `§ ` → Replace `§^s` (repeat for `¶¶ ` and `§§ `). `^s` is Word's nonbreaking-space code.
+
+[If --normalize-nbsp WAS used, replace the line above with:]
+**Nonbreaking spaces:** [N] ordinary spaces after `¶`/`§` were replaced with nonbreaking spaces (U+00A0) **without tracked changes** — typographic normalization, invisible in print, not shown as a revision.
+
 ## Fact Check
 
 | ¶ | Claim | Source Document(s) | Result | Notes |
@@ -1014,6 +1035,8 @@ Always include this summary. Adapt the list to reflect which outputs were actual
 ## Key Reminders
 
 - Minimal edits: change only what improves the text. Do not rewrite clear passages.
+- Minimal spans: an edit's `old` covers only the words that change, not the sentence around them.
+- Comment only when a reader might question the change; a self-evident diff needs no note.
 - Preserve the court's voice. Polish, do not impose a different style.
 - When uncertain, use a comment rather than a tracked change.
 - For complex restructuring, describe the proposal in a comment.

@@ -12,7 +12,7 @@ Requires only defusedxml beyond the standard library.
 
 Usage:
     python apply_edits.py --input <original.docx> --edits <edits.json> \
-        --output <output.docx> [--author "Claude"]
+        --output <output.docx> [--author "Claude"] [--normalize-nbsp]
 
 Edits JSON format:
     [
@@ -40,9 +40,18 @@ Edits JSON format:
 For "replace" edits:
     - "para" is the 1-indexed paragraph number (¶) for disambiguation.
       If omitted, searches all paragraphs.
-    - "old" is the exact text to find and mark as deleted.
+    - "old" is the exact text to find and mark as deleted.  Use the shortest
+      span that is unique within its paragraph — the deletion and insertion
+      are exactly this wide, so extra context widens the redline.  If the span
+      repeats, the first hit is edited and "matches" is reported.
     - "new" is the replacement text to insert.
-    - "comment" is an optional explanation attached to the change.
+    - "comment" is an optional explanation attached to the change.  Omit it
+      when the diff speaks for itself.
+
+Typographic normalization:
+    --normalize-nbsp replaces the ordinary space after each ¶/§ with U+00A0
+    WITHOUT tracked changes, so it adds no change bars.  Off by default; the
+    count is reported as "nbsp_normalized" and must be disclosed to the user.
 
 For "comment" edits:
     - "para" is the paragraph number.
@@ -68,6 +77,7 @@ import argparse
 import html
 import json
 import random
+import re
 import sys
 import unicodedata
 import zipfile
@@ -426,6 +436,83 @@ def _normalize_for_search(text):
 
 
 # ---------------------------------------------------------------------------
+# Nonbreaking-space normalization (untracked)
+# ---------------------------------------------------------------------------
+
+# One or two ¶/§ symbols followed by a single ordinary space.  Record cites
+# under N.D.R.App.P. 30 take no space at all (R45:12:¶15), so they never match.
+_NBSP_AFTER_SYMBOL = re.compile("[¶§]{1,2}( )")
+
+NBSP = " "
+
+
+def _text_node_data(elem):
+    """Concatenated character data of an element's direct text children."""
+    return "".join(
+        c.data for c in elem.childNodes if c.nodeType == c.TEXT_NODE
+    )
+
+
+def normalize_nbsp(dom):
+    """Replace the ordinary space after ¶/§ with U+00A0, without tracking.
+
+    This is a typographic normalization, not an edit: it produces no w:ins or
+    w:del markup and no change bars.  Callers must disclose that it ran.
+
+    Works over each paragraph's concatenated w:t text so a symbol and its
+    following space may sit in different runs.  Deleted text lives in
+    w:delText, which getElementsByTagName("w:t") does not return, so struck
+    text is left as the author wrote it.  Text inside w:ins is normalized —
+    an insertion this run just made should follow the same convention.
+
+    The substitution is one character for one character, so offsets computed
+    over the concatenated text stay valid while replacing.  An already-correct
+    U+00A0 does not match the pattern, making this idempotent.
+
+    Returns the number of spaces replaced.
+    """
+    replaced = 0
+    for para in dom.getElementsByTagName("w:p"):
+        spans = []       # [element, text, start, end]
+        offset = 0
+        for t in para.getElementsByTagName("w:t"):
+            data = _text_node_data(t)
+            if data:
+                spans.append([t, data, offset, offset + len(data)])
+                offset += len(data)
+        if not spans:
+            continue
+
+        full = "".join(s[1] for s in spans)
+        positions = [m.start(1) for m in _NBSP_AFTER_SYMBOL.finditer(full)]
+        if not positions:
+            continue
+
+        # Group absolute positions by the w:t that holds them, so each element
+        # is rewritten once.
+        pending = {}
+        for pos in positions:
+            for idx, (_elem, _data, start, end) in enumerate(spans):
+                if start <= pos < end:
+                    pending.setdefault(idx, []).append(pos - start)
+                    break
+
+        for idx, local_positions in pending.items():
+            elem, data = spans[idx][0], spans[idx][1]
+            chars = list(data)
+            for lp in local_positions:
+                chars[lp] = NBSP
+                replaced += 1
+            new_data = "".join(chars)
+            for child in list(elem.childNodes):
+                elem.removeChild(child)
+            elem.appendChild(dom.createTextNode(new_data))
+            spans[idx][1] = new_data
+
+    return replaced
+
+
+# ---------------------------------------------------------------------------
 # CommentWriter — self-contained comment injection (in-memory)
 # ---------------------------------------------------------------------------
 
@@ -742,6 +829,7 @@ def apply_replace(dom, edit, edit_index, author, timestamp, next_id,
     match_start = full_text.find(old_text)
     if match_start != -1:
         match_end = match_start + len(old_text)
+        occurrences = full_text.count(old_text)
     else:
         norm_full = _normalize_for_search(full_text)
         norm_old = _normalize_for_search(old_text)
@@ -753,6 +841,7 @@ def apply_replace(dom, edit, edit_index, author, timestamp, next_id,
                 "message": f"Text not found in paragraph runs: {old_text[:80]}..."
             }
         match_end = match_start + len(norm_old)
+        occurrences = norm_full.count(norm_old)
 
     # Identify affected runs with their overlap portions
     affected_runs = []
@@ -851,6 +940,15 @@ def apply_replace(dom, edit, edit_index, author, timestamp, next_id,
             last_change_elem = ins_elems[0]
 
     result = {"edit_index": edit_index, "status": "ok"}
+
+    # Short "old" spans are preferred, but a span that repeats in its paragraph
+    # silently edits the first hit.  Report it so the caller can lengthen it.
+    if occurrences > 1:
+        result["matches"] = occurrences
+        result["message"] = (
+            f'"old" occurs {occurrences} times in the paragraph; edited the '
+            f"first. Lengthen it if a later occurrence was intended."
+        )
 
     # Apply comment if requested
     if comment_text and comment_writer and first_change_elem:
@@ -1109,6 +1207,15 @@ def main():
         "--output", required=True,
         help="Output .docx path",
     )
+    parser.add_argument(
+        "--normalize-nbsp", action="store_true",
+        help=(
+            "Replace the ordinary space after each ¶/§ with a nonbreaking "
+            "space (U+00A0). Applied WITHOUT tracked changes — no change "
+            "bars. Off by default; disclose in the analysis document when "
+            "used. Count is reported as nbsp_normalized."
+        ),
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -1206,6 +1313,12 @@ def main():
             errors.append(result)
 
     # ------------------------------------------------------------------
+    # Typographic normalization (untracked) — runs after the edits so newly
+    # inserted text is normalized too
+    # ------------------------------------------------------------------
+    nbsp_normalized = normalize_nbsp(doc_dom) if args.normalize_nbsp else 0
+
+    # ------------------------------------------------------------------
     # Build output ZIP
     # ------------------------------------------------------------------
     # Always-modified entries
@@ -1258,6 +1371,7 @@ def main():
         "edits_failed": sum(
             1 for r in results if r["status"] == "error"
         ),
+        "nbsp_normalized": nbsp_normalized,
         "edit_results": results,
     }
 
