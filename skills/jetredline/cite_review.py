@@ -1234,8 +1234,12 @@ def _resolve_fact_source(src: dict, record_dir: Path | None,
     item = (src.get("item") or src.get("raw") or "").strip()
     m = _RECORD_ITEM_RE.match(item.split(",")[0].strip())
     if m and record_dir and record_dir.is_dir():
-        # 'R243 - ' prefix: the space-dash boundary keeps R24 from matching R243
-        matches = sorted(record_dir.glob(f"R{m.group(1)} - *.pdf"))
+        # Accept both item-naming styles: 'R243 - Title.pdf' (the documented
+        # form) and 'R243-Title.pdf' (what splitmarks' sanitize_filename
+        # emits, which collapses ' - ' to '-'). In both globs the literal
+        # dash boundary keeps R24 from matching R243.
+        matches = (sorted(record_dir.glob(f"R{m.group(1)} - *.pdf"))
+                   or sorted(record_dir.glob(f"R{m.group(1)}-*.pdf")))
         if matches:
             return matches[0]
 
