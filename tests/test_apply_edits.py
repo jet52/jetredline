@@ -49,13 +49,13 @@ def make_docx(tmp_path, body_xml, name="input.docx"):
     return path
 
 
-def run_apply_edits(tmp_path, docx, edits):
+def run_apply_edits(tmp_path, docx, edits, extra_args=()):
     edits_path = tmp_path / "edits.json"
     edits_path.write_text(json.dumps(edits))
     output = tmp_path / "output.docx"
     proc = subprocess.run(
         [sys.executable, str(APPLY_EDITS), "--input", str(docx),
-         "--edits", str(edits_path), "--output", str(output)],
+         "--edits", str(edits_path), "--output", str(output), *extra_args],
         capture_output=True, text=True)
     summary = json.loads(proc.stdout)
     return proc, summary, output
@@ -125,3 +125,114 @@ def test_plain_replace_still_works(tmp_path):
         doc = zf.read("word/document.xml").decode("utf-8")
     assert "<w:del " in doc and "<w:ins " in doc
     assert "The court" in doc
+
+
+# ---------------------------------------------------------------------------
+# --normalize-nbsp
+# ---------------------------------------------------------------------------
+
+NBSP = " "
+
+
+def _doc_text(output):
+    with zipfile.ZipFile(output) as zf:
+        return zf.read("word/document.xml").decode("utf-8")
+
+
+def test_nbsp_off_by_default(tmp_path):
+    body = (
+        '<w:p><w:r><w:t xml:space="preserve">See 2024 ND 156, ¶ 12; '
+        'N.D.C.C. § 32-15-22.</w:t></w:r></w:p>'
+    )
+    docx = make_docx(tmp_path, body)
+    proc, summary, output = run_apply_edits(tmp_path, docx, [])
+    assert summary["nbsp_normalized"] == 0, summary
+    doc = _doc_text(output)
+    assert "¶ 12" in doc
+    assert NBSP not in doc
+
+
+def test_nbsp_normalizes_untracked(tmp_path):
+    body = (
+        '<w:p><w:r><w:t xml:space="preserve">See 2024 ND 156, ¶ 12, '
+        '¶¶ 6-8; N.D.C.C. § 32-15-22; '
+        '§§ 1-2.</w:t></w:r></w:p>'
+    )
+    docx = make_docx(tmp_path, body)
+    proc, summary, output = run_apply_edits(
+        tmp_path, docx, [], extra_args=["--normalize-nbsp"])
+    assert summary["nbsp_normalized"] == 4, summary
+    doc = _doc_text(output)
+    assert f"¶{NBSP}12" in doc
+    assert f"¶¶{NBSP}6-8" in doc
+    assert f"§{NBSP}32-15-22" in doc
+    assert f"§§{NBSP}1-2" in doc
+    # Untracked: no revision markup introduced
+    assert "<w:del " not in doc and "<w:ins " not in doc
+
+
+def test_nbsp_spans_run_boundary(tmp_path):
+    """The symbol and its space may sit in different runs."""
+    body = (
+        '<w:p><w:r><w:t>¶</w:t></w:r>'
+        '<w:r><w:t xml:space="preserve"> 12</w:t></w:r></w:p>'
+    )
+    docx = make_docx(tmp_path, body)
+    proc, summary, output = run_apply_edits(
+        tmp_path, docx, [], extra_args=["--normalize-nbsp"])
+    assert summary["nbsp_normalized"] == 1, summary
+    assert f"{NBSP}12" in _doc_text(output)
+
+
+def test_nbsp_is_idempotent(tmp_path):
+    body = (
+        f'<w:p><w:r><w:t xml:space="preserve">See ¶{NBSP}12 and '
+        f'§ 4.</w:t></w:r></w:p>'
+    )
+    docx = make_docx(tmp_path, body)
+    proc, summary, output = run_apply_edits(
+        tmp_path, docx, [], extra_args=["--normalize-nbsp"])
+    assert summary["nbsp_normalized"] == 1, summary
+
+
+def test_nbsp_leaves_deleted_text_alone(tmp_path):
+    """Struck text stays as the author wrote it; insertions are normalized."""
+    body = (
+        '<w:p>'
+        '<w:del w:id="900" w:author="A" w:date="2024-01-01T00:00:00Z">'
+        '<w:r><w:delText xml:space="preserve">¶ 5</w:delText></w:r>'
+        '</w:del>'
+        '<w:ins w:id="901" w:author="A" w:date="2024-01-01T00:00:00Z">'
+        '<w:r><w:t xml:space="preserve">¶ 6</w:t></w:r>'
+        '</w:ins>'
+        '</w:p>'
+    )
+    docx = make_docx(tmp_path, body)
+    proc, summary, output = run_apply_edits(
+        tmp_path, docx, [], extra_args=["--normalize-nbsp"])
+    assert summary["nbsp_normalized"] == 1, summary
+    doc = _doc_text(output)
+    assert "¶ 5</w:delText>" in doc
+    assert f"¶{NBSP}6" in doc
+
+
+def test_nbsp_skips_record_cites(tmp_path):
+    """N.D.R.App.P. 30 record cites take no space, so nothing to replace."""
+    body = '<w:p><w:r><w:t>R45:12:¶15</w:t></w:r></w:p>'
+    docx = make_docx(tmp_path, body)
+    proc, summary, output = run_apply_edits(
+        tmp_path, docx, [], extra_args=["--normalize-nbsp"])
+    assert summary["nbsp_normalized"] == 0, summary
+
+
+def test_repeated_old_span_reports_match_count(tmp_path):
+    body = (
+        '<w:p><w:r><w:t xml:space="preserve">Because the court weighed it, '
+        'the court did not err.</w:t></w:r></w:p>'
+    )
+    docx = make_docx(tmp_path, body)
+    edits = [{"type": "replace", "para": 1,
+              "old": "the court", "new": "the district court"}]
+    proc, summary, output = run_apply_edits(tmp_path, docx, edits)
+    assert summary["edits_applied"] == 1, summary
+    assert summary["edit_results"][0]["matches"] == 2, summary
