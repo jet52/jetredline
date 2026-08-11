@@ -264,13 +264,26 @@ def collect_subagent_rows(transcript_path) -> list:
                     continue
 
                 # --- completion notification (background) ---
+                # The harness delivers a notification as an "attachment"
+                # record when the orchestrator is mid-turn at completion, but
+                # as a synthetic "user" message when the orchestrator is idle
+                # waiting on it. Parse both, or the pass vanishes from the
+                # table whenever the orchestrator finished its turn first --
+                # which is exactly what happens on the longest-running pass.
+                text = None
                 if record.get("type") == "attachment":
                     attachment = record.get("attachment")
-                    if not isinstance(attachment, dict):
-                        continue
-                    text = attachment.get("prompt")
-                    if not isinstance(text, str) or "<task-notification>" not in text:
-                        continue
+                    if isinstance(attachment, dict):
+                        text = attachment.get("prompt")
+                elif record.get("type") == "user":
+                    content = (record.get("message") or {}).get("content")
+                    if isinstance(content, str):
+                        text = content
+                    elif isinstance(content, list):
+                        text = " ".join(block.get("text", "")
+                                        for block in content
+                                        if isinstance(block, dict))
+                if isinstance(text, str) and "<task-notification>" in text:
                     ident = _NOTIF_ID_RE.search(text)
                     if not ident:
                         continue
@@ -281,6 +294,8 @@ def collect_subagent_rows(transcript_path) -> list:
                         "duration_ms": _int_or_none(_NOTIF_MS_RE.search(text)),
                         "status": status.group(1).lower() if status else None,
                     }
+                    continue
+                if record.get("type") == "attachment":
                     continue
 
                 result = record.get("toolUseResult")
