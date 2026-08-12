@@ -245,6 +245,40 @@ class TestViewerGeneration:
         assert "PDF_DATA" in viewer and "JVBERi" in viewer  # %PDF b64
         assert "normWithMap" in viewer                      # v2 template
 
+    def test_identical_content_shares_one_sidecar(self, tmp_path):
+        """A re-run's extract beside a hand-made copy must not embed twice."""
+        a = tmp_path / "authorities" / "journal_p65-70.pdf"
+        b = tmp_path / "hand" / "Journal-excerpt.pdf"
+        a.parent.mkdir()
+        b.parent.mkdir()
+        a.write_bytes(b"%PDF-1.4 identical body")
+        b.write_bytes(b"%PDF-1.4 identical body")
+        out = tmp_path / "review.html"
+        got = _generate_local_pdf_viewers([a, b], out)
+        assert got[str(a.resolve())] == got[str(b.resolve())]
+        assert len(list((tmp_path / "review_pdfs").glob("*.html"))) == 1
+
+    def test_asset_budget_links_the_overflow_and_reports(self, tmp_path, capsys):
+        small = tmp_path / "small.pdf"
+        big = tmp_path / "big.pdf"
+        small.write_bytes(b"%PDF tiny")
+        big.write_bytes(b"%PDF " + b"x" * 5000)
+        out = tmp_path / "review.html"
+        got = _generate_local_pdf_viewers([big, small], out, asset_budget=1000)
+        # Smallest-first: the small file embeds, the big one degrades to a link.
+        assert got[str(small.resolve())].startswith("review_pdfs/")
+        assert got[str(big.resolve())] == "big.pdf"
+        err = capsys.readouterr().err
+        assert "1 embedded" in err and "1 linked" in err and "big.pdf" in err
+
+    def test_asset_budget_zero_embeds_nothing(self, tmp_path):
+        pdf = tmp_path / "a.pdf"
+        pdf.write_bytes(b"%PDF x")
+        out = tmp_path / "review.html"
+        got = _generate_local_pdf_viewers([pdf], out, asset_budget=0)
+        assert got[str(pdf.resolve())] == "a.pdf"
+        assert not (tmp_path / "review_pdfs").exists()
+
 
 # ---------------------------------------------------------------------------
 # Page integration

@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import base64
+import hashlib
 import html
 import json
 import os
@@ -1379,14 +1380,31 @@ def _viewer_name(pdf_path: Path, taken: set[str]) -> str:
     return name
 
 
+def _relative_link(p: Path, output_path: Path) -> str:
+    try:
+        rel = os.path.relpath(p, output_path.parent.resolve())
+    except ValueError:  # different drive (Windows)
+        return p.as_uri()
+    return rel.replace(os.sep, "/")
+
+
 def _generate_local_pdf_viewers(pdf_paths: list[Path], output_path: Path,
-                                link_pdfs: bool = False) -> dict[str, str]:
+                                link_pdfs: bool = False,
+                                asset_budget: int | None = None
+                                ) -> dict[str, str]:
     """Map each unique source PDF to an embeddable URL.
 
     Default: a base64 PDF.js sidecar viewer (quote highlighting, exact-page
     landing, any browser). --link-pdfs: a relative file URL for a native
     iframe — zero-copy, but no quote highlight and #page support varies.
     Keys are absolute path strings.
+
+    Embedded viewers are pooled: two paths with identical bytes (a re-run's
+    extract beside a hand-made one, a copy in two directories) share one
+    sidecar. ``asset_budget`` caps the total *source* bytes embedded (base64
+    inflates each by about a third); files are embedded smallest-first so the
+    cap costs as few viewers as possible, and anything over the cap degrades
+    to a relative link — reported, never silent.
     """
     out: dict[str, str] = {}
     uniq: list[Path] = []
@@ -1397,27 +1415,58 @@ def _generate_local_pdf_viewers(pdf_paths: list[Path], output_path: Path,
 
     if link_pdfs:
         for p in uniq:
-            try:
-                rel = os.path.relpath(p, output_path.parent.resolve())
-            except ValueError:  # different drive (Windows)
-                rel = p.as_uri()
-            out[str(p)] = rel.replace(os.sep, "/")
+            out[str(p)] = _relative_link(p, output_path)
         return out
+
+    def size_of(p: Path) -> int:
+        try:
+            return p.stat().st_size
+        except OSError:
+            return 0
+
+    if asset_budget is not None:
+        uniq.sort(key=size_of)
 
     pdf_dir = output_path.parent / (output_path.stem + "_pdfs")
     taken: set[str] = set()
+    by_hash: dict[str, str] = {}
+    spent = deduped = 0
+    linked: list[tuple[str, int]] = []
     for p in uniq:
         try:
-            pdf_b64 = base64.b64encode(p.read_bytes()).decode("ascii")
+            data = p.read_bytes()
         except OSError as e:
             print(f"  Warning: could not read {p}: {e}", file=sys.stderr)
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        if digest in by_hash:
+            out[str(p)] = by_hash[digest]
+            deduped += 1
+            continue
+        if asset_budget is not None and spent + len(data) > asset_budget:
+            out[str(p)] = by_hash[digest] = _relative_link(p, output_path)
+            linked.append((p.name, len(data)))
             continue
         pdf_dir.mkdir(exist_ok=True)
         viewer_file = pdf_dir / (_viewer_name(p, taken) + ".html")
         viewer_file.write_text(
-            _PDFJS_VIEWER_TEMPLATE.replace("__PDF_BASE64__", pdf_b64),
+            _PDFJS_VIEWER_TEMPLATE.replace(
+                "__PDF_BASE64__", base64.b64encode(data).decode("ascii")),
             encoding="utf-8")
-        out[str(p)] = str(viewer_file.relative_to(output_path.parent))
+        out[str(p)] = by_hash[digest] = str(
+            viewer_file.relative_to(output_path.parent))
+        spent += len(data)
+    if deduped or linked:
+        embedded = len(by_hash) - len(linked)
+        print(f"  Asset pool: {embedded} embedded ({spent / 1e6:.1f} MB)"
+              + (f", {deduped} duplicate path(s) share a viewer"
+                 if deduped else "")
+              + (f", {len(linked)} linked instead of embedded "
+                 f"(--asset-budget {asset_budget:,} bytes)" if linked else ""),
+              file=sys.stderr)
+        for name, nbytes in linked:
+            print(f"    linked (not embedded): {name} ({nbytes / 1e6:.1f} MB)",
+                  file=sys.stderr)
     return out
 
 
@@ -3368,6 +3417,14 @@ def main():
                              "sidecars. Zero-copy, but no quote "
                              "highlighting and page landing depends on the "
                              "browser's built-in PDF viewer.")
+    parser.add_argument("--asset-budget", type=int, metavar="BYTES",
+                        help="Cap on total source bytes embedded as PDF.js "
+                             "sidecars (base64 inflates each by about a "
+                             "third). Files are embedded smallest-first; "
+                             "anything over the cap degrades to a relative "
+                             "link, and the degradation is reported on "
+                             "stderr. No cap by default. Moot with "
+                             "--link-pdfs, which embeds nothing.")
     parser.add_argument("--ndlaw-base", default=_NDLAW_DEFAULT_BASE,
                         help="Base URL of the ndlaw citation site used for the "
                              "reading-copy pane (default: %(default)s). Point "
@@ -3520,7 +3577,8 @@ def main():
                   file=sys.stderr)
 
     fact_viewers = (_generate_local_pdf_viewers(fact_pdfs, out,
-                                                link_pdfs=args.link_pdfs)
+                                                link_pdfs=args.link_pdfs,
+                                                asset_budget=args.asset_budget)
                     if fact_pdfs else {})
 
     for meta in sources_meta.values():
