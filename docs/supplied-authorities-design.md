@@ -209,11 +209,22 @@ Internet Archive full-text search, HathiTrust, or Google Books.
 | Phase | Content | Value |
 |---|---|---|
 | **1** ✅ | Bugs F1–F5 + the C1 quality scorer | **Shipped in 4.17.0.** Removes a silent-corruption risk from every existing run. |
-| **2** | `pdfsource.py` (probe/ocr/locate/extract/compact) | Usable standalone immediately; ends the one-off shell commands. |
-| **3** | Pass 3D discovery + matching → `authorities.json`; cite_review rendering, filter chips, asset pool | The feature proper. |
+| **2** ~ | `pdfsource.py` (probe/locate/extract/compact) | **Landed** — `ocr`/`repair` folded into `extract`; `find` still open. |
+| **3** ~ | Pass 3D discovery + matching → `authorities.json`; cite_review rendering, filter chips, asset pool | **Rendering landed** (`--authorities-json`, lane chips, `suppliedpdf` mode). Discovery + matching still open. |
 | **4** | Retrieval of unmatched references; analysis-doc section | Optional polish. |
 
 Phase 1 is worth doing on its own even if nothing else ships.
+
+**Status, 2026-08-12.** Phases 1 and 2 are in, and Phase 3's rendering half is
+in. What remains is the automation: Pass 3D's two-sided discovery (extract
+authority references from the draft; inventory and identify the PDFs on disk)
+and the fuzzy match between them, validated against `locate`'s measured offset.
+`authorities.json` is currently hand-authored; `pdfsource.py` now supplies every
+primitive that generating it requires.
+
+Also still open from Phase 2: `find`, the OCR-tolerant passage search. It is not
+needed to place a page, only to confirm a quote once there, so it was deferred
+behind the offset work.
 
 ---
 
