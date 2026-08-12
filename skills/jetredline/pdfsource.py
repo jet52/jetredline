@@ -70,8 +70,9 @@ __all__ = [
     "page_count", "page_text", "LocateResult",
 ]
 
-#: Pages sampled by `locate` before giving up on agreement.
-DEFAULT_SAMPLES = 6
+#: Pages sampled by `locate` before giving up on agreement. Pairs are what
+#: actually vote, so this is roughly twice the number of probe points.
+DEFAULT_SAMPLES = 10
 
 #: Default ceiling for `compact`. Sidecar viewers base64 the file, inflating
 #: it by a third, so a few MB per authority is the practical limit.
@@ -265,9 +266,13 @@ def locate(path: Path, samples: int = DEFAULT_SAMPLES,
     across pages, so it fails the +1 test outright — which is precisely the
     contamination that defeats reading any single page in isolation.
 
-    Falls back to modal single-page voting when no pair agrees, and requires a
-    non-negative offset there: front matter means printed >= PDF page in
-    essentially every bound volume.
+    Falls back to modal single-page voting when no pair agrees.
+
+    The offset's *sign* carries no constraint, and assuming one is a trap. A
+    bound volume with unnumbered front matter runs negative — printed page 90
+    sits on PDF page 98, so the offset is -8. A file holding only the back half
+    of a set runs strongly positive — printed 1522 on PDF page 377 is +1145.
+    Both occur in the same project directory.
     """
     path = Path(path)
     total = pages if pages is not None else page_count(path)
@@ -294,16 +299,24 @@ def locate(path: Path, samples: int = DEFAULT_SAMPLES,
     pair_votes: Counter[int] = Counter()
     evidence: list[dict] = []
     for pg in starts:
-        a_txt = page_text(path, pg)
+        # A blank or unnumbered leaf (a plate, a section divider) yields
+        # nothing; step forward rather than spend the sample on it.
+        a_txt = ""
+        for probe_pg in (pg, pg + 2, pg + 4):
+            if probe_pg + 1 > total:
+                break
+            a_txt = page_text(path, probe_pg)
+            if a_txt:
+                pg = probe_pg
+                break
         b_txt = page_text(path, pg + 1) if pg + 1 <= total else ""
         a = _candidates(a_txt)
         b = set(_candidates(b_txt))
         if a_txt:
             res["sampled"] += 1
         for n in set(a):
-            if n - pg >= 0:
-                tally[n - pg] += 1
-            if n + 1 in b:            # consecutive folios: a real page number
+            tally[n - pg] += 1
+            if n + 1 in b:            # consecutive folios
                 pair_votes[n - pg] += 1
         evidence.append({"pdf_page": pg,
                          "candidates": sorted(set(a))[:6],
@@ -313,7 +326,7 @@ def locate(path: Path, samples: int = DEFAULT_SAMPLES,
 
     if pair_votes:
         offset, votes = pair_votes.most_common(1)[0]
-        conf = min(1.0, 0.6 + 0.2 * votes)
+        conf = 0.5 if votes < 2 else min(1.0, 0.55 + 0.15 * votes)
         res["offsets_seen"] = sorted(pair_votes)
         if len(pair_votes) > 1:
             # Different parts of the volume disagree. Usually an inserted plate

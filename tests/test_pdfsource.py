@@ -110,3 +110,24 @@ class TestGracefulDegradation:
         empty = tmp_path / "empty.pdf"
         empty.write_bytes(b"")
         assert locate(empty).offset is None
+
+
+class TestOffsetSign:
+    """The offset's sign carries no constraint, and assuming one is a trap.
+
+    An early version filtered negative offsets on the theory that front matter
+    makes printed >= PDF page. It is the reverse: unnumbered front matter puts
+    printed page 90 on PDF page 98, an offset of -8, and that filter silently
+    discarded four unanimous votes. A file holding only the back half of a set
+    runs strongly positive. Both occur in one project directory.
+    """
+
+    def test_negative_offset_is_representable(self):
+        r = LocateResult({"offset": -8, "pages": 470})
+        assert r.pdf_page(157) == 165
+        assert r.contains(157) is True
+
+    def test_large_positive_offset_is_representable(self):
+        r = LocateResult({"offset": 1145, "pages": 437})
+        assert r.pdf_page(1522) == 377
+        assert r.contains(1522) is True
