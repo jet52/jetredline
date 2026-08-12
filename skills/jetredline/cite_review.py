@@ -1587,7 +1587,7 @@ main { display:flex; flex:1; overflow:hidden; }
   100% { background:var(--cite-hl); }
 }
 
-/* Resize handle */
+/* Resize handles */
 .resize-handle {
   height:5px; background:var(--accent-dim); cursor:row-resize;
   flex-shrink:0; position:relative;
@@ -1597,6 +1597,28 @@ main { display:flex; flex:1; overflow:hidden; }
   transform:translate(-50%,-50%);
   width:32px; height:2px; background:var(--accent); border-radius:1px;
 }
+
+/* Sidebar splitter. Sits between the citation list and the content pane;
+   drag to resize, double-click to restore the default width. */
+.sidebar-resize {
+  width:5px; background:var(--border); cursor:col-resize;
+  flex-shrink:0; position:relative; transition:background 0.15s;
+}
+.sidebar-resize:hover, .sidebar-resize.dragging { background:var(--accent-dim); }
+.sidebar-resize::after {
+  content:''; position:absolute; left:50%; top:50%;
+  transform:translate(-50%,-50%);
+  width:2px; height:32px; background:var(--accent); border-radius:1px;
+  opacity:0; transition:opacity 0.15s;
+}
+.sidebar-resize:hover::after, .sidebar-resize.dragging::after { opacity:1; }
+
+/* While a drag is in flight, iframes must stop swallowing mousemove — the
+   source pane hosts PDF viewers, and without this the drag freezes the
+   instant the pointer crosses one. Selection is suppressed for the same
+   reason a text drag would otherwise start. */
+body.resizing { user-select:none; -webkit-user-select:none; }
+body.resizing iframe { pointer-events:none; }
 
 /* Source pane */
 .pane-src {
@@ -1825,6 +1847,7 @@ _JS = """\
   const DATA = __DATA__;
   const SOURCES = __SOURCES__;
   const STORAGE_KEY = 'cite-review-' + __FILE_KEY__;
+  const LAYOUT_KEY = 'cite-review-layout-' + __FILE_KEY__;
 
   let currentIdx = 0;
   let autoAdvance = true;
@@ -2429,7 +2452,7 @@ _JS = """\
     if (e.target === document.querySelector('.help-overlay')) closeHelp();
   });
 
-  // Resize handle
+  // Resize handle (draft / source split)
   const handle = document.querySelector('.resize-handle');
   const draftPane = document.querySelector('.pane-draft');
   const split = document.querySelector('.split');
@@ -2437,6 +2460,7 @@ _JS = """\
 
   handle.addEventListener('mousedown', (e) => {
     dragging = true;
+    document.body.classList.add('resizing');
     e.preventDefault();
   });
   document.addEventListener('mousemove', (e) => {
@@ -2445,8 +2469,75 @@ _JS = """\
     const pct = ((e.clientY - rect.top) / rect.height) * 100;
     const clamped = Math.max(15, Math.min(85, pct));
     draftPane.style.flex = '0 0 ' + clamped + '%';
+    saveLayout({ splitPct: clamped });
   });
-  document.addEventListener('mouseup', () => { dragging = false; });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('resizing');
+  });
+
+  // Sidebar splitter
+  const SIDEBAR_DEFAULT = 280;
+  const SIDEBAR_MIN = 160;
+  const sidebar = document.querySelector('.sidebar');
+  const sideHandle = document.querySelector('.sidebar-resize');
+  let sideDragging = false;
+
+  // Never let the sidebar crowd out the content pane on a narrow window.
+  function sidebarMax() {
+    return Math.max(SIDEBAR_MIN, Math.round(window.innerWidth * 0.6));
+  }
+  function setSidebarWidth(px, persist) {
+    const w = Math.round(Math.max(SIDEBAR_MIN, Math.min(sidebarMax(), px)));
+    sidebar.style.width = w + 'px';
+    if (persist) saveLayout({ sidebarW: w });
+    return w;
+  }
+
+  sideHandle.addEventListener('mousedown', (e) => {
+    sideDragging = true;
+    sideHandle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!sideDragging) return;
+    setSidebarWidth(e.clientX - sidebar.getBoundingClientRect().left, true);
+  });
+  document.addEventListener('mouseup', () => {
+    if (!sideDragging) return;
+    sideDragging = false;
+    sideHandle.classList.remove('dragging');
+    document.body.classList.remove('resizing');
+  });
+  sideHandle.addEventListener('dblclick', () => {
+    setSidebarWidth(SIDEBAR_DEFAULT, true);
+  });
+
+  // Layout is persisted next to the review state but under its own key, so
+  // clearing one never disturbs the other.
+  function saveLayout(patch) {
+    try {
+      const cur = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(
+        Object.assign(cur, patch)));
+    } catch(e) {}
+  }
+  (function restoreLayout() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}'); }
+    catch(e) {}
+    if (saved.sidebarW) setSidebarWidth(saved.sidebarW, false);
+    if (saved.splitPct) draftPane.style.flex = '0 0 ' + saved.splitPct + '%';
+  })();
+
+  // A restored width can exceed the cap after the window shrinks.
+  window.addEventListener('resize', () => {
+    if (sidebar.offsetWidth > sidebarMax()) {
+      setSidebarWidth(sidebar.offsetWidth, false);
+    }
+  });
 
   // Export state
   window.exportReviewState = function() {
@@ -2883,6 +2974,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     <div class="sidebar-header">Citations ({n_cites})</div>
     <div class="cite-list"></div>
   </div>
+
+  <div class="sidebar-resize" title="Drag to resize · double-click to reset"></div>
 
   <div class="content">
     <div class="split">
