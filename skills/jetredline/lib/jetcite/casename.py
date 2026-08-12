@@ -27,8 +27,23 @@ _INNER = r"(?:of|the|and|ex\s+rel\.?|on\s+behalf\s+of|&)"
 # Ass'n, possessives, hyphenated forms, initials).
 _WORD = r"[A-Z][A-Za-z0-9.'’\-]*"
 
-# A party: a name word followed by more name words / inner connectives.
-_PARTY = rf"{_WORD}(?:\s+(?:{_WORD}|{_INNER}))*"
+# Suffixes that follow a comma *inside* a party name: "Lee Optical of Okla.,
+# Inc.", "Hamich, Inc. v. ...", "Bank of N.D., N.A.", "Smith, Jr."
+#
+# Only these admit a comma. A general "comma then capitalized word" rule would
+# reach backward into the preceding sentence — in "In Smith, Jones v. Brown"
+# it would capture "Smith," — so the allowance is deliberately limited to
+# tokens that cannot begin a sentence's next clause by accident.
+_SUFFIX = (
+    r"(?:Inc|Incorporated|LLC|L\.L\.C|LLP|L\.L\.P|LP|L\.P|PLLC|"
+    r"Co|Corp|Corporation|Ltd|Limited|PC|P\.C|PA|P\.A|NA|N\.A|SA|S\.A|"
+    r"Ass'n|Assn|Ass’n|Association|Bros|Sons|Trust|"
+    r"Jr|Sr|II|III|IV)\.?"
+)
+
+# A party: a name word followed by more name words / inner connectives, and
+# optionally a comma-separated corporate or generational suffix.
+_PARTY = rf"{_WORD}(?:\s+(?:{_WORD}|{_INNER}))*(?:,\s*{_SUFFIX})*"
 
 # Procedural caption prefixes (these stand on their own — no " v. " required).
 _PREFIX = (
