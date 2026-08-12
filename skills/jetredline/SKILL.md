@@ -198,6 +198,7 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
 | PDF page grep | `$SKILL_DIR/pdf_page_grep.py` |
 | Text-layer quality | `$SKILL_DIR/textquality.py` |
+| Supplied-source PDFs | `$SKILL_DIR/pdfsource.py` |
 | Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
 | OOXML validate | `$SKILL_DIR/ooxml_validate.py` |
