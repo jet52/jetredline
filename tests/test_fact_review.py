@@ -12,6 +12,7 @@ from pypdf import PdfWriter
 
 from cite_review import (
     _build_html,
+    _candidate_manifests,
     _fact_source_hash,
     _find_quote_position,
     _generate_local_pdf_viewers,
@@ -127,6 +128,73 @@ class TestSourceResolution:
 
     def test_unresolvable_returns_none(self, tmp_path):
         assert _resolve_fact_source({"item": "R999"}, None, [], tmp_path) is None
+
+    def test_bare_digit_item_with_r_prefixed_raw(self, record_dir, tmp_path):
+        """Pass 4 ledgers store item='785' with the R only in raw.
+
+        Every record reference in one production run failed to resolve this
+        way — 27 of 27 — because the regex required the prefix on `item`.
+        """
+        got = _resolve_fact_source({"item": "243", "raw": "R243, p. 6, para 12"},
+                                   record_dir, [], tmp_path)
+        assert got.name == "R243 - Order Denying Motion.pdf"
+
+    def test_bare_digit_item_needs_corroborating_raw(self, record_dir, tmp_path):
+        """A bare number alone is ambiguous with a docket id, so it must not
+        be treated as a record item on its own."""
+        assert _resolve_fact_source({"item": "243"}, record_dir, [],
+                                    tmp_path) is None
+
+    def test_bare_digit_item_ignores_mismatched_raw(self, record_dir, tmp_path):
+        """raw naming a different item must not resolve the bare number."""
+        assert _resolve_fact_source({"item": "243", "raw": "R24, p. 6"},
+                                    record_dir, [], tmp_path) is None
+
+    def test_bare_digit_still_reaches_manifest(self, tmp_path):
+        """The docket-number path must survive the record-item change."""
+        _write_pdf(tmp_path / "20260029_017_Apt-Br.pdf")
+        manifest = [{"docketId": 17, "filename": "20260029_017_Apt-Br.pdf"}]
+        got = _resolve_fact_source({"item": "017", "raw": "Appellee Br., p. 3"},
+                                   None, manifest, tmp_path)
+        assert got.name == "20260029_017_Apt-Br.pdf"
+
+
+class TestManifestDiscovery:
+    def test_prefers_case_dir(self, tmp_path):
+        (tmp_path / "manifest.json").write_text("[]")
+        (tmp_path / "briefs").mkdir()
+        (tmp_path / "briefs" / "manifest.json").write_text("[]")
+        got = _candidate_manifests(tmp_path)
+        assert got[0] == tmp_path / "manifest.json"
+
+    def test_finds_manifest_in_briefs_subdir(self, tmp_path):
+        """jetmemo's downloader writes manifest.json beside the PDFs."""
+        (tmp_path / "briefs").mkdir()
+        (tmp_path / "briefs" / "manifest.json").write_text("[]")
+        got = _candidate_manifests(tmp_path)
+        assert got == [tmp_path / "briefs" / "manifest.json"]
+
+    def test_conventional_names_sort_first(self, tmp_path):
+        for sub in ("aaa_other", "briefs"):
+            (tmp_path / sub).mkdir()
+            (tmp_path / sub / "manifest.json").write_text("[]")
+        got = _candidate_manifests(tmp_path)
+        assert got[0].parent.name == "briefs"
+
+    def test_skips_dot_and_dunder_dirs(self, tmp_path):
+        for sub in (".tmp-abc", "__pycache__"):
+            (tmp_path / sub).mkdir()
+            (tmp_path / sub / "manifest.json").write_text("[]")
+        assert _candidate_manifests(tmp_path) == []
+
+    def test_no_manifest_anywhere(self, tmp_path):
+        assert _candidate_manifests(tmp_path) == []
+
+    def test_does_not_recurse_below_one_level(self, tmp_path):
+        deep = tmp_path / "a" / "b"
+        deep.mkdir(parents=True)
+        (deep / "manifest.json").write_text("[]")
+        assert _candidate_manifests(tmp_path) == []
 
     def test_manifest_loader_tolerates_garbage(self, tmp_path):
         p = tmp_path / "m.json"

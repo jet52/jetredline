@@ -161,11 +161,14 @@ jetredline/
 │       ├── check_update.py         # Version check on session start
 │       ├── provenance.py           # Model/version/date stamp for analysis documents
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.
+│       ├── textquality.py          # PDF text-layer triage: ok / image-only / corrupt
+│       ├── pdf_page_grep.py        # Find a string in a PDF, report its page
 │       ├── splitmarks.py           # PDF bookmark splitter (bundled)
 │       ├── ooxml_fixup.py          # OOXML debugging tool (not in main pipeline)
 │       ├── ooxml_validate.py       # OOXML debugging tool (not in main pipeline)
 │       └── references/
 │           ├── nd-appellate-rules.md
+│           ├── nd-citation-style.md
 │           ├── style-guide.md
 │           └── pass-instructions/  # Delegated-pass instructions read by subagents
 │               ├── pass1-jurisdiction.md

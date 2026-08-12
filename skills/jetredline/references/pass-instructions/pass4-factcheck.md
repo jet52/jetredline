@@ -45,6 +45,8 @@ this" — the wrong conclusion, reached invisibly.
   - `draft_quote` — a **short verbatim span copied from the draft paragraph** containing the claim (10–20 words). Never paraphrase: this string anchors and highlights the claim in the draft pane, so it must appear in the draft exactly.
   - `result` — the Result column value; `note` — the Notes column, condensed
   - `sources` — one object per cited source: `raw` (the cite as written, e.g. `"R243, p. 6"`), `item` (the record item or docket number, e.g. `"R243"` or `"017"`), `page` (integer page within that document, when known), `para_pin` (e.g. `"¶ 9"` when the pin is a paragraph), and `quote` — a **short verbatim passage from the source evidencing the claim**. Always include `quote` when you located the passage: it is what the review page uses to find the page and highlight the evidence inside the embedded PDF, and it is far more reliable than a paragraph pin.
+
+    **Write record items with the `R` prefix in `item`** — `"R243"`, not `"243"`. A bare number is indistinguishable from a docket number, so it resolves against the brief manifest instead of the record directory. (The loader recovers the prefix from `raw` when `raw` names the same item, but do not rely on that: set `item` correctly.)
 - **Also return an Ingestion Status table** (one row per source PDF) so the caller can reconcile coverage:
 
 | Source file | Pages | Ingestion | Method |
