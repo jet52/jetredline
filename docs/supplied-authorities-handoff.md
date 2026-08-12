@@ -118,6 +118,13 @@ matches three volumes of one set equally where only the page check disambiguates
 
 ## 3. What is left
 
+> **Update 2026-08-12 (4.18.0):** §3.1–3.3 landed — `pass3d-authorities.md`
+> (the subagent runs `cite_check.py` itself, so Pass 3D launches in parallel
+> with 3B), SKILL.md wiring (Part D, workflow step 5a, `--authorities-json`
+> in Step 11b, the Supplied Authorities analysis section, scope map 3A–D),
+> and provenance labels for the usage table. Remaining: the end-to-end run
+> against the originating case (§6 item 2) and the §3.4 optionals.
+
 ### 3.1 The model step — the only real gap
 
 `candidates_from_draft()` emits spans. Something must turn them into structured

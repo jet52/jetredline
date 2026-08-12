@@ -78,7 +78,7 @@ _FOOTER_RE = re.compile(
 # line. That tier is what lets sibling skills with un-numbered analysis agents
 # (jetmemo, jetrehearing) render a table at all.
 _PASS_FILE_RE = re.compile(r"pass-instructions/(pass\d+[a-z]?-[a-z0-9-]+)\.md", re.I)
-_PASS_PROSE_RE = re.compile(r"\bPass\s+(\d+[AB]?)\b", re.I)
+_PASS_PROSE_RE = re.compile(r"\bPass\s+(\d+[ABD]?)\b", re.I)
 _PROSE_SCAN_CHARS = 400
 
 # Column header for the first column, and the noun used in the heading. Sibling
@@ -91,6 +91,7 @@ PASS_LABELS = {
     "pass1-jurisdiction": "1 — Jurisdiction",
     "pass2-style": "2 — Style",
     "pass3b-citations": "3B — Citations",
+    "pass3d-authorities": "3D — Supplied authorities",
     "pass4-factcheck": "4 — Fact check",
     "pass6-brief-matching": "6 — Brief matching",
     "pass7-dissent-crosscheck": "7 — Dissent cross-check",
@@ -101,6 +102,7 @@ PASS_NUMBER_LABELS = {
     "2": "2 — Style",
     "3A": "3A — Citation format",
     "3B": "3B — Citations",
+    "3D": "3D — Supplied authorities",
     "4": "4 — Fact check",
     "5": "5 — Analytical rigor",
     "6": "6 — Brief matching",
