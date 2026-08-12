@@ -43,6 +43,7 @@ CLI::
 
     pdfsource.py probe   FILE...
     pdfsource.py locate  FILE [--sample N] [--json]
+    pdfsource.py find    FILE --text "passage" [--pages A-B] [--max-hits N]
     pdfsource.py extract FILE --pages 1522-1523 [--printed] [-o OUT]
                               [--ocr] [--max-bytes N]
     pdfsource.py compact FILE -o OUT [--max-bytes N]
@@ -66,8 +67,8 @@ except ImportError:  # standalone use
     textquality = None
 
 __all__ = [
-    "probe", "locate", "extract", "compact",
-    "page_count", "page_text", "LocateResult",
+    "probe", "locate", "find", "extract", "compact",
+    "page_count", "page_text", "score_page_text", "LocateResult",
 ]
 
 #: Pages sampled by `locate` before giving up on agreement. Pairs are what
@@ -351,6 +352,211 @@ def locate(path: Path, samples: int = DEFAULT_SAMPLES,
 
 
 # ---------------------------------------------------------------------------
+# find — OCR-tolerant passage search
+# ---------------------------------------------------------------------------
+
+#: Multi-character expansions applied before single-character folding.
+_LIGATURES = {
+    "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
+    "ﬄ": "ffl", "æ": "ae", "œ": "oe",
+    "‘": "'", "’": "'", "“": '"', "”": '"',
+    "–": "-", "—": "-", "­": "-",
+}
+
+#: OCR confusion classes, folded to one representative on both sides of the
+#: match. Cheap OCR on old serif type reads 3 for 8, 1/l/i for each other,
+#: 0 for o — and the fold is symmetric, so legibility of the folded text
+#: does not matter, only that damaged and clean text land on the same string.
+_CONFUSABLE = {"0": "o", "1": "l", "i": "l", "|": "l", "!": "l", "8": "3"}
+
+
+def _fold_loose(s: str) -> tuple[str, list[int]]:
+    """Aggressively folded text plus a map from folded index to source index.
+
+    Case, ligatures, the confusion classes above, and *all* punctuation and
+    whitespace fold away — so a passage matches across a hyphenated line
+    break ("de- claring" ~ "declaring") and through the character damage a
+    scan inflicts. ``rn`` collapses to ``m`` (the classic serif-scan misread)
+    after the character pass, on both needle and haystack alike.
+    """
+    out: list[str] = []
+    src: list[int] = []
+    for idx, ch in enumerate(s):
+        for c in _LIGATURES.get(ch, ch).casefold():
+            if not c.isalnum():
+                continue
+            out.append(_CONFUSABLE.get(c, c))
+            src.append(idx)
+    folded: list[str] = []
+    fsrc: list[int] = []
+    i = 0
+    while i < len(out):
+        if out[i] == "r" and i + 1 < len(out) and out[i + 1] == "n":
+            folded.append("m")
+            fsrc.append(src[i])
+            i += 2
+        else:
+            folded.append(out[i])
+            fsrc.append(src[i])
+            i += 1
+    return "".join(folded), fsrc
+
+
+def _snip(base: str, start: int, length: int, pad: int = 60) -> str:
+    a, b = max(0, start - pad), min(len(base), start + length + pad)
+    return ("…" if a else "") + base[a:b].strip() + ("…" if b < len(base) else "")
+
+
+#: Tokens shorter than this carry no signal through OCR damage.
+_MIN_TOKEN = 3
+
+#: Function words are poor anchors: they survive OCR damage (which is why
+#: stopword *rate* failed as a corruption signal in textquality) and appear
+#: on every page, so counting them as matched tokens inflates coverage.
+_FIND_STOP = frozenset("""the and for that with from this was are were not
+its his her have has had which shall been all any than then upon into
+such said other when where there they them who whose what""".split())
+
+#: Proximity window for the token tier, in page tokens (scaled up for long
+#: needles). Wide enough that a passage spanning a column break still counts
+#: as one locus; narrow enough that tokens scattered across a whole page of
+#: unrelated text do not.
+_TOKEN_WINDOW = 30
+
+
+def score_page_text(needle: str, page_text: str) -> dict | None:
+    """Best evidence that ``needle`` appears in ``page_text``, or None.
+
+    Three tiers, strongest first — exact (whitespace-collapsed, case-blind),
+    folded substring (survives hyphenation, ligatures, and the confusion
+    classes), then token proximity: the fraction of the needle's distinctive
+    tokens co-occurring within a window. The last tier is what worked when a
+    five-word heading was OCR-mangled beyond any substring match but two
+    rarer proper nouns nearby survived — partial coverage is reported with
+    the matched tokens rather than suppressed, so the caller can judge.
+    """
+    base = " ".join(page_text.split())
+    if not base:
+        return None
+    nb = " ".join(needle.split())
+    if not nb:
+        return None
+
+    at = base.casefold().find(nb.casefold())
+    if at >= 0:
+        return {"score": 1.0, "method": "exact",
+                "snippet": _snip(base, at, len(nb))}
+
+    hay, hmap = _fold_loose(base)
+    ned, _ = _fold_loose(nb)
+    if ned:
+        at = hay.find(ned)
+        if at >= 0:
+            a = hmap[at]
+            b = hmap[min(at + len(ned) - 1, len(hmap) - 1)] + 1
+            return {"score": 0.95, "method": "folded",
+                    "snippet": _snip(base, a, b - a)}
+
+    ntoks = {t for w in re.findall(r"[\w'’-]+", nb)
+             if w.casefold() not in _FIND_STOP
+             for t in (_fold_loose(w)[0],) if len(t) >= _MIN_TOKEN}
+    if len(ntoks) < 2:
+        return None
+    hits = []  # (token_ordinal, folded_token, char_offset)
+    for j, m in enumerate(re.finditer(r"[\w'’-]+", base)):
+        t = _fold_loose(m.group(0))[0]
+        if t in ntoks:
+            hits.append((j, t, m.start()))
+    if not hits:
+        return None
+    window = max(_TOKEN_WINDOW, 4 * len(ntoks))
+    best_cov, best_at, counts = 0, hits[0][2], {}
+    left = 0
+    for right in range(len(hits)):
+        counts[hits[right][1]] = counts.get(hits[right][1], 0) + 1
+        while hits[right][0] - hits[left][0] > window:
+            counts[hits[left][1]] -= 1
+            if not counts[hits[left][1]]:
+                del counts[hits[left][1]]
+            left += 1
+        cov = len(counts)
+        if cov > best_cov:
+            best_cov, best_at = cov, hits[left][2]
+    frac = best_cov / len(ntoks)
+    return {"score": round(0.9 * frac, 3), "method": "tokens",
+            "matched_tokens": best_cov, "needle_tokens": len(ntoks),
+            "snippet": _snip(base, best_at, 120)}
+
+
+def _all_pages_text(path: Path, first: int | None = None,
+                    last: int | None = None) -> list[tuple[int, str]]:
+    """(pdf_page, text) for a page range in one pdftotext call.
+
+    One subprocess for the whole range — per-page calls cost a process spawn
+    each, which is prohibitive on a 1,600-page volume.
+    """
+    tools = _which("pdftotext")
+    if not tools["pdftotext"]:
+        return []
+    cmd = [tools["pdftotext"]]
+    if first:
+        cmd += ["-f", str(first)]
+    if last:
+        cmd += ["-l", str(last)]
+    p = _run(cmd + [str(path), "-"], timeout=600)
+    if p is None or p.returncode != 0:
+        return []
+    chunks = p.stdout.decode("utf-8", "replace").split("\f")
+    if chunks and not chunks[-1].strip():
+        chunks.pop()
+    start = first or 1
+    return [(start + i, c) for i, c in enumerate(chunks)]
+
+
+#: A range at or under this many pages may fall back to per-page OCR when the
+#: text layer is too thin to search. Beyond it, OCRing inside `find` would
+#: silently take an hour; the caller should `extract --ocr` first.
+_FIND_OCR_CEILING = 25
+
+
+def find(path: Path, text: str, first: int | None = None,
+         last: int | None = None, max_hits: int = 5,
+         min_score: float = 0.2) -> dict:
+    """Locate a passage in a PDF, tolerating OCR damage.
+
+    Searches the text layer (whole file, or ``first``–``last``). If the layer
+    is too thin to search and the range is small, falls back to per-page OCR;
+    a thin layer over a large range is reported rather than silently ground
+    through OCR. Pages are PDF pages — convert printed pages via
+    :func:`locate` first.
+    """
+    path = Path(path)
+    res: dict = {"file": str(path), "hits": [], "pages_searched": 0,
+                 "notes": []}
+    pages = _all_pages_text(path, first, last)
+    density = (sum(len(t.strip()) for _, t in pages) / len(pages)) if pages else 0
+    if density < 50:
+        span = ((last or page_count(path) or 0) - (first or 1) + 1)
+        if 0 < span <= _FIND_OCR_CEILING:
+            pages = [(pg, page_text(path, pg)) for pg in
+                     range((first or 1), (first or 1) + span)]
+            res["notes"].append(f"text layer thin; OCR'd {span} page(s)")
+        else:
+            res["notes"].append(
+                "text layer thin or missing and range too large to OCR here; "
+                "extract the target range with --ocr first")
+    for pg, txt in pages:
+        s = score_page_text(text, txt)
+        if s and s["score"] >= min_score:
+            s["pdf_page"] = pg
+            res["hits"].append(s)
+    res["pages_searched"] = len(pages)
+    res["hits"].sort(key=lambda h: (-h["score"], h["pdf_page"]))
+    del res["hits"][max_hits:]
+    return res
+
+
+# ---------------------------------------------------------------------------
 # extract / compact
 # ---------------------------------------------------------------------------
 
@@ -518,6 +724,16 @@ def main() -> int:
                        help="report which PDF page holds this printed page")
     p_loc.add_argument("--json", action="store_true")
 
+    p_f = sub.add_parser("find", help="OCR-tolerant passage search")
+    p_f.add_argument("file", type=Path)
+    p_f.add_argument("--text", required=True,
+                     help="the passage (or a few distinctive words) to locate")
+    p_f.add_argument("--pages", type=_parse_range,
+                     help="limit to a PDF page range, e.g. 370-390")
+    p_f.add_argument("--max-hits", type=int, default=5)
+    p_f.add_argument("--min-score", type=float, default=0.2)
+    p_f.add_argument("--json", action="store_true")
+
     p_ex = sub.add_parser("extract", help="pull a page range into a new PDF")
     p_ex.add_argument("file", type=Path)
     p_ex.add_argument("--pages", required=True, type=_parse_range)
@@ -575,6 +791,24 @@ def main() -> int:
                 print(f"  printed {a.printed} → PDF page {r.pdf_page(a.printed)}"
                       + ("" if r.contains(a.printed) else "  [NOT IN THIS FILE]"))
         return 0
+
+    if a.cmd == "find":
+        first, last = a.pages if a.pages else (None, None)
+        r = find(a.file, a.text, first=first, last=last,
+                 max_hits=a.max_hits, min_score=a.min_score)
+        if a.json:
+            print(json.dumps(r, indent=2, ensure_ascii=False))
+        else:
+            for h in r["hits"]:
+                extra = (f"  [{h['matched_tokens']}/{h['needle_tokens']} tokens]"
+                         if h["method"] == "tokens" else "")
+                print(f"p.{h['pdf_page']:>4}  {h['score']:.2f} "
+                      f"{h['method']:<6}{extra}  {h['snippet'][:110]}")
+            for n in r["notes"]:
+                print(f"note: {n}")
+        print(f"\n{len(r['hits'])} hit(s) over {r['pages_searched']} page(s)",
+              file=sys.stderr)
+        return 0 if r["hits"] else 1
 
     if a.cmd == "extract":
         first, last = a.pages

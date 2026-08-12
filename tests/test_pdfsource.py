@@ -12,9 +12,12 @@ import pytest
 from pdfsource import (
     LocateResult,
     _candidates,
+    _fold_loose,
     _parse_range,
+    find,
     locate,
     probe,
+    score_page_text,
 )
 
 
@@ -131,3 +134,93 @@ class TestOffsetSign:
         r = LocateResult({"offset": 1145, "pages": 437})
         assert r.pdf_page(1522) == 377
         assert r.contains(1522) is True
+
+
+class TestFoldLoose:
+    def test_hyphenated_line_break_folds_together(self):
+        assert _fold_loose("de- claring")[0] == _fold_loose("declaring")[0]
+
+    def test_ligatures_and_case(self):
+        assert _fold_loose("ﬁnal Uniform")[0] == _fold_loose("final uniform")[0]
+
+    def test_rn_collapses_to_m(self):
+        # The classic serif-scan misread: m comes back as rn.
+        assert _fold_loose("uniforrn")[0] == _fold_loose("uniform")[0]
+
+    def test_digit_confusions(self):
+        assert _fold_loose("1889")[0] == _fold_loose("l889")[0]
+        assert _fold_loose("389")[0] == _fold_loose("839")[0]
+
+    def test_index_map_points_into_source(self):
+        folded, src = _fold_loose("A b-c")
+        assert folded == "abc"
+        assert src == [0, 2, 4]
+
+
+class TestScorePageText:
+    PAGE = ("Jan. 23, 1879. OF THE CONSTITUTIONAL CONVENTION. 1033\n"
+            "the official Address to the People described the new sec- \n"
+            "tion as de- claring against monopolies and special privileges\n"
+            "for the beneﬁt of the whole people of the State.")
+
+    def test_exact_is_case_and_whitespace_blind(self):
+        s = score_page_text("DESCRIBED THE   NEW", self.PAGE)
+        assert s["method"] == "exact" and s["score"] == 1.0
+        assert "described the new" in s["snippet"]
+
+    def test_folded_survives_hyphenation(self):
+        s = score_page_text("declaring against monopolies", self.PAGE)
+        assert s["method"] == "folded" and s["score"] == 0.95
+
+    def test_ligature_matches_via_casefold(self):
+        # str.casefold() already expands ﬁ→fi, so this is an exact-tier hit.
+        s = score_page_text("benefit of the whole people", self.PAGE)
+        assert s and s["score"] >= 0.95
+
+    def test_token_tier_reports_partial_coverage(self):
+        # Passage mangled beyond substring repair; rare anchors survive.
+        s = score_page_text(
+            "Edgerton described the new monopolies clause", self.PAGE)
+        assert s["method"] == "tokens"
+        assert 0 < s["score"] < 0.9
+        assert s["matched_tokens"] >= 2
+        assert s["needle_tokens"] > s["matched_tokens"]
+
+    def test_token_tier_ignores_stopwords_as_anchors(self):
+        # Every content word absent; "the"/"and" alone must not score.
+        assert score_page_text(
+            "the frobnicated zorp and the quuxian blorple", self.PAGE) is None
+
+    def test_exact_outranks_folded_outranks_tokens(self):
+        exact = score_page_text("Address to the People", self.PAGE)["score"]
+        folded = score_page_text("declaring against monopolies",
+                                 self.PAGE)["score"]
+        toks = score_page_text(
+            "Edgerton described the new monopolies clause", self.PAGE)["score"]
+        assert exact > folded > toks
+
+    def test_no_match_returns_none(self):
+        assert score_page_text("frobnicate quux zorply", self.PAGE) is None
+
+    def test_short_needle_needs_a_substring_hit(self):
+        # One usable token cannot clear the token tier by proximity alone,
+        # but a single OCR-damaged word can still land via the folded tier.
+        assert score_page_text("zorply", self.PAGE) is None
+        assert score_page_text("monopo1ies", self.PAGE)["method"] == "folded"
+
+    def test_empty_inputs(self):
+        assert score_page_text("anything", "") is None
+        assert score_page_text("", self.PAGE) is None
+
+
+class TestFindDegradation:
+    def test_missing_file_returns_no_hits_without_raising(self, tmp_path):
+        r = find(tmp_path / "absent.pdf", "any passage")
+        assert r["hits"] == [] and r["pages_searched"] == 0
+
+    def test_junk_file_notes_the_thin_layer(self, tmp_path):
+        junk = tmp_path / "junk.pdf"
+        junk.write_bytes(b"not a pdf at all")
+        r = find(junk, "any passage")
+        assert r["hits"] == []
+        assert r["notes"]  # thin/missing layer surfaced, not silent

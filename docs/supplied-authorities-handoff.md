@@ -184,17 +184,32 @@ located" checklist.
 
 ### 3.4 Smaller, optional
 
-- **`pdfsource find`** — OCR-tolerant passage search. Deferred because it is not
-  needed to *place* a page, only to confirm a quote once there. Needed:
-  normalize aggressively (case, ligatures, `3↔8`, `l↔1`, `rn↔m`), fuzzy/n-gram
-  match, then proximity-of-anchors. Keyword search failed outright on one
-  archive scan whose OCR mangled a five-word heading beyond recognition; what
-  worked was proximity on two rarer proper nouns nearby.
-- **Asset pool with dedupe** in `cite_review.py` — one extraction per
-  `(file, page-range)`, content-hashed, shared across entries, with a
-  `--asset-budget` that degrades to `--link-pdfs` and *reports* what it did.
+- **`pdfsource find`** — **DONE 2026-08-12 (4.19.0).** Three tiers: exact
+  (whitespace/case-blind), folded substring (ligatures, hyphenated line
+  breaks, confusion classes `3↔8`, `l↔1↔i`, `0↔o`, `rn↔m` — all folded
+  symmetrically so legibility of the folded text never matters), then token
+  proximity (coverage of the passage's non-stopword tokens within a sliding
+  window, reported as `[3/5 tokens]` rather than suppressed — the caller
+  judges partial hits). Stopwords are excluded as anchors for the same
+  reason stopword *rate* failed in textquality: they survive damage and
+  appear everywhere. One `pdftotext` call for the whole range; per-page OCR
+  fallback only under 25 pages, otherwise the thin layer is reported.
+  Verified against the 1879 California scan: the § 11 passage lands at 0.95
+  (folded) through "havea uniform" damage, above token-tier noise at 0.56.
+  Pass 3D's Step 5 now uses it instead of hand-rolled proximity search.
+- **Asset pool with dedupe** — **DONE 2026-08-12 (4.19.0).** Embedded
+  viewers are content-hashed, so identical bytes under two paths share one
+  sidecar; `--asset-budget <bytes>` caps total embedded source bytes,
+  embedding smallest-first and degrading only the overflow to relative
+  links, with a stderr report of exactly what was linked instead of
+  embedded. (Scoped to viewer pooling: per-`(file, page-range)` extraction
+  dedupe stays with the Pass 3D subagent, which names extracts by range.)
 - **Retrieval** of unmatched references (Internet Archive / HathiTrust /
-  Google Books), behind a flag; must never block a run.
+  Google Books), behind a flag; must never block a run. **Still open —
+  deliberately kept for future work.** Design cautions when picked up:
+  network dependence, provenance badging (an IA scan is unofficial), and
+  edition-matching (a 6th-edition Cooley silently standing in for a cited
+  5th edition would be worse than "not located" — be edition-strict).
 
 ---
 

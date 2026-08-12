@@ -89,10 +89,10 @@ For each matched reference with a cited page, pull the cited range into `<case_d
 - **Verify the passage is actually in the extract** — an extraction that ran without error is not evidence the right page arrived:
 
 ```bash
-<VENV_PYTHON> "<SKILL_ROOT>/pdf_page_grep.py" "<distinctive phrase>" <case_dir>/authorities/<slug>_p1521-1523.pdf
+<VENV_PYTHON> "<SKILL_ROOT>/pdfsource.py" find <case_dir>/authorities/<slug>_p1521-1523.pdf --text "<the expected passage>"
 ```
 
-  On OCR'd scans an exact phrase often fails from character damage (`3↔8`, `l↔1`, `rn↔m`, mangled ligatures). Fall back to **proximity of rarer anchors**: search two or three distinctive proper nouns or unusual words that sit near the passage, and accept the page where they co-occur. Record the verbatim passage as OCR rendered it for the `quote` field — the review page fuzzy-matches it to highlight.
+  `find` is OCR-tolerant by construction: an `exact` (1.0) or `folded` (0.95) hit survives hyphenated line breaks, ligatures, and the standard character confusions (`3↔8`, `l↔1↔i`, `0↔o`, `rn↔m`); a `tokens` hit reports how many of the passage's distinctive words co-occur on the page (`[3/5 tokens]`) — treat that as page-location evidence and read the snippet before calling the quote verified. Exit status 1 means no page scored at all. It searches the text layer, so run it on the post-OCR extract (it can also confirm a page in the original before extraction — bound big scans with `--pages`). Record the verbatim passage as OCR rendered it for the `quote` field — the review page fuzzy-matches it to highlight.
 - Assess **substantive support**: does the passage support the proposition the draft cites it for? Report Supports / Partially / Does not support, as in Pass 3B.
 
 ## Step 6: Write the ledger
