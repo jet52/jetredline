@@ -163,6 +163,7 @@ jetredline/
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.
 │       ├── textquality.py          # PDF text-layer triage: ok / image-only / corrupt
 │       ├── pdfsource.py           # Supplied-source PDFs: probe/locate/extract/compact
+│       ├── authorities.py         # Pass 3D: inventory / candidates / match
 │       ├── pdf_page_grep.py        # Find a string in a PDF, report its page
 │       ├── splitmarks.py           # PDF bookmark splitter (bundled)
 │       ├── ooxml_fixup.py          # OOXML debugging tool (not in main pipeline)
