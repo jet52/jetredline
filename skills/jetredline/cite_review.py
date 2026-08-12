@@ -1201,6 +1201,62 @@ def _load_facts(path: Path) -> list[dict]:
     return facts
 
 
+#: Authority kinds the ledger may declare. Anything else falls back to "other";
+#: the value is a label, not a behavioural switch, so an unknown one is
+#: cosmetic rather than fatal.
+_AUTHORITY_KINDS = frozenset({
+    "journal", "treatise", "periodical", "constitution", "statute",
+    "archival", "slip-op", "brief", "other",
+})
+
+
+def _load_authorities(path: Path) -> list[dict]:
+    """Load and normalize a supplied-authorities ledger (Pass 3D).
+
+    A *supplied authority* is a source the draft relies on that jetcite cannot
+    recognize as a citation — a convention journal, a treatise, a periodical in
+    an obsolete abbreviation, an archival document — for which a copy exists in
+    the project directory. `sources.json`'s `pdf` field cannot reach these,
+    because it is keyed by citation string and there is no citation to key on.
+
+    The ``sources`` entries deliberately share the Pass 4 facts shape
+    (``raw`` / ``file`` / ``item`` / ``page`` / ``quote``) so that resolution,
+    viewer generation, and page/quote anchoring all reuse one code path.
+
+    Tolerates a bare array or {"authorities": [...]}.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    items = raw.get("authorities") if isinstance(raw, dict) else raw
+    out = []
+    for a in items or []:
+        if not isinstance(a, dict):
+            continue
+        title = str(a.get("title") or "").strip()
+        if not title:
+            continue
+        kind = str(a.get("kind") or "other").strip().lower()
+        if kind not in _AUTHORITY_KINDS:
+            kind = "other"
+        out.append({
+            "title": title,
+            # Sidebar label; falls back to the title, trimmed by CSS.
+            "short": (a.get("short") or "").strip() or title,
+            "authority_kind": kind,
+            "author": (a.get("author") or "").strip(),
+            "volume": str(a.get("volume") or "").strip(),
+            "year": str(a.get("year") or "").strip(),
+            "para": str(a.get("para") or "").strip(),
+            "draft_quote": (a.get("draft_quote") or "").strip(),
+            "proposition": (a.get("proposition") or "").strip(),
+            "result": _normalize_result(a.get("result")),
+            "result_label": (a.get("result") or "").strip() or "unverified",
+            "note": (a.get("note") or "").strip(),
+            "via": (a.get("via") or "").strip() or "supplied",
+            "sources": [s for s in a.get("sources") or [] if isinstance(s, dict)],
+        })
+    return out
+
+
 def _load_manifest(path: Path) -> list[dict]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -1441,6 +1497,25 @@ main { display:flex; flex:1; overflow:hidden; }
   text-transform:uppercase; letter-spacing:0.05em;
   color:var(--text-muted); border-bottom:1px solid var(--border);
 }
+/* Lane filter. Supplied authorities review alongside citations rather than
+   in a section of their own; these chips isolate a lane on demand without
+   splitting the navigation order. */
+.lane-filter {
+  display:flex; gap:4px; padding:8px 10px;
+  border-bottom:1px solid var(--border); flex-wrap:wrap;
+}
+.lane-chip {
+  font-size:10px; padding:3px 8px; border-radius:10px; cursor:pointer;
+  border:1px solid var(--border); color:var(--text-muted);
+  background:transparent; user-select:none; white-space:nowrap;
+}
+.lane-chip:hover { color:var(--text); border-color:var(--text-muted); }
+.lane-chip.on {
+  background:var(--accent); border-color:var(--accent); color:#fff;
+  font-weight:600;
+}
+.lane-chip .n { opacity:0.75; margin-left:4px; font-variant-numeric:tabular-nums; }
+
 .cite-list { flex:1; overflow-y:auto; padding:4px 0; }
 .cite-item {
   padding:8px 16px; cursor:pointer;
@@ -1898,6 +1973,10 @@ _JS = """\
   const groupByKey = {};
   DATA.forEach((d, i) => {
     if (d.kind === 'fact') return;  // facts render in their own section below
+    // Supplied authorities group here alongside citations by design: the
+    // review question is the same one, so they share the loop, the grouping,
+    // and the keybindings. The `supplied` via badge is what distinguishes
+    // them, plus the filter chips.
     const key = d.authority || d.normalized || d.cite_text;
     let g = groupByKey[key];
     if (!g) {
@@ -1978,6 +2057,55 @@ _JS = """\
       listEl.appendChild(item);
     });
   }
+
+  // Lane filter. Hides rows rather than rebuilding the list, so indexes,
+  // review state, and j/k order are untouched — a filter that renumbered
+  // entries would invalidate every note keyed to them.
+  function laneOf(d) {
+    return d.kind === 'fact' ? 'facts'
+         : d.kind === 'authority' ? 'authorities'
+         : 'citations';
+  }
+  (function buildLaneFilter() {
+    const counts = { citations: 0, authorities: 0, facts: 0 };
+    DATA.forEach(d => { counts[laneOf(d)]++; });
+    const lanes = [['all', 'All', DATA.length]].concat(
+      [['citations', 'Citations', counts.citations],
+       ['authorities', 'Authorities', counts.authorities],
+       ['facts', 'Facts', counts.facts]].filter(l => l[2] > 0));
+    // With only one populated lane the chips are noise.
+    if (lanes.length <= 2) return;
+    const bar = document.querySelector('.lane-filter');
+    let active = 'all';
+    lanes.forEach(([key, label, n]) => {
+      const chip = document.createElement('div');
+      chip.className = 'lane-chip' + (key === 'all' ? ' on' : '');
+      chip.dataset.lane = key;
+      chip.innerHTML = esc(label) + '<span class="n">' + n + '</span>';
+      chip.addEventListener('click', () => {
+        active = key;
+        bar.querySelectorAll('.lane-chip').forEach(c =>
+          c.classList.toggle('on', c.dataset.lane === active));
+        applyLane(active);
+      });
+      bar.appendChild(chip);
+    });
+    function applyLane(lane) {
+      document.querySelectorAll('.cite-item').forEach(el => {
+        const d = DATA[+el.dataset.idx];
+        el.style.display = (lane === 'all' || laneOf(d) === lane) ? '' : 'none';
+      });
+      // A group header survives only if it still has a visible row under it.
+      let hdr = null, shown = 0;
+      Array.from(document.querySelector('.cite-list').children).forEach(el => {
+        if (el.classList.contains('cite-group-hdr')) {
+          if (hdr) hdr.style.display = shown ? '' : 'none';
+          hdr = el; shown = 0;
+        } else if (el.style.display !== 'none') { shown++; }
+      });
+      if (hdr) hdr.style.display = shown ? '' : 'none';
+    }
+  })();
 
   function esc(s) {
     if (!s) return '';
@@ -2207,7 +2335,51 @@ _JS = """\
     // have no local reference and no court PDF. Avalon plays the same role
     // for U.S. Const. cites (the two never coexist on one entry).
     var modes = [];
-    if (d.kind === 'fact') {
+    if (d.kind === 'authority') {
+      // A supplied authority has no reporter, no ~/refs copy, and usually no
+      // stable URL — the embedded PDF page IS the source of truth, so it
+      // leads. The detail pane carries the proposition it is cited for.
+      var abanner = '<div class="fact-banner ' + d.result + '">' +
+        '<b>' + esc(d.result_label) + '</b>' +
+        (d.note ? ' \\u2014 ' + esc(d.note) : '') + '</div>';
+      (d.sources || []).forEach(function(s) {
+        modes.push({
+          key: 'suppliedpdf', label: s.label, badge: 'supplied',
+          badgeTitle: 'A copy of this authority supplied in the project ' +
+                      'directory, embedded at the cited page.',
+          url: null,
+          render: function() {
+            srcBody.innerHTML = abanner + (s.href
+              ? '<iframe src="' + esc(s.href) + '"></iframe>'
+              : '<div class="no-local"><p>No copy found in the project ' +
+                'directory for ' + esc(s.label) + '</p>' +
+                (s.quote ? '<blockquote>' + esc(s.quote) + '</blockquote>' : '') +
+                '</div>');
+          }});
+      });
+      modes.push({
+        key: 'authnote', label: 'Authority detail', badge: d.result,
+        badgeTitle: 'What the draft cites this authority for, and the check.',
+        url: null,
+        render: function() {
+          var meta = [d.author, d.volume ? 'vol. ' + d.volume : '', d.year]
+            .filter(Boolean).map(esc).join(' \\u00b7 ');
+          var q = (d.sources || []).filter(function(s) { return s.quote; })
+            .map(function(s) {
+              return '<div class="passage-caption">' + esc(s.label) +
+                '</div><blockquote>' + esc(s.quote) + '</blockquote>';
+            }).join('');
+          srcBody.innerHTML = abanner + '<div class="passage-box">' +
+            '<div class="passage-caption">' + esc(d.authority) +
+            (meta ? ' \\u2014 ' + meta : '') + '</div>' +
+            (d.proposition
+              ? '<div class="passage-caption">Cited in draft \\u00b6 ' +
+                esc(d.para_display || String(d.para_num || '')) +
+                ' for</div><blockquote>' + esc(d.proposition) + '</blockquote>'
+              : '') +
+            q + '</div>';
+        }});
+    } else if (d.kind === 'fact') {
       // One mode per cited record/brief source (PDF embedded at the cited
       // page with the evidence quote highlighted), then the Pass 4 detail.
       var banner = '<div class="fact-banner ' + d.result + '">' +
@@ -2715,6 +2887,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 ndlaw_base: str | None = _NDLAW_DEFAULT_BASE,
                 facts: list[dict] | None = None,
                 fact_viewers: dict[str, str] | None = None,
+                authorities: list[dict] | None = None,
                 link_pdfs: bool = False,
                 italic_spans: list[tuple[int, int]] | None = None,
                 quote_spans: list[tuple[int, int]] | None = None) -> str:
@@ -2936,6 +3109,66 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "sources": srcs,
         })
 
+    # Supplied authorities (Pass 3D ledger). These sit with the citations
+    # rather than the facts: the reviewer's question is the citation question
+    # — does this source say what the draft says it says? — so they share the
+    # grouped sidebar, the verify/flag/skip model, and the keybindings.
+    for a in (authorities or []):
+        position = None
+        para_num = None
+        occurrence = 0
+        dq = a.get("draft_quote") or ""
+        pos = _find_quote_position(pp_text, dq)
+        if pos is not None:
+            position = pos
+            para_num, occurrence = _locate_occurrence(
+                pp_paragraphs, pp_text, pos, dq)
+        if para_num is None:
+            m = re.search(r"\d+", a.get("para") or "")
+            para_num = int(m.group(0)) if m else None
+        srcs = []
+        for s in a.get("sources", []):
+            resolved = s.get("_resolved_path")
+            base_url = fact_viewers.get(resolved) if resolved else None
+            href = None
+            if base_url:
+                if link_pdfs:
+                    page = s.get("page")
+                    href = base_url + (f"#page={page}"
+                                       if isinstance(page, int) and page > 0
+                                       else "")
+                else:
+                    href = base_url + _fact_source_hash(s)
+            srcs.append({
+                "label": (s.get("raw") or s.get("item") or "source").strip(),
+                "href": href,
+                "page": s.get("page"),
+                "quote": (s.get("quote") or "").strip() or None,
+            })
+        enriched.append({
+            "kind": "authority",
+            # Grouping key and sidebar row label.
+            "authority": a["title"],
+            "cite_text": a["short"],
+            "authority_kind": a["authority_kind"],
+            "case_name": a["title"],
+            "cite_type": a["authority_kind"],
+            "via": a["via"],
+            "author": a["author"],
+            "volume": a["volume"],
+            "year": a["year"],
+            "proposition": a["proposition"],
+            "result": a["result"],
+            "result_label": a["result_label"],
+            "note": a["note"],
+            "para_display": a.get("para") or "",
+            "para_num": para_num,
+            "occurrence": occurrence,
+            "position": position,
+            "draft_quote": dq or None,
+            "sources": srcs,
+        })
+
     data_json = json.dumps(enriched, ensure_ascii=False)
     sources_json = json.dumps(sources_map, ensure_ascii=False)
     file_key_json = json.dumps(file_key, ensure_ascii=False)
@@ -2972,6 +3205,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
 <main>
   <div class="sidebar">
     <div class="sidebar-header">Citations ({n_cites})</div>
+    <div class="lane-filter"></div>
     <div class="cite-list"></div>
   </div>
 
@@ -3102,6 +3336,16 @@ def main():
                              "quote}]} objects. Adds a factual-assertion "
                              "review section with the cited record/brief "
                              "PDFs embedded at the cited spot.")
+    parser.add_argument("--authorities-json",
+                        help="Path to a supplied-authorities ledger (Pass 3D): "
+                             "JSON array of {title, short, kind, author, "
+                             "volume, year, para, draft_quote, proposition, "
+                             "result, note, via, sources:[{raw, file, page, "
+                             "quote}]}. For sources the citation parser "
+                             "cannot recognize -- convention journals, "
+                             "treatises, archival material -- whose copies "
+                             "live in the project directory. They review "
+                             "alongside the citations, not the facts.")
     parser.add_argument("--record-dir",
                         help="Directory of district-court record item PDFs "
                              "named 'R<N> - <Type> <Title>.pdf'. Used to "
@@ -3182,6 +3426,15 @@ def main():
             print(f"Warning: could not read --facts-json ({e}); "
                   "rendering without factual assertions.", file=sys.stderr)
 
+    authorities: list[dict] = []
+    if args.authorities_json:
+        try:
+            authorities = _load_authorities(
+                Path(args.authorities_json).expanduser())
+        except (OSError, ValueError) as e:
+            print(f"Warning: could not read --authorities-json ({e}); "
+                  "rendering without supplied authorities.", file=sys.stderr)
+
     if not citations:
         print("No citations found.", file=sys.stderr)
         sys.exit(1)
@@ -3235,9 +3488,22 @@ def main():
                 fact_pdfs.append(p)
             else:
                 unresolved += 1
+    auth_unresolved = 0
+    for a in authorities:
+        for s in a["sources"]:
+            p = _resolve_fact_source(s, record_dir, manifest, base_dir,
+                                     manifest_dir)
+            if p:
+                s["_resolved_path"] = str(p.resolve())
+                fact_pdfs.append(p)
+            else:
+                auth_unresolved += 1
     if unresolved:
         print(f"  Note: {unresolved} fact source ref(s) did not resolve to a "
               "PDF; shown as text-only.", file=sys.stderr)
+    if auth_unresolved:
+        print(f"  Note: {auth_unresolved} supplied-authority source(s) did "
+              "not resolve to a PDF; shown as text-only.", file=sys.stderr)
 
     for meta in sources_meta.values():
         pdf = meta.get("pdf")
@@ -3302,6 +3568,7 @@ def main():
                            passages=passages, authority_alias=authority_alias,
                            ndlaw_base=None if args.no_ndlaw else args.ndlaw_base,
                            facts=facts, fact_viewers=fact_viewers,
+                           authorities=authorities,
                            link_pdfs=args.link_pdfs, italic_spans=italic_spans,
                            quote_spans=quote_spans)
 
@@ -3309,7 +3576,11 @@ def main():
     n_viewers = len(viewers) + len(fact_viewers)
     extra = f", {n_viewers} PDF viewer(s)" if n_viewers else ""
     fact_note = f", {len(facts)} factual assertion(s)" if facts else ""
-    print(f"Wrote {out} ({len(citations)} citations{fact_note}{extra})")
+    auth_note = (f", {len(authorities)} supplied authorit"
+                 f"{'y' if len(authorities) == 1 else 'ies'}"
+                 if authorities else "")
+    print(f"Wrote {out} ({len(citations)} citations{auth_note}"
+          f"{fact_note}{extra})")
 
 
 if __name__ == "__main__":

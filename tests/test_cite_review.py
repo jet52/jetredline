@@ -4,12 +4,14 @@ import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from cite_review import (
     _IFRAME_OK_DOMAINS,
     _build_html,
+    _load_authorities,
     _find_paragraph,
     _ndlaw_eligible,
     _ndlaw_url,
@@ -937,3 +939,135 @@ class TestGeneratedJavaScriptParses:
                   "url": "https://www.ndcourts.gov/supreme-court/opinions/1"}]
         self._check(_build_html("t", cites, paras, "k", sample_opinion,
                                 ndlaw_base=None), tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# Supplied authorities (Pass 3D)
+#
+# Sources the citation parser cannot recognize -- convention journals,
+# treatises, archival material -- whose copies live in the project directory.
+# They review in the citations lane, not the facts lane: the question is the
+# citation question, so they share the grouped sidebar and the keybindings.
+# ---------------------------------------------------------------------------
+
+class TestLoadAuthorities:
+    def _write(self, tmp_path, payload):
+        p = tmp_path / "authorities.json"
+        p.write_text(json.dumps(payload), encoding="utf-8")
+        return p
+
+    def test_loads_bare_array_and_wrapper(self, tmp_path):
+        entry = {"title": "Convention Journal (1889)", "kind": "journal"}
+        assert len(_load_authorities(self._write(tmp_path, [entry]))) == 1
+        assert len(_load_authorities(
+            self._write(tmp_path, {"authorities": [entry]}))) == 1
+
+    def test_title_is_required(self, tmp_path):
+        got = _load_authorities(self._write(tmp_path, [
+            {"kind": "journal"}, {"title": "  "}, {"title": "Real Title"},
+            "not-a-dict",
+        ]))
+        assert [a["title"] for a in got] == ["Real Title"]
+
+    def test_short_defaults_to_title(self, tmp_path):
+        got = _load_authorities(self._write(tmp_path, [{"title": "A Long Title"}]))
+        assert got[0]["short"] == "A Long Title"
+
+    def test_unknown_kind_falls_back_to_other(self, tmp_path):
+        got = _load_authorities(self._write(tmp_path, [
+            {"title": "X", "kind": "grimoire"},
+            {"title": "Y", "kind": "TREATISE"},
+        ]))
+        assert got[0]["authority_kind"] == "other"
+        assert got[1]["authority_kind"] == "treatise"
+
+    def test_via_defaults_to_supplied(self, tmp_path):
+        got = _load_authorities(self._write(tmp_path, [
+            {"title": "X"}, {"title": "Y", "via": "ocr"},
+        ]))
+        assert got[0]["via"] == "supplied"
+        assert got[1]["via"] == "ocr"
+
+    def test_sources_keep_the_facts_shape(self, tmp_path):
+        """Shared shape is deliberate: one resolver, one viewer path."""
+        got = _load_authorities(self._write(tmp_path, [{
+            "title": "X",
+            "sources": [{"raw": "Journal 157", "file": "authorities/j.pdf",
+                         "page": 5, "quote": "the committee reported"},
+                        "junk"],
+        }]))
+        assert len(got[0]["sources"]) == 1
+        assert got[0]["sources"][0]["page"] == 5
+
+
+class TestAuthorityRendering:
+    """_build_html needs fully-formed paragraphs, so go through the splitter."""
+
+    @pytest.fixture
+    def citations_basic(self):
+        return [{
+            "cite_text": "2024 ND 42",
+            "cite_type": "neutral_cite",
+            "normalized": "2024 ND 42",
+            "url": "https://www.ndcourts.gov/supreme-court/opinions/67890",
+        }]
+
+    def _build(self, citations_basic, sample_opinion, authorities):
+        paras = _split_paragraphs(sample_opinion)
+        return _build_html("Test Case", citations_basic, paras, "test",
+                           sample_opinion, authorities=authorities)
+
+    def test_authority_becomes_its_own_entry_kind(self, citations_basic,
+                                                  sample_opinion):
+        html = self._build(citations_basic, sample_opinion,
+                           _load_authorities_inline([{
+                               "title": "Convention Journal (1889)",
+                               "short": "Journal", "kind": "journal",
+                               "para": "2"}]))
+        assert '"kind": "authority"' in html
+        assert "Convention Journal (1889)" in html
+
+    def test_authority_is_not_filed_as_a_fact(self, citations_basic,
+                                              sample_opinion):
+        """Placement is the design decision under test."""
+        html = self._build(citations_basic, sample_opinion,
+                           _load_authorities_inline([
+                               {"title": "Journal", "kind": "journal"}]))
+        assert '"kind": "fact"' not in html
+
+    def test_lane_filter_markup_present(self, citations_basic, sample_opinion):
+        html = self._build(citations_basic, sample_opinion,
+                           _load_authorities_inline([
+                               {"title": "Journal", "kind": "journal"}]))
+        assert "lane-filter" in html and "lane-chip" in html
+
+    def test_no_authorities_renders_cleanly(self, citations_basic,
+                                            sample_opinion):
+        html = self._build(citations_basic, sample_opinion, [])
+        assert '"kind": "authority"' not in html
+        assert html.startswith("<!DOCTYPE html>")
+
+    def test_repeated_authority_shares_one_grouping_key(self, citations_basic,
+                                                        sample_opinion):
+        """Two references to one work must group under a single header."""
+        html = self._build(citations_basic, sample_opinion,
+                           _load_authorities_inline([
+                               {"title": "Journal (1889)", "para": "1"},
+                               {"title": "Journal (1889)", "para": "2"}]))
+        m = re.search(r"const DATA = (\[.*?\]);\s*\n", html, re.DOTALL)
+        data = json.loads(m.group(1))
+        auth = [d for d in data if d.get("kind") == "authority"]
+        assert len(auth) == 2
+        assert {a["authority"] for a in auth} == {"Journal (1889)"}
+
+
+def _load_authorities_inline(payload):
+    """Normalize an in-memory ledger without touching disk."""
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+        json.dump(payload, fh)
+        path = Path(fh.name)
+    try:
+        return _load_authorities(path)
+    finally:
+        path.unlink(missing_ok=True)
