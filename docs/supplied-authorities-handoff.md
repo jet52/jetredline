@@ -122,8 +122,25 @@ matches three volumes of one set equally where only the page check disambiguates
 > (the subagent runs `cite_check.py` itself, so Pass 3D launches in parallel
 > with 3B), SKILL.md wiring (Part D, workflow step 5a, `--authorities-json`
 > in Step 11b, the Supplied Authorities analysis section, scope map 3A–D),
-> and provenance labels for the usage table. Remaining: the end-to-end run
-> against the originating case (§6 item 2) and the §3.4 optionals.
+> and provenance labels for the usage table.
+>
+> **End-to-end run (§6 item 2) also done, same day.** A subagent given only
+> the delegation prompt produced 19 ledger entries against the originating
+> directory versus 10 in the hand-built ledger — all 10 covered, plus the
+> missing-treatise finding, three unparseable old case cites, and a negative
+> claim ("the source contains no discussion of X") correctly reported as
+> unverifiable from an excerpt. It survived the mislabeled-volume trap and
+> went further: the volume the draft cites at printed 264 is in *no* supplied
+> file (two scans measured as the same middle volume), which the hand pass
+> had not noticed. The model overrode three matcher false positives, and the
+> pre-filter's misses (two case cites in a parenthetical) were recovered by
+> the read-the-context instruction. Ledger loads through `_load_authorities`;
+> page renders with all lanes. One nuance: subagents transcribe the draft's
+> nonbreaking spaces as plain spaces in `draft_quote` — harmless, because the
+> page's `foldQ` normalizes U+00A0 when matching anchors. Cost: ~158k tokens,
+> 48 min (dominated by offset OCR on two large scans).
+>
+> Remaining: the §3.4 optionals.
 
 ### 3.1 The model step — the only real gap
 
