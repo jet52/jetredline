@@ -1211,6 +1211,40 @@ def _load_manifest(path: Path) -> list[dict]:
 
 _RECORD_ITEM_RE = re.compile(r"^R\.?\s*(\d+)$", re.IGNORECASE)
 
+#: A bare number is only a record item if something else says so — the `raw`
+#: ref reads "R785, p. 50". Pass 4 ledgers routinely store `item` as bare
+#: digits while the R lives only in `raw`, which silently cost 27 of 27
+#: record references in one production run.
+_BARE_ITEM_RE = re.compile(r"^(\d+)$")
+_RAW_RECORD_RE = re.compile(r"^R\.?\s*(\d+)\b", re.IGNORECASE)
+
+
+def _candidate_manifests(base_dir: Path) -> list[Path]:
+    """manifest.json paths to try, nearest first.
+
+    The case dir, then any immediate subdirectory. Sorted for determinism,
+    with conventional names first so `briefs/manifest.json` wins over an
+    unrelated sibling.
+    """
+    out = []
+    top = base_dir / "manifest.json"
+    if top.exists():
+        out.append(top)
+    preferred = ("briefs", "brief", "pdfs", "documents", "docs")
+    try:
+        subs = sorted((d for d in base_dir.iterdir() if d.is_dir()),
+                      key=lambda d: (d.name.lower() not in preferred,
+                                     d.name.lower()))
+    except OSError:
+        return out
+    for d in subs:
+        if d.name.startswith(".") or d.name.startswith("__"):
+            continue
+        m = d / "manifest.json"
+        if m.exists():
+            out.append(m)
+    return out
+
 
 def _resolve_fact_source(src: dict, record_dir: Path | None,
                          manifest: list[dict], base_dir: Path,
@@ -1232,7 +1266,18 @@ def _resolve_fact_source(src: dict, record_dir: Path | None,
             return p
 
     item = (src.get("item") or src.get("raw") or "").strip()
-    m = _RECORD_ITEM_RE.match(item.split(",")[0].strip())
+    raw = (src.get("raw") or "").strip()
+    head = item.split(",")[0].strip()
+    m = _RECORD_ITEM_RE.match(head)
+    if not m:
+        # `item` may hold bare digits ("785") with the R only in `raw`
+        # ("R785, p. 50"). Trust the pair, not either half alone: a bare
+        # number by itself is ambiguous with a docket id, so require `raw`
+        # to name the same record item.
+        bare = _BARE_ITEM_RE.match(head)
+        raw_m = _RAW_RECORD_RE.match(raw)
+        if bare and raw_m and bare.group(1) == raw_m.group(1):
+            m = raw_m
     if m and record_dir and record_dir.is_dir():
         # Accept both item-naming styles: 'R243 - Title.pdf' (the documented
         # form) and 'R243-Title.pdf' (what splitmarks' sanitize_filename
@@ -3071,9 +3116,20 @@ def main():
         manifest = _load_manifest(mp)
         manifest_dir = mp.parent
     else:
-        default_manifest = base_dir / "manifest.json"
-        if default_manifest.exists():
-            manifest = _load_manifest(default_manifest)
+        # Auto-discover. The case dir is the documented home, but jetmemo's
+        # downloader writes manifest.json beside the PDFs it fetched — i.e.
+        # into a briefs/ (or similar) subdirectory — so search one level down
+        # as well. Filenames in a manifest resolve against its own directory,
+        # so picking up a nested one is safe.
+        for candidate in _candidate_manifests(base_dir):
+            loaded = _load_manifest(candidate)
+            if loaded:
+                manifest = loaded
+                manifest_dir = candidate.parent
+                if candidate.parent != base_dir:
+                    print(f"  Using manifest: "
+                          f"{candidate.relative_to(base_dir)}", file=sys.stderr)
+                break
 
     fact_pdfs: list[Path] = []
     unresolved = 0

@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.16.0
+version: 4.17.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -197,6 +197,7 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 | Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
 | PDF page grep | `$SKILL_DIR/pdf_page_grep.py` |
+| Text-layer quality | `$SKILL_DIR/textquality.py` |
 | Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
 | OOXML validate | `$SKILL_DIR/ooxml_validate.py` |
@@ -295,22 +296,56 @@ $VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" split_output/Record-Bundle.pdf 
 ```
 This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
 
+**If `splitmarks` (or any pypdf/qpdf step) refuses the file, fall back to poppler.** Record packets above 2 GB routinely carry a cross-reference offset that overflows a signed 32-bit integer. pypdf raises `ValueError: negative seek value`, and `qpdf` fails its reconstruction with `root of pages tree has no /Kids array` — but poppler reads the same file without complaint. Extract the page range you need and reassemble:
+
+```bash
+pdfseparate -f <first> -l <last> "<packet>.pdf" "<TMPDIR>/pg-%d.pdf"
+pdfunite $(ls -v "<TMPDIR>"/pg-*.pdf) "<outdir>/R<N> - <Title>.pdf"
+```
+
+Scanned record pages are large; compress the result before it is embedded anywhere, and confirm the text layer survived:
+
+```bash
+gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.5 -dPDFSETTINGS=/ebook \
+   -dNOPAUSE -dQUIET -dBATCH -dDetectDuplicateImages=true \
+   -sOutputFile=<small>.pdf <big>.pdf
+pdftotext -f 1 -l 1 <small>.pdf -    # text still there?
+```
+
+An 85-page findings order went from 70 MB to 3.3 MB this way with its text layer intact. Note the naming: `R<N> - <Title>.pdf` is what `cite_review.py --record-dir` globs for, and page *N* of the extract should equal page *N* of the record item so pin cites land.
+
 **Image-scanned / image-only PDFs (detection + OCR recovery):** Court e-filing systems (e.g., C-Track) routinely produce raster-scanned briefs with no text layer at all. **Detect and recover such files — do not skip them.** A brief the court never read is not a footnote; treat an unreadable input as a coverage failure (Step 11), not a stall.
 
 `splitmarks --check-text` flags split *outputs* proactively (above). It does **not** cover PDFs that were never split — anything ≤ 10 MB that went straight to a subagent — so run the detection signals below on those, and use them as a backstop whenever `--check-text` was unavailable or silent.
 
-**Detection (two signals; either one ⇒ treat as image-only). Both tools are optional — degrade, don't error:**
-- `pdffonts <file>.pdf` reports **zero embedded fonts** (near-certain image-only). If `pdffonts` is not on the probe (see below), skip this signal and rely on the next one.
-- After `pdftotext`, the output stripped of form-feeds/whitespace has **< ~50 characters per page** (catches the one-form-feed-per-page case where the byte count is tiny but nonzero). If `pdftotext` itself is absent (no poppler at all), you cannot extract or detect via text — go straight to the Read-as-images rung, and if that is also unavailable, mark the file `not-ingested`.
+**Detection — run `textquality.py`, which decides all three cases at once:**
+
+```bash
+$VENV_PYTHON "/Users/jerod/.claude/skills/jetredline/textquality.py" <file>.pdf [<file>.pdf ...]
+```
+
+It classifies each file as **`text-ok`**, **`no-text-layer`**, or **`text-layer-corrupt`**, and prints the exact `ocrmypdf` command to run. Exit status is 1 if any file is corrupt. `--json` for machine use, `--quiet` to list only files needing work.
+
+> **Why a third state matters.** A missing text layer and a *corrupt* one need different flags, and telling them apart by character count is impossible. A scanned nineteenth-century source extracted at **5,390 characters per page** — a hundred times any density threshold — and every one of those pages read like `"the assessmellt thereof shall Le suberdmate to the gelleral plall"` Dense, confident, and wrong. Because a layer existed, `--skip-text` skipped all of it and reported success; the verification that relied on it looked clean. Density alone cannot see this. `textquality.py` scores letter-sequence plausibility instead (internal case flips, vowelless tokens, impossible consonant runs), which separated corrupt from clean by more than tenfold across a measured corpus of briefs, book scans, and law-review PDFs.
+
+Fallback signals if `textquality.py` cannot run (both tools optional — degrade, don't error):
+- `pdffonts <file>.pdf` reports **zero embedded fonts** (near-certain image-only).
+- After `pdftotext`, output stripped of form-feeds/whitespace has **< ~50 characters per page**. This catches image-only files **but never catches a corrupt layer** — do not treat a pass here as proof the text is usable. If `pdftotext` is absent entirely, go straight to the Read-as-images rung; if that is also unavailable, mark the file `not-ingested`.
 
 **OCR recovery ladder (CLI mode — escalate in order, stop at first success):**
 1. Probe tooling once and branch on what exists: `command -v pdffonts pdftotext ocrmypdf pdftoppm tesseract`. `pdffonts`/`pdftotext`/`pdftoppm` ship together in poppler (present or absent as a set); `ocrmypdf` and `tesseract` are separate. A missing tool just disables its rung — never a hard failure.
-2. **Preferred — ocrmypdf:** `ocrmypdf --skip-text --quiet <file>.pdf <file>.ocr.pdf` then `pdftotext <file>.ocr.pdf <file>.txt`. **Persist `<file>.ocr.pdf`** next to the original so re-runs need no re-OCR. (`--skip-text` is safe on pages that already carry text.)
+2. **Preferred — ocrmypdf**, with the flag `textquality.py` selected:
+   - `no-text-layer` → `ocrmypdf --skip-text --quiet <file>.pdf <file>.ocr.pdf`
+   - `text-layer-corrupt` → `ocrmypdf --force-ocr --quiet <file>.pdf <file>.ocr.pdf`
+
+   Then `pdftotext <file>.ocr.pdf <file>.txt`. **Persist `<file>.ocr.pdf`** next to the original so re-runs need no re-OCR.
+
+   **Never use `--skip-text` on a corrupt layer.** It skips every page that already carries text, so it exits 0, writes an output file, and changes nothing. That failure is silent and it produces unverified text wearing a verified label. `--force-ocr` rasterizes and re-recognizes unconditionally, which is what a corrupt layer requires.
 3. **Fallback — pdftoppm + tesseract:** if `ocrmypdf` is unavailable, `pdftoppm -r 300 -png <file>.pdf <TMPDIR>/page` then `tesseract` each page, concatenating output to `<file>.txt`.
 4. **Last resort — Read-as-images:** if no OCR binary is present, read the PDF directly with the Read tool (renders pages as images).
 5. **None available** (e.g., a Cowork/VM split with no OCR binaries and no Read access): record the file as **not ingested** — surface it, never silently skip.
 
-**OCR quality check:** after recovery, sample the recovered text. If it does not read as coherent legal prose — garbled, mostly non-words, or still near-empty — mark the file **OCR-low-confidence**. For coverage purposes (Step 11) this counts as *not fully ingested*, the same as not-ingested.
+**OCR quality check:** after recovery, re-run `textquality.py` on the `.ocr.pdf`. If it still reports `text-layer-corrupt`, or the text does not read as coherent legal prose, mark the file **OCR-low-confidence**. For coverage purposes (Step 11) this counts as *not fully ingested*, the same as not-ingested. Re-scoring is the check — an OCR pass that ran without error is not evidence that it worked.
 
 Pass the resulting file paths — and each file's ingestion outcome (`ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method used) — to the fact-checking and brief-matching subagents, which must report it back (see Pass 4 / Pass 6) so the main context can reconcile coverage in Step 11.
 
