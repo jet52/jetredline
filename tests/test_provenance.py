@@ -202,6 +202,23 @@ def test_tier1_instruction_file_wins():
     assert provenance.identify_pass(pass_prompt("pass3b-citations")) == "3B — Citations"
 
 
+def test_tier1_knows_every_shipped_pass_file():
+    """A pass file without a PASS_LABELS entry vanishes from the usage table."""
+    from pathlib import Path
+    skill_dir = Path(provenance.__file__).parent
+    shipped = sorted(p.stem for p in
+                     (skill_dir / "references" / "pass-instructions").glob("pass*.md"))
+    assert shipped, "no pass-instruction files found beside provenance.py"
+    for stem in shipped:
+        assert provenance.identify_pass(pass_prompt(stem)), stem
+
+
+def test_tier2_supplied_authorities():
+    assert provenance.identify_pass(
+        "jetredline Pass 3D (supplied authorities): match draft references ..."
+    ) == "3D — Supplied authorities"
+
+
 def test_tier2_matches_the_pre_4_8_0_inline_prompt():
     """Prompts predating references/pass-instructions/ opened in prose."""
     prompt = ("You are running Pass 4 (fact-check) for a jetredline audit of a "

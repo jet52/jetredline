@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.17.0
+version: 4.18.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
 ---
 
@@ -389,12 +389,13 @@ If the user did specify a preference, honor it:
 
 **Do not ask the user to choose a depth or scope of review.** jetredline runs the full pass suite by default. Never present a "what depth of redline" question or a checklist of passes. (The only sanctioned scoping questions remain the *doc type* question in Step 0.1, asked only when genuinely ambiguous, and nothing else.)
 
-**Announce the full run.** After detecting `DOC_TYPE` (Step 0.1) and before launching passes, state in one short paragraph: (a) that you're doing a complete review, (b) the passes that will run, (c) the deliverables, and (d) that the user can narrow the scope next time by saying so at invocation. Keep it to a few lines — do **not** turn it into a checklist or a question. Suggested form (trim passes that don't apply, e.g. omit dissent/concurrence cross-check when none is present):
+**Announce the full run.** After detecting `DOC_TYPE` (Step 0.1) and before launching passes, state in one short paragraph: (a) that you're doing a complete review, (b) the passes that will run, (c) the deliverables, and (d) that the user can narrow the scope next time by saying so at invocation. Keep it to a few lines — do **not** turn it into a checklist or a question. Suggested form (trim passes that don't apply, e.g. omit dissent/concurrence cross-check when none is present, or supplied authorities when the case directory holds no candidate PDFs):
 
 > I'll run a **complete review** — all of jetredline's passes:
 > • Jurisdiction & standard of review
 > • Line/copy editing — grammar, word choice, sentence structure, Redbook style
 > • Citations — existence, accurate quotation, correct Bluebook/Redbook form, and negative-treatment (overruling) scan
+> • Supplied authorities — sources cited outside standard citation form (journals, treatises, archival material), verified against PDF copies in the case directory
 > • Fact-checking against the record and briefs
 > • Analytical rigor — logical gaps, unsupported conclusions, missing steps
 > • Dissent/concurrence cross-check
@@ -408,7 +409,7 @@ If the user did specify a preference, honor it:
 | If the user says… | Run |
 |---|---|
 | "copy edit," "light edit," "proofread only," "style only" | Pass 2 |
-| "citations only," "check cites," "cite check" | Pass 3A–C |
+| "citations only," "check cites," "cite check" | Pass 3A–D |
 | "substance only," "analysis only," "rigor" | Passes 4, 5, 6, 7 |
 | "no substantive changes," "don't rewrite my reasoning" | Passes 2, 3; skip 5 |
 
@@ -424,11 +425,12 @@ $VENV_PYTHON $SKILL_DIR/extract_text.py --input <draft.docx> --output <TMPDIR>/<
    Then Read the generated markdown — it is the `<opinion_md_path>` used by Pass 3 and Step 11. The script preserves literal ¶ markers, reconstructs Word automatic paragraph numbering (including style-based numbering like the chambers template's MainBody `[¶N]`), extracts footnotes as `[^N]` references, and resolves any existing tracked changes to the as-accepted view; its stderr summary reports those counts — if the input already carries tracked changes, mention that to the user. For pasted text or a markdown file, read it directly. **Count paragraphs** (¶ markers or logical paragraphs) to determine opinion length.
 4. **Delegate Pass 1** (jurisdictional check) to a subagent — see Pass 1 below
 5. **Delegate Pass 3** (citation verification) to a subagent — see Pass 3 below
+5a. **Delegate Pass 3D** (supplied authorities) to a subagent if the case directory holds PDFs beyond the briefs and record items identified in Step 0 — see Pass 3 Part D below. It runs independently of Pass 3B (it generates its own cite JSON), so launch it in parallel with the other subagents.
 6. **Delegate Pass 4** (fact-checking) to a subagent if PDF materials were identified in Step 0 — see Pass 4 below
 6a. **Delegate Pass 6** (brief matching) to a subagent if briefs were identified in Step 0 — see Pass 6 below
 6b. **Delegate Pass 7** (dissent/concurrence cross-check) to a subagent if a dissent or concurrence was identified in Step 0 and `DOC_TYPE == opinion` — see Pass 7 below
 7. **Pass 2 routing:** If the opinion has **more than 30 paragraphs**, delegate Pass 2 to a subagent — see "Delegated Pass 2" below. Otherwise, perform Pass 2 in main context. **Pass 5** (analytical rigor) is always performed in main context. Pass 2 (when not delegated) and Pass 5 can proceed in parallel with subagents.
-8. Collect subagent results from Passes 1, 3, 4, 6, 7, and (if delegated) Pass 2 — **use the `TaskOutput` tool**, not Bash `tail`
+8. Collect subagent results from Passes 1, 3, 3D, 4, 6, 7, and (if delegated) Pass 2 — **use the `TaskOutput` tool**, not Bash `tail`
 8a. **Caption mismatches → edits (closed-loop rule).** Check the Pass 3B results table for Caption Check mismatches. Generate a correcting tracked-change edit **only** when the *same* citation resolved to an official caption and the draft's name is a near-match typo of it (high `name_similarity`) — e.g., a comment "Official caption per 2023 ND 219: 'Tracey v. Tracey'". **Never** harmonize names across two *different* citations (different cite = presumptively different case), and do not auto-correct low-similarity or unresolved names — add a comment for human review instead. Include qualifying edits in the edits JSON alongside Pass 2/3A/5 edits. Likewise apply the **parallel-cite corrections** flagged by Pass 3B's parallel-cite check — add a missing N.W.2d/N.W.3d parallel to a *full* cite, or fix a wrong one, using the `formatted` value from ndlaw.
 8b. **Treatment flags → comments.** If the Pass 3C overruling scan flagged any cited case for possible negative treatment, add a *comment* (not an edit) on each occurrence, quoting the citing context, for human review. Never auto-edit on a treatment signal.
 9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
@@ -478,11 +480,12 @@ $VENV_PYTHON "${CLAUDE_SKILL_DIR}/cite_review.py" \
   --sources-meta <TMPDIR>/sources.json \
   --passages-json <TMPDIR>/passages.json \
   --facts-json <TMPDIR>/facts.json \
+  --authorities-json <TMPDIR>/authorities.json \
   --case-dir <working_dir> \
   --record-dir <record_item_dir> \
   --output <output_dir>/cite-review.html
 ```
-Pass `--docx` whenever the draft arrived as a .docx (the same original file Step 3 extracted from) — it recovers italics (case names, *Id.*, signals, added emphasis) and block-quote indentation for the draft pane; omit it for pasted-text or markdown drafts, and rendering degrades gracefully to plain. Omit `--via-json` if Pass 3B did not run or produced no table; omit `--sources-meta` if step 11a exported nothing; omit `--passages-json` if Pass 3B wrote no passages ledger. Omit `--facts-json` if Pass 4 did not run or wrote no facts ledger. `--case-dir` is the working directory holding the case PDFs (pass it because the opinion markdown lives in TMPDIR); a `manifest.json` there is picked up automatically for docket-number and brief-name resolution. Pass `--record-dir` when a directory of district-court record items (`R<N> - <Type> <Title>.pdf`) is present — record cites like "R243" then resolve to embedded PDF viewers opened at the cited page with the evidence quote highlighted. `--link-pdfs` swaps the embedded viewers for zero-copy native iframes if sidecar size is a concern.
+Pass `--docx` whenever the draft arrived as a .docx (the same original file Step 3 extracted from) — it recovers italics (case names, *Id.*, signals, added emphasis) and block-quote indentation for the draft pane; omit it for pasted-text or markdown drafts, and rendering degrades gracefully to plain. Omit `--via-json` if Pass 3B did not run or produced no table; omit `--sources-meta` if step 11a exported nothing; omit `--passages-json` if Pass 3B wrote no passages ledger. Omit `--facts-json` if Pass 4 did not run or wrote no facts ledger. Omit `--authorities-json` if Pass 3D did not run or detected no supplied authorities — when present, its entries render in the citations sidebar with a `supplied` badge and lane filter chips (`All · Citations · Authorities · Facts`). `--case-dir` is the working directory holding the case PDFs (pass it because the opinion markdown lives in TMPDIR); a `manifest.json` there is picked up automatically for docket-number and brief-name resolution. Pass `--record-dir` when a directory of district-court record items (`R<N> - <Type> <Title>.pdf`) is present — record cites like "R243" then resolve to embedded PDF viewers opened at the cited page with the evidence quote highlighted. `--link-pdfs` swaps the embedded viewers for zero-copy native iframes if sidecar size is a concern.
 
 **Local-PDF authorities.** If a cited authority has no online or refs source but a PDF copy sits in the working directory (an obscure treatise, an out-of-state slip opinion, a session-law scan), add to the step 11a `sources.json` entry for that citation: `"pdf": "<path relative to the working dir>"`, plus optional `"page": N` and `"quote": "<verbatim passage>"`. The review page then offers a "Local PDF" source mode with the same embedded viewer, opened at the page/quote. This produces a self-contained HTML file that lists **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — highlighting the exact occurrence in the draft pane and showing the cited authority (embedded text scrolled to the pinpoint ¶, or the Pass 3B verification passage) in the source pane. Tell the user the file is available and can be opened in a browser.
 
@@ -562,17 +565,17 @@ The agent's job is: collect edits into JSON (1 Write call), run one command (1 B
 3. Read the draft from the conversation (pasted text or uploaded file).
 4. Perform Pass 1 inline.
 5. Perform Pass 2 inline (regardless of length).
-6. Perform Pass 3A (format) inline. Perform Pass 3B (verification) inline with web search fallback.
+6. Perform Pass 3A (format) inline. Perform Pass 3B (verification) inline with web search fallback. Perform Pass 3D (supplied authorities) inline if the user uploaded copies of non-case sources the draft relies on — see Part D's Web-mode note.
 7. Perform Pass 4 inline if the user uploaded source PDFs. Read them directly.
 8. Perform Pass 6 (brief matching) inline if the user uploaded briefs.
 9. Perform Pass 7 (dissent cross-check) inline if the user uploaded a dissent/concurrence and `DOC_TYPE == opinion`.
 10. Perform Pass 5 inline.
 
-For each delegated pass performed inline (1, 3B, 4, 6, 7 — and 2's entry format), read its instruction file from project knowledge (`references/pass-instructions/passN-*.md`) and apply it, adapting CLI-only steps (shell commands, `~/refs/`, ledger files) per the pass's Web-mode note.
+For each delegated pass performed inline (1, 3B, 3D, 4, 6, 7 — and 2's entry format), read its instruction file from project knowledge (`references/pass-instructions/passN-*.md`) and apply it, adapting CLI-only steps (shell commands, `~/refs/`, ledger files) per the pass's Web-mode note.
 11. Skip .docx assembly.
 12. Produce the analysis document as markdown in the conversation.
 
-**Context limits:** Without subagents, very long documents (50+ paragraphs) may approach context limits. If this occurs, prioritize: Pass 2 → Pass 5 → Pass 3A → Pass 1 → Pass 3B → Pass 4 → Pass 6 → Pass 7. Inform the user which passes were completed.
+**Context limits:** Without subagents, very long documents (50+ paragraphs) may approach context limits. If this occurs, prioritize: Pass 2 → Pass 5 → Pass 3A → Pass 1 → Pass 3B → Pass 4 → Pass 3D → Pass 6 → Pass 7. Inform the user which passes were completed.
 
 ## Legal-Research MCP Servers (ndlaw, CourtListener)
 
@@ -646,7 +649,7 @@ When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (suba
 
 ### Pass 3: Citation Check (Delegated to Subagent)
 
-Pass 3 has three parts: (A) Bluebook format checking, in main context; (B) substantive citation verification, delegated to a subagent; and (C) a negative-treatment / overruling scan, in main context. Parts B and C use the ndlaw / CourtListener servers as the primary source when available — see "Legal-Research MCP Servers" above — and fall back to local files plus web verification otherwise.
+Pass 3 has four parts: (A) Bluebook format checking, in main context; (B) substantive citation verification, delegated to a subagent; (C) a negative-treatment / overruling scan, in main context; and (D) supplied-authorities verification, delegated to a subagent. Parts B and C use the ndlaw / CourtListener servers as the primary source when available — see "Legal-Research MCP Servers" above — and fall back to local files plus web verification otherwise.
 
 #### Part A: Format Check (Main Context)
 
@@ -696,7 +699,19 @@ A proofreading pass that flags cited cases later opinions may have overruled, su
 
 **If the tool is unavailable:** skip this part and note in the analysis document: "Automated negative-treatment check not run (ndlaw unavailable); citations were not screened for subsequent history." Do not attempt to substitute web search for a citator here.
 
-### Pass 4: Fact Check (Delegated to Subagent)
+#### Part D: Supplied Authorities (Delegated to Subagent)
+
+A draft may rely on sources the citation parser cannot recognize — a convention journal, an official report of debates, a treatise, a periodical in an obsolete abbreviation, an archival document, a historical constitution, an out-of-jurisdiction slip opinion — for which PDF copies sit in the case directory. Parts A–C never see them; Part D connects each such reference to its PDF, extracts and verifies the cited pages, and flags references with no supplied copy.
+
+**When to run:** the case directory holds PDFs beyond the briefs and record items identified in Step 0 — or the draft visibly relies on non-case sources (italicized titles, printed-page cites to works rather than reporters). When in doubt, run it: the subagent returns "No supplied authorities detected" cheaply. **Do not** read the candidate PDFs in main context.
+
+**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3d-authorities.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`; the venv python is `[the $VENV_PYTHON value from Step 0]`. The draft opinion markdown is at `[opinion_md_path]`; the case directory is `[working_dir]`; TMPDIR is `<TMPDIR>`.
+
+**Returns:** the supplied-authorities table (`¶ | Authority | Kind | Cited page | Matched file | Page check | Quote check | Supports? | Notes`), a summary line, and two findings lists: **authorities relied on but not located** (the draft cites a work with no copy in the case directory — carry each into the analysis document; this is exactly what chambers wants flagged) and supplied-but-unreferenced PDFs (informational). The subagent also writes `<TMPDIR>/authorities.json` (the ledger Step 11b embeds via `--authorities-json`) and places page extracts in `<working_dir>/authorities/`.
+
+**Web mode:** No shell or filesystem — the deterministic pipeline does not apply. If the user uploaded copies of non-case sources, verify the draft's references against them inline (read the uploaded PDF at the cited page, check the passage and proposition) and report the same table; note that unuploaded works could not be checked.
 
 When the user provides briefs, record documents, or other source materials alongside the draft opinion, **do not** read the PDF materials into the main context. Delegate fact-checking to a subagent to keep potentially large PDF content out of the main context window.
 
@@ -1024,6 +1039,19 @@ One or more provided source files could not be fully read. Fact-check and brief-
 
 **Summary:** [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] unsupported propositions.
 
+## Supplied Authorities
+
+[Include this section only when Pass 3D ran and found references. Rows come from the Pass 3D table.]
+
+| ¶ | Authority | Kind | Cited page | Matched file | Page check | Quote check | Supports? | Notes |
+|---|-----------|------|------------|--------------|------------|-------------|-----------|-------|
+| [¶] | [short title] | [journal/treatise/…] | [printed page] | [filename or **none found**] | Verified / Unverified / N/A | Verified / Discrepancy / Not found / No quote | Supports / Partially / Does not support | [explanation] |
+
+**Summary:** [N] references to supplied authorities. [M] matched to PDFs in the case directory, [P] page-verified, [Q] passages verified.
+
+**Authorities relied on but not located** [omit when empty — but never omit silently when Pass 3D reported any]:
+- [ ] *[Title]* (¶ [ref]) — no copy in the case directory; obtain and verify before publication.
+
 ## Citation Format Issues
 [Citation-format corrections with explanations]
 
@@ -1043,7 +1071,7 @@ Do **not** hand-write a version/date line in the footer — the provenance stamp
 After Pass 3 completes and the opinion markdown is available, generate the interactive citation review page by running **Step 11a** (ndlaw export, with its scribe-subagent fallback) and **Step 11b** (`cite_review.py`) exactly as specified in the Core Workflow above — the commands, flag-omission rules, and fallbacks are defined there and are not repeated here.
 
 The result is a self-contained HTML file with:
-- A sidebar listing **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — with verification status and its **Via** provenance badge (the tier that verified it)
+- A sidebar listing **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — with verification status and its **Via** provenance badge (the tier that verified it); supplied authorities (Pass 3D) appear alongside citations with a `supplied` badge, and lane filter chips (`All · Citations · Authorities · Facts`) narrow the list
 - A split main pane: draft paragraph (with the exact occurrence highlighted) on top; on the bottom, the cited authority — embedded source text scrolled to the pinpoint ¶, the Pass 3B verification passage when no full text is available, or a web fallback — with a link bar carrying the court's direct opinion URL
 - Keyboard navigation (`j`/`k` to move, `v`/`f`/`s` to verify/flag/skip, `Space`/`Enter` to verify and advance, `a` to toggle auto-advance, `h`/`l` to switch local/web view, `n` for notes, `?` for help)
 - LocalStorage persistence so review state survives browser restarts
