@@ -907,17 +907,33 @@ def _flex_prefix_pattern(prefix: str) -> str:
 
 # Spelled-out names for the commonly narrated rule sets (the compact-dotted
 # marker for every set is generated from its canonical prefix).
+#
+# Longest form first: rule_set_markers keeps the longer of two markers that
+# start together and drops the contained one, so the state form must be
+# offered alongside the bare one. Only Civ.P. carried its spelled-out state
+# form; without the rest, "Rule 32(a)(8)(A) of the North Dakota Rules of
+# Appellate Procedure" left "North Dakota " sitting in the trailing gap, the
+# trailing rung was rejected, and a certificate of compliance — which carries
+# that citation in nearly every appellate brief — yielded no rule cite at all.
 _SPELLED_MARKERS = {
     "N.D.R.Civ.P.": [r"North Dakota Rules of Civil Procedure",
                      r"Rules of Civil Procedure"],
-    "N.D.R.Crim.P.": [r"Rules of Criminal Procedure"],
-    "N.D.R.Ev.": [r"Rules of Evidence"],
-    "N.D.R.App.P.": [r"Rules of Appellate Procedure"],
-    "N.D.R.Ct.": [r"Rules of Court"],
-    "N.D.R.Juv.P.": [r"Rules of Juvenile Procedure"],
+    "N.D.R.Crim.P.": [r"North Dakota Rules of Criminal Procedure",
+                      r"Rules of Criminal Procedure"],
+    # Briefs write "North Dakota Rule of Evidence 201" — singular.
+    "N.D.R.Ev.": [r"North Dakota Rules? of Evidence",
+                  r"Rules? of Evidence"],
+    "N.D.R.App.P.": [r"North Dakota Rules of Appellate Procedure",
+                     r"Rules of Appellate Procedure"],
+    "N.D.R.Ct.": [r"North Dakota Rules of Court",
+                  r"Rules of Court"],
+    "N.D.R.Juv.P.": [r"North Dakota Rules of Juvenile Procedure",
+                     r"Rules of Juvenile Procedure"],
     "N.D. Sup. Ct. Admin. R.": [r"Administrative Rule"],
-    "N.D.R. Prof. Conduct": [r"Rules of Professional Conduct"],
-    "N.D. Code Jud. Conduct": [r"Code of Judicial Conduct"],
+    "N.D.R. Prof. Conduct": [r"North Dakota Rules of Professional Conduct",
+                             r"Rules of Professional Conduct"],
+    "N.D. Code Jud. Conduct": [r"North Dakota Code of Judicial Conduct",
+                               r"Code of Judicial Conduct"],
     "Fed. R. Civ. P.": [r"Federal Rules of Civil Procedure"],
     "Fed. R. Crim. P.": [r"Federal Rules of Criminal Procedure"],
     "Fed. R. Evid.": [r"Federal Rules of Evidence"],
