@@ -13,7 +13,7 @@ CITESTYLE_DEST := skills/jetredline/references/nd-citation-style.md
 PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
 WEB_ZIP := $(SKILL_NAME)-web-$(VERSION).zip
 
-.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks vendor-textquality vendor-citestyle drift-check version-check
+.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release check-assets vendor-jetcite vendor-splitmarks vendor-textquality vendor-citestyle drift-check version-check
 
 # Public package targets clean first (so zip -r never updates a stale archive),
 # then delegate to a build-* recipe. package-all cleans once and builds all three
@@ -55,7 +55,30 @@ release: version-check package-all
 	git push origin main && \
 	git push origin "v$$VERSION" && \
 	gh release create "v$$VERSION" $(SKILL_ZIP) $(PLUGIN_ZIP) $(WEB_ZIP) --title "v$$VERSION" --generate-notes && \
+	$(MAKE) --no-print-directory check-assets TAG="v$$VERSION" ASSETS="$(SKILL_ZIP) $(PLUGIN_ZIP) $(WEB_ZIP)" && \
 	echo "Released v$$VERSION"
+
+# `gh release create` exits 0 after silently skipping an asset: v4.19.1 was
+# handed all three zips, attached only the plugin and web ones, and reported
+# success — so the release announced itself complete while missing the
+# standalone skill zip that manual installers download. Nothing in the
+# toolchain caught it; it was found by eye. This asserts every expected asset
+# actually landed, retries once, then fails hard.
+check-assets:
+	@test -n "$(TAG)" || { echo "check-assets: TAG not set"; exit 1; }
+	@for f in $(ASSETS); do \
+	  if ! gh release view "$(TAG)" --json assets --jq '.assets[].name' | grep -qx "$$f"; then \
+	    echo "MISSING: $$f did not attach to $(TAG); retrying upload"; \
+	    gh release upload "$(TAG)" "$$f" --clobber || true; \
+	  fi; \
+	done
+	@missing=0; \
+	for f in $(ASSETS); do \
+	  gh release view "$(TAG)" --json assets --jq '.assets[].name' | grep -qx "$$f" || \
+	    { echo "FAIL: $$f is still not attached to $(TAG)"; missing=1; }; \
+	done; \
+	[ $$missing -eq 0 ] || exit 1; \
+	echo "assets verified on $(TAG): $(ASSETS)"
 
 .PHONY: build-skill build-plugin build-web
 
