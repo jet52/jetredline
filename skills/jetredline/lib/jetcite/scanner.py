@@ -229,11 +229,18 @@ _PARA_PINPOINT_RE = re.compile(r"¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)")
 _PAGE_PINPOINT_RE = re.compile(r"(?:^|at\s+)(\d+(?:\s*[-–]\s*\d+)?)")
 
 # What may sit between a bare "Rule 60(b)" and a trailing rule-set marker:
-# an optional parenthetical pinpoint, commas/space, an optional "of the".
-# Anything more ("Rule 12 and N.D.R.Ev. 403") rejects trailing attribution.
+# a subdivision chain, commas/space, an optional "of the". Anything more
+# ("Rule 12 and N.D.R.Ev. 403") rejects trailing attribution.
 # (Ported from ndcourts-mcp notes.py.)
+#
+# The chain repeats. _RULE_PIN normally swallows an unspaced chain into the
+# candidate itself, but a brief that spaces the subdivision off the number —
+# "Rule 32 (a)(8)(A) of the North Dakota Rules of Appellate Procedure" —
+# leaves the whole chain sitting in this gap, and one optional parenthetical
+# rejected it. The ladder then fell through to the nearest PRECEDING marker
+# and attributed Rule 32 to whichever set was mentioned earlier.
 _RULE_TRAILING_GAP_RE = re.compile(
-    r"[\s,]*(?:\([^)]{1,20}\))?[\s,]*(?:of\s+the\s+)?$"
+    r"[\s,]*(?:\([^)]{1,20}\))*[\s,]*(?:of\s+the\s+)?$"
 )
 
 
