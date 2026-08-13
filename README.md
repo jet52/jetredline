@@ -161,7 +161,7 @@ jetredline/
 │       ├── check_update.py         # Version check on session start
 │       ├── provenance.py           # Model/version/date stamp for analysis documents
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.
-│       ├── textquality.py          # PDF text-layer triage: ok / image-only / corrupt
+│       ├── textquality.py          # PDF text-layer triage: ok / image-only / corrupt (vendored)
 │       ├── pdfsource.py           # Supplied-source PDFs: probe/locate/extract/compact
 │       ├── authorities.py         # Pass 3D: inventory / candidates / match
 │       ├── pdf_page_grep.py        # Find a string in a PDF, report its page
@@ -196,6 +196,7 @@ jetredline/
 | defusedxml   | Safe XML parsing               | Yes (installed by installer) |
 | pypdf        | PDF manipulation               | Yes (installed by installer) |
 | splitmarks   | PDF bookmark splitting         | Bundled script (no install)  |
+| textquality  | PDF text-layer triage          | Bundled script (no install)  |
 | textstat     | Readability metrics            | Yes (installed by installer) |
 | jetcite      | Citation parsing and linking   | Bundled (vendored source)   |
 | docx (npm)   | New .docx creation from scratch| Only if not editing existing  |

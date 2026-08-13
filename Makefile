@@ -5,13 +5,15 @@ JETCITE_SRC := ../jetcite/src/jetcite
 JETCITE_DEST := skills/jetredline/lib/jetcite
 SPLITMARKS_SRC := ../splitmarks/splitmarks.py
 SPLITMARKS_DEST := skills/jetredline/splitmarks.py
+TEXTQUALITY_SRC := ../splitmarks/textquality.py
+TEXTQUALITY_DEST := skills/jetredline/textquality.py
 CITESTYLE_SRC := ../jetcite/reference/nd-citation-style.md
 CITESTYLE_DEST := skills/jetredline/references/nd-citation-style.md
 
 PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
 WEB_ZIP := $(SKILL_NAME)-web-$(VERSION).zip
 
-.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks vendor-citestyle drift-check version-check
+.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release vendor-jetcite vendor-splitmarks vendor-textquality vendor-citestyle drift-check version-check
 
 # Public package targets clean first (so zip -r never updates a stale archive),
 # then delegate to a build-* recipe. package-all cleans once and builds all three
@@ -71,10 +73,25 @@ vendor-jetcite:
 	find $(JETCITE_DEST) -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@echo "Vendored jetcite from $(JETCITE_SRC)"
 
-vendor-splitmarks:
+# Depends on vendor-textquality because splitmarks imports textquality inside a
+# try/except: vendoring the script without the module leaves --check-text
+# silently back on the old density-only behaviour, which is the exact failure
+# this pairing exists to prevent. The two always move together.
+vendor-splitmarks: vendor-textquality
 	@test -f $(SPLITMARKS_SRC) || (echo "FAIL: splitmarks source not found at $(SPLITMARKS_SRC)" && exit 1)
 	cp $(SPLITMARKS_SRC) $(SPLITMARKS_DEST)
 	@echo "Vendored splitmarks from $(SPLITMARKS_SRC)"
+
+# Text-layer quality scorer that splitmarks --check-text consults to tell a
+# corrupt text layer (dense but garbage) from a missing one. Authored here
+# originally; canonical copy now lives in the splitmarks repo beside the script
+# that imports it, so jetmemo and jetrehearing get the same module rather than
+# vendoring splitmarks 2.2.0 and silently falling back to 2.1.0 behaviour. It
+# must land in the same directory as splitmarks.py for that import to resolve.
+vendor-textquality:
+	@test -f $(TEXTQUALITY_SRC) || (echo "FAIL: textquality source not found at $(TEXTQUALITY_SRC)" && exit 1)
+	cp $(TEXTQUALITY_SRC) $(TEXTQUALITY_DEST)
+	@echo "Vendored textquality from $(TEXTQUALITY_SRC)"
 
 # The ND Supreme Court's Redbook supplement. Canonical copy lives in the jetcite
 # repo so jetmemo, jetredline, and jetrehearing cite one identical rule set.
@@ -91,6 +108,12 @@ drift-check:
 	  echo "splitmarks: in sync with canonical."; \
 	else \
 	  echo "splitmarks: canonical repo not present ($(SPLITMARKS_SRC)); skipping drift check."; \
+	fi
+	@if [ -f $(TEXTQUALITY_SRC) ]; then \
+	  cmp -s $(TEXTQUALITY_SRC) $(TEXTQUALITY_DEST) || { echo "DRIFT: $(TEXTQUALITY_DEST) differs from canonical $(TEXTQUALITY_SRC) — run 'make vendor-textquality'"; exit 1; }; \
+	  echo "textquality: in sync with canonical."; \
+	else \
+	  echo "textquality: canonical repo not present ($(TEXTQUALITY_SRC)); skipping drift check."; \
 	fi
 	@if [ -f $(CITESTYLE_SRC) ]; then \
 	  cmp -s $(CITESTYLE_SRC) $(CITESTYLE_DEST) || { echo "DRIFT: $(CITESTYLE_DEST) differs from canonical $(CITESTYLE_SRC) — run 'make vendor-citestyle'"; exit 1; }; \
@@ -120,6 +143,8 @@ test-structure: drift-check version-check
 	@test -d skills/jetredline/references || (echo "FAIL: skills/jetredline/references/ missing" && exit 1)
 	@test -f skills/jetredline/package.json || (echo "FAIL: skills/jetredline/package.json missing" && exit 1)
 	@test -d skills/jetredline/lib/jetcite || (echo "FAIL: skills/jetredline/lib/jetcite/ missing — run 'make vendor-jetcite'" && exit 1)
+	@test -f skills/jetredline/splitmarks.py || (echo "FAIL: skills/jetredline/splitmarks.py missing — run 'make vendor-splitmarks'" && exit 1)
+	@test -f skills/jetredline/textquality.py || (echo "FAIL: skills/jetredline/textquality.py missing — run 'make vendor-textquality'" && exit 1)
 	@test -f install.sh || (echo "FAIL: install.sh missing" && exit 1)
 	@test -f install.ps1 || (echo "FAIL: install.ps1 missing" && exit 1)
 	@test -f README.md || (echo "FAIL: README.md missing" && exit 1)
