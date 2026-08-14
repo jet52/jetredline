@@ -18,9 +18,36 @@ jobs:
           DATE="$(date -u +%Y-%m-%d)"
           sed -i "s/^version: .*/version: ${VER}/" skills/jetredline/SKILL.md
           sed -i "s|JetRedline v[0-9][^ ]* ([0-9-]*)|JetRedline v${VER} (${DATE})|" skills/jetredline/SKILL.md
-      - run: make package
+      # package-all, not package. `make package` builds only the standalone
+      # skill zip, so a release cut by this workflow silently shipped fewer
+      # artifacts than one cut by `make release` locally: v4.19.1 (local) has
+      # all three archives, v4.19.2 (this workflow) came out with only the
+      # skill zip and the plugin archive had to be uploaded by hand. The
+      # plugin archive is the one most users need, so it is the worst one to
+      # drop.
+      - run: make package-all
       - uses: softprops/action-gh-release@v2
         with:
           files: |
+            jetredline-plugin-*.zip
             jetredline-skill-*.zip
+            jetredline-web-*.zip
           generate_release_notes: true
+
+      # softprops can succeed while attaching nothing useful if a glob misses.
+      # Assert all three landed rather than trusting the step's exit code.
+      - name: Verify all three archives attached
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          missing=0
+          for f in "jetredline-plugin-${VER}.zip" \
+                   "jetredline-skill-${VER}.zip" \
+                   "jetredline-web-${VER}.zip"; do
+            gh release view "${GITHUB_REF_NAME}" --json assets \
+              --jq '.assets[].name' | grep -qx "$f" \
+              || { echo "FAIL: $f is not attached to ${GITHUB_REF_NAME}"; missing=1; }
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "all three archives verified on ${GITHUB_REF_NAME}"
