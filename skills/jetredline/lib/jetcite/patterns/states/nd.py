@@ -861,6 +861,15 @@ class NDMatcher(BaseMatcher):
                 "Ltd. Practice of Law by Law Students R.",
                 [_roman_to_arabic(m.group(1))]))
 
+        # Leading spelled-out full cites — "North Dakota Rule of Evidence
+        # 201 governs." No other matcher reaches the shape: the compact
+        # patterns need the abbreviated prefix, and the trailing ladder
+        # needs the set named AFTER the rule number.
+        for slug, display, pat in _SPELLED_LEADING:
+            for m in pat.finditer(text):
+                parts = [m.group(1)] + ([m.group(2)] if m.group(2) else [])
+                results.append(self._rule_cite(m, slug, display, parts))
+
     def _rule_cite(self, m, rule_set: str, display: str,
                    parts: list[str]) -> Citation:
         parts_str = ".".join(parts)
@@ -877,6 +886,39 @@ class NDMatcher(BaseMatcher):
 
 # ---------------------------------------------------------------------------
 # Rule-set marker vocabulary — bare "Rule N" short-form attribution
+# Leading spelled-out full cites — "North Dakota Rule of Evidence 201".
+# The "North Dakota" prefix is REQUIRED: a bare "Rules of Evidence 201" in a
+# mixed brief could equally be the federal set, and an unsure reference is
+# dropped, never guessed. Case-sensitive on purpose — these are proper-noun
+# set names, and prose ("the rules of court") must not match. `\b` after the
+# number keeps years out ("Rules of Court 2020 edition").
+_SPELLED_LEADING = [
+    (slug, display, re.compile(
+        r"North\s+Dakota\s+" + name +
+        r"\s+(?:Rule\s+)?(\d{1,3})(?:\.(\d{1,3}))?\b"))
+    for slug, display, name in (
+        ("ndrcivp", "N.D.R.Civ.P.", r"Rules?\s+of\s+Civil\s+Procedure"),
+        ("ndrcrimp", "N.D.R.Crim.P.", r"Rules?\s+of\s+Criminal\s+Procedure"),
+        ("ndrev", "N.D.R.Ev.", r"Rules?\s+of\s+Evidence"),
+        ("ndrappp", "N.D.R.App.P.", r"Rules?\s+of\s+Appellate\s+Procedure"),
+        ("ndrct", "N.D.R.Ct.", r"Rules?\s+of\s+Court"),
+        ("ndrjuvp", "N.D.R.Juv.P.", r"Rules?\s+of\s+Juvenile\s+Procedure"),
+        ("ndrprofconduct", "N.D.R. Prof. Conduct",
+         r"Rules?\s+of\s+Professional\s+Conduct"),
+        ("ndcodejudconduct", "N.D. Code Jud. Conduct",
+         r"Code\s+of\s+Judicial\s+Conduct"),
+        ("ndrlawyerdiscipl", "N.D.R. Lawyer Discipl.",
+         r"Rules?\s+for\s+Lawyer\s+Discipline"),
+        ("admissiontopracticer", "N.D. Admission to Practice R.",
+         r"Admission\s+to\s+Practice\s+Rules?"),
+        ("ndrcontinuinglegaled", "N.D.R. Continuing Legal Ed.",
+         r"Rules?\s+for\s+Continuing\s+Legal\s+Education"),
+        ("ndsupctadminr", "N.D. Sup. Ct. Admin. R.",
+         r"Supreme\s+Court\s+Administrative\s+Rules?"),
+    )
+]
+
+
 # ---------------------------------------------------------------------------
 # Ported from ndcourts-mcp notes.py (rule_set_markers / _SPELLED_MARKERS),
 # proven on the opinion corpus in get_notes_of_decisions. A marker is any
@@ -929,11 +971,30 @@ _SPELLED_MARKERS = {
                   r"Rules of Court"],
     "N.D.R.Juv.P.": [r"North Dakota Rules of Juvenile Procedure",
                      r"Rules of Juvenile Procedure"],
-    "N.D. Sup. Ct. Admin. R.": [r"Administrative Rule"],
+    "N.D. Sup. Ct. Admin. R.": [
+        r"North Dakota Supreme Court Administrative Rules?",
+        r"Supreme Court Administrative Rules?",
+        r"Administrative Rule"],
+    # "Administrative Order" alone is ordinary prose for an AGENCY order
+    # (see _ADMIN_ORDER), so only the court-owned spelled forms are markers.
+    "N.D. Sup. Ct. Admin. Order": [
+        r"North Dakota Supreme Court Administrative Orders?",
+        r"Supreme Court Administrative Orders?"],
     "N.D.R. Prof. Conduct": [r"North Dakota Rules of Professional Conduct",
                              r"Rules of Professional Conduct"],
     "N.D. Code Jud. Conduct": [r"North Dakota Code of Judicial Conduct",
                                r"Code of Judicial Conduct"],
+    "N.D.R. Lawyer Discipl.": [r"North Dakota Rules for Lawyer Discipline",
+                               r"Rules for Lawyer Discipline"],
+    "N.D. Admission to Practice R.": [
+        r"North Dakota Admission to Practice Rules?",
+        r"Admission to Practice Rules?"],
+    "N.D.R. Continuing Legal Ed.": [
+        r"North Dakota Rules for Continuing Legal Education",
+        r"Rules for Continuing Legal Education"],
+    "N.D.R. Jud. Conduct Commission": [
+        r"North Dakota Rules of the Judicial Conduct Commission",
+        r"Rules of the Judicial Conduct Commission"],
     "Fed. R. Civ. P.": [r"Federal Rules of Civil Procedure"],
     "Fed. R. Crim. P.": [r"Federal Rules of Criminal Procedure"],
     "Fed. R. Evid.": [r"Federal Rules of Evidence"],
@@ -944,7 +1005,10 @@ _SPELLED_MARKERS = {
 _MARKER_RULE_SETS = (
     "N.D.R.Civ.P.", "N.D.R.Crim.P.", "N.D.R.Ev.", "N.D.R.App.P.",
     "N.D.R.Ct.", "N.D.R.Juv.P.", "N.D. Sup. Ct. Admin. R.",
+    "N.D. Sup. Ct. Admin. Order",
     "N.D.R. Prof. Conduct", "N.D. Code Jud. Conduct",
+    "N.D.R. Lawyer Discipl.", "N.D. Admission to Practice R.",
+    "N.D.R. Continuing Legal Ed.", "N.D.R. Jud. Conduct Commission",
     "Fed. R. Civ. P.", "Fed. R. Crim. P.", "Fed. R. Evid.",
     "Fed. R. App. P.", "Fed. R. Bankr. P.",
 )
