@@ -1700,8 +1700,17 @@ main { display:flex; flex:1; overflow:hidden; }
   border-bottom:1px dotted var(--text-muted);
 }
 .draft-link:hover { color:var(--accent); border-bottom-color:var(--accent); }
+/* Horizontal padding is deliberately 0. This span is inline, so left/right
+   padding occupies real layout space and shoves the surrounding words apart
+   for as long as the highlight is mounted — the text visibly springs back
+   when navigation moves the highlight elsewhere. Worse, highlightQuoteInPara
+   wraps one span per text node, so a case name straddling an <em> boundary
+   got the same false gap in its middle. Vertical padding is safe: on an
+   inline box it grows the painted background without affecting line layout.
+   To restore visual breathing room, use box-shadow spread (painted outside
+   the border box, zero layout cost), never padding. */
 .cite-hl {
-  background:var(--cite-hl); padding:2px 5px;
+  background:var(--cite-hl); padding:2px 0;
   border-radius:3px; border-bottom:2px solid var(--cite-hl-border);
   animation: cite-flash 0.6s ease-out;
 }
