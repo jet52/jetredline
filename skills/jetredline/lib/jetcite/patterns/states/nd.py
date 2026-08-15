@@ -68,7 +68,7 @@ _NDAC_CHAPTER = re.compile(
 _NDAC_REVERSE = re.compile(
     rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}'
     rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])(?:,\s{0,3})'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])(?:,\s{0,3})'
     r'N[\s.]*D[\s.]*A(?:dmin)*[.\s]*(?:Code|C|Rules|R)*',
     re.IGNORECASE,
 )
@@ -209,25 +209,44 @@ _WORD_BEFORE = re.compile(r'([A-Za-z]+)\s+$')
 # The trailing-form gap between the rule number and the set marker excludes
 # ";" throughout: a semicolon is a string-cite boundary, so "2024 ND 4;
 # N.D.R.Civ.P. 60(b)" must not read the neutral cite's "4" as a rule number.
+# "]" is excluded for the same reason: it closes a paragraph marker, so
+# "[¶12] N.D.R.Civ.P. 55(a)(3)" must not read the marker's "12" as one
+# either. That form opens paragraphs throughout ND opinions and the
+# markdown extracted from them, and where the trailing and leading rule
+# numbers have the same arity (N.D.R.Ev., N.D. Sup. Ct. Admin. R.) the
+# phantom match overlaps and *replaces* the real cite rather than merely
+# adding to it.
+#
+# Every trailing form also carries "(?<![\d.])" before its rule number, so a
+# lower-arity pattern cannot match the tail of a higher-arity number: without
+# it "Rule 8.3.1, N.D.R.Ct." yielded both 8.3.1 and a spurious 3.1, and
+# "Rule 8.3, N.D. Sup. Ct. Admin. R." both 8.3 and a spurious 3. Neither is
+# caught by the two dedup passes in find_all — the tail starts at a later
+# position and normalizes differently, so it is neither a same-position
+# collision nor an equal-normalized overlap. The leading forms need no such
+# guard: there the short match starts at the shared rule-set marker, so the
+# same-position pass already keeps the longer one. A rule number never begins
+# immediately after a digit or a period, which is what makes the lookbehind
+# safe on the patterns that have no shorter sibling today.
 _NDRCT_3 = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
 
 # N.D.R.Ct. 2-part: Rule 11.10
 _NDRCT_2 = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
 
 # N.D. Sup. Ct. Admin. R. 2-part
 _ADMIN_2 = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[\s.]*'
     r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
@@ -235,8 +254,8 @@ _ADMIN_2 = re.compile(
 
 # N.D. Sup. Ct. Admin. R. 1-part
 _ADMIN_1 = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[\s.]*'
     r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rule\s+)?(\d{1,2})(?![.\d]))',
     re.IGNORECASE,
@@ -244,8 +263,8 @@ _ADMIN_1 = re.compile(
 
 # N.D.R.Ev. (3-4 digit rule numbers)
 _NDREV = re.compile(
-    r'(?:(?:Rule\s+)?(\d{3,4})'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{3,4})'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[.\s]*(?:Rule\s+)?(\d{3,4}))',
     re.IGNORECASE,
@@ -253,8 +272,8 @@ _NDREV = re.compile(
 
 # Procedural rules: N.D.R.Civ.P., N.D.R.Crim.P., N.D.R.App.P., N.D.R.Juv.P.
 _PROC_RULES = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2}(?:\.\d{1,2})?)'
-    r'(?:(?:\([a-z\d]*\))*|[^.\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)'
+    r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*'
     r'(?:North\s+Dakota\s+Rules?\s+of\s+(Civil|Criminal|Appellate|Juvenile)\s+Procedure'
     r'|N[\s.]*D[\s.]*R[\s.]*(Civ|Crim|App|Juv)(?:il|inal|ellate|enile)?[\s.]*'
     r'P(?:rocedure)?[\s.]*))',
@@ -270,8 +289,8 @@ _PROC_RULES_PREFIX = re.compile(
 
 # N.D.R. Prof. Conduct
 _PROF_CONDUCT = re.compile(
-    r'(?:(?:Rule\s+)?(\d)\.(\d+)'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d)\.(\d+)'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[.\s]*(?:Rule\s+)?(\d)\.(\d+))',
     re.IGNORECASE,
@@ -279,8 +298,8 @@ _PROF_CONDUCT = re.compile(
 
 # N.D.R. Lawyer Discipl.
 _LAWYER_DISCIPL = re.compile(
-    r'(?:(?:Rule\s+)?(\d)\.(\d+)'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d)\.(\d+)'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[.\s]*(?:Rule\s+)?(\d)\.(\d+))',
     re.IGNORECASE,
@@ -289,7 +308,7 @@ _LAWYER_DISCIPL = re.compile(
 # N.D. Code Jud. Conduct (Canon:Rule format)
 _JUD_CONDUCT_CANON = re.compile(
     r'Canon\s+(\d)\s*:\s*Rule\s+(\d)\.(\d+)'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*Code[\s.]*Jud(?:icial)?[\s.]*Conduct',
     re.IGNORECASE,
 )
@@ -303,8 +322,8 @@ _JUD_CONDUCT_RULE = re.compile(
 
 # N.D.R. Juv. P. decimal
 _JUV_DECIMAL = re.compile(
-    r'(?:(?:Rule\s+)?(\d{1,2})\.(\d{1,2})'
-    r'(?:(?:\([a-z\d]*\))*|[^\d;])[,\s]*'
+    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[\s.]*'
     r'|N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
