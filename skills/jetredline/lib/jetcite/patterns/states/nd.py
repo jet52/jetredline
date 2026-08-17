@@ -2,6 +2,7 @@
 
 import re
 
+from jetcite.enumeration import EnumSpec, expand_enumerations
 from jetcite.models import Citation, CitationType, Source
 from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
@@ -25,24 +26,40 @@ _SEP = r'\s*[-‐‑‒–—―−]\s*'
 # ---------------------------------------------------------------------------
 # NDCC Section: N.D.C.C. § 12.1-32-01
 # ---------------------------------------------------------------------------
+# The marker accepts a PLURAL form ("§§", "Sections", "Secs.") as well as a
+# singular one. Bluebook R3.3 requires the doubled symbol when more than one
+# section is cited, so the plural is the ordinary spelling of a list — and
+# "Sections 28-32-19 and 28-32-21, N.D.C.C." is the most common enumerated
+# statute form in the ND corpus. Accepting only the singular dropped not just
+# the tail members but the anchor with them.
+#
+# The trailing Century Code attribution is a LOOKAHEAD, not a consumed group.
+# Consuming it swallowed the marker of a FOLLOWING citation: in
+# "N.D.C.C. § 11-11-39, N.D.C.C. § 11-11-43" the first match ran through the
+# second "N.D.C.C.", finditer resumed past it, and the second cite vanished
+# outright. A lookahead validates the attribution without eating it. The
+# "|\W|$" branch still consumes a single boundary character, as before.
 _NDCC_SECTION = re.compile(
     r'(?:(?:N[\s.]*D[\s.]*C(?:ent)*[.\s]*C(?:ode)*[,.\s]{0,3}'
-    r'(?:[^\s\d]{0,3}|[Ss]ection|[Ss]ec)\s{0,4})'
-    r'|(?:(?:[Ss]ection|[Ss]ec\.?)\s+))'
+    r'(?:[^\s\d]{0,3}|[Ss]ections?|[Ss]ecs?)\s{0,4})'
+    r'|(?:(?:[Ss]ections?|[Ss]ecs?\.?)\s+))'
     r'(\d{1,2})(?:\.(\d+))?'
     rf'{_SEP}(\d{{1,2}})(?:\.(\d+))?'
     rf'{_SEP}(\d{{1,2}})(?:\.(\d+))?'
     r'(?:\([^)]+\))?'
-    r'(?:[,\s]*(?:of\s+the\s+)?'
-    r'(?:North\s+Dakota\s+Century\s+Code|N[\s.]*D[\s.]*C(?:ent)*[.\s]*C(?:ode)*)|\W|$)',
+    r'(?:(?=[,\s]*(?:of\s+the\s+)?'
+    r'(?:North\s+Dakota\s+Century\s+Code|N[\s.]*D[\s.]*C(?:ent)*[.\s]*C(?:ode)*))|\W|$)',
     re.IGNORECASE,
 )
 
 # NDCC Chapter: NDCC ch. 14-02
+# Plural "chs." is accepted for the same reason as "§§" above: a chapter list
+# ("N.D.C.C. chs. 57-39.2, 57-39.5, 57-39.6, and 57-40.2") is spelled with the
+# plural, and rejecting it dropped the anchor as well as the tail.
 _NDCC_CHAPTER = re.compile(
     r'(?:(?:N[\s.]*D[\s.]*C(?:ent)*[.\s]*C(?:ode)*[,.\s]{0,3}'
-    r'(?:ch\.|ch|chapter)\s+)'
-    r'|(?:(?<!C\.\s)(?<!\w)(?:[Cc]hapter|[Cc]h\.?)\s+))'
+    r'(?:chs?\.|chs?|chapters?)\s+)'
+    r'|(?:(?<!C\.\s)(?<!\w)(?:[Cc]hapters?|[Cc]hs?\.?)\s+))'
     r'(\d{1,2})(?:\.(\d+))?'
     rf'{_SEP}(\d{{1,2}})(?:\.(\d+))?',
     re.IGNORECASE,
@@ -81,7 +98,7 @@ _NDAC_REVERSE = re.compile(
 # The trailing "Administrative Code" cue is optional; the fourth group alone
 # is sufficient. The optional "(n)" is captured as a subsection pinpoint.
 _NDAC_SECTION_FWD = re.compile(
-    r'(?:[Ss]ection|[Ss]ec\.?)\s+'
+    r'(?:[Ss]ections?|[Ss]ecs?\.?)\s+'
     rf'(\d{{1,2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?){_SEP}'
     rf'(\d{{2}}(?:\.\d+)?){_SEP}(\d{{2}}(?:\.\d+)?)'
     r'(?:\(([^)]+)\))?'
@@ -96,7 +113,10 @@ _NDAC_SECTION_FWD = re.compile(
 # ---------------------------------------------------------------------------
 _ND_CONST_SHORT = re.compile(
     r'N(?:orth)?[\s.]*D(?:akota)?[\s.]*Const(?:itution)?[.\s]*'
-    r'(?:art\.|[Aa]rticle)\s*([IVX]+)[,\s]*(?:§|[Ss]ec(?:tion)?\.?)\s*(\d+)',
+    # Plural "§§" / "Sections" accepted: "N.D. Const. art. VI, §§ 2 and 6" is
+    # the most common enumerated citation in the ND corpus, and a singular-only
+    # marker rejected the anchor along with the list.
+    r'(?:art\.|[Aa]rticle)\s*([IVX]+)[,\s]*(?:§§?|[Ss]ec(?:tion)?s?\.?)\s*(\d+)',
     re.IGNORECASE,
 )
 
@@ -229,50 +249,50 @@ _WORD_BEFORE = re.compile(r'([A-Za-z]+)\s+$')
 # immediately after a digit or a period, which is what makes the lookbehind
 # safe on the patterns that have no shorter sibling today.
 _NDRCT_3 = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})\.(\d{1,2})'
     r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
-    r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2})\.(\d{1,2}))',
+    r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rules?\s+)?(\d{1,2})\.(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
 
 # N.D.R.Ct. 2-part: Rule 11.10
 _NDRCT_2 = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
     r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*N[\s.]*D[\s.]*R[\s.]*Ct[\s.]*'
-    r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
+    r'|N[\s.]*D[\s.]*R[\s.]*Ct[.\s]*(?:Rules?\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
 
 # N.D. Sup. Ct. Admin. R. 2-part
 _ADMIN_2 = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
     r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[\s.]*'
-    r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
+    r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rules?\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
 
 # N.D. Sup. Ct. Admin. R. 1-part
 _ADMIN_1 = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{1,2})'
     r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[\s.]*'
-    r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rule\s+)?(\d{1,2})(?![.\d]))',
+    r'|N[\s.]*D[\s.]*Sup[\s.]*Ct[\s.]*Admin[\s.]*R[.\s]*(?:Rules?\s+)?(\d{1,2})(?![.\d]))',
     re.IGNORECASE,
 )
 
 # N.D.R.Ev. (3-4 digit rule numbers)
 _NDREV = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{3,4})'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{3,4})'
     r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[\s.]*'
-    r'|N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[.\s]*(?:Rule\s+)?(\d{3,4}))',
+    r'|N[\s.]*D[\s.]*R[\s.]*Ev(?:id|idence)?[.\s]*(?:Rules?\s+)?(\d{3,4}))',
     re.IGNORECASE,
 )
 
 # Procedural rules: N.D.R.Civ.P., N.D.R.Crim.P., N.D.R.App.P., N.D.R.Juv.P.
 _PROC_RULES = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)'
     r'(?:(?:\([a-z\d]*\))*|[^.\d;\]])[,\s]*'
     r'(?:North\s+Dakota\s+Rules?\s+of\s+(Civil|Criminal|Appellate|Juvenile)\s+Procedure'
     r'|N[\s.]*D[\s.]*R[\s.]*(Civ|Crim|App|Juv)(?:il|inal|ellate|enile)?[\s.]*'
@@ -283,25 +303,25 @@ _PROC_RULES = re.compile(
 # Also match "N.D.R.Civ.P. Rule 12" (rule set first)
 _PROC_RULES_PREFIX = re.compile(
     r'N[\s.]*D[\s.]*R[\s.]*(Civ|Crim|App|Juv)(?:il|inal|ellate|enile)?[\s.]*'
-    r'P(?:rocedure)?[.\s]*(?:Rule\s+)?(\d{1,2}(?:\.\d{1,2})?)',
+    r'P(?:rocedure)?[.\s]*(?:Rules?\s+)?(\d{1,2}(?:\.\d{1,2})?)',
     re.IGNORECASE,
 )
 
 # N.D.R. Prof. Conduct
 _PROF_CONDUCT = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d)\.(\d+)'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d)\.(\d+)'
     r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[\s.]*'
-    r'|N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[.\s]*(?:Rule\s+)?(\d)\.(\d+))',
+    r'|N[\s.]*D[\s.]*R[\s.]*Prof(?:essional)?[\s.]*Conduct[.\s]*(?:Rules?\s+)?(\d)\.(\d+))',
     re.IGNORECASE,
 )
 
 # N.D.R. Lawyer Discipl.
 _LAWYER_DISCIPL = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d)\.(\d+)'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d)\.(\d+)'
     r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[\s.]*'
-    r'|N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[.\s]*(?:Rule\s+)?(\d)\.(\d+))',
+    r'|N[\s.]*D[\s.]*R[\s.]*Lawyer[\s.]*Discipl(?:ine)?[.\s]*(?:Rules?\s+)?(\d)\.(\d+))',
     re.IGNORECASE,
 )
 
@@ -316,37 +336,37 @@ _JUD_CONDUCT_CANON = re.compile(
 # N.D. Code Jud. Conduct (Rule X.Y format)
 _JUD_CONDUCT_RULE = re.compile(
     r'N[\s.]*D[\s.]*Code[\s.]*Jud(?:icial)?[\s.]*Conduct[.\s]*'
-    r'(?:Rule\s+)?(\d)\.(\d+)',
+    r'(?:Rules?\s+)?(\d)\.(\d+)',
     re.IGNORECASE,
 )
 
 # N.D.R. Juv. P. decimal
 _JUV_DECIMAL = re.compile(
-    r'(?:(?:Rule\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
+    r'(?:(?:Rules?\s+)?(?<![\d.])(\d{1,2})\.(\d{1,2})'
     r'(?:(?:\([a-z\d]*\))*|[^\d;\]])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[\s.]*'
-    r'|N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[.\s]*(?:Rule\s+)?(\d{1,2})\.(\d{1,2}))',
+    r'|N[\s.]*D[\s.]*R[\s.]*Juv(?:enile)?[\s.]*P(?:rocedure)?[.\s]*(?:Rules?\s+)?(\d{1,2})\.(\d{1,2}))',
     re.IGNORECASE,
 )
 
 # N.D.R. Continuing Legal Ed.
 _CLE = re.compile(
-    r'(?:N[\s.]*D[\s.]*R[\s.]*Continuing[\s.]*Legal[\s.]*Ed[.\s]*(?:Rule\s+)?(\d+)'
-    r'|(?:Rule\s+)?(\d+)[,\s]*N[\s.]*D[\s.]*R[\s.]*Continuing[\s.]*Legal[\s.]*Ed)',
+    r'(?:N[\s.]*D[\s.]*R[\s.]*Continuing[\s.]*Legal[\s.]*Ed[.\s]*(?:Rules?\s+)?(\d+)'
+    r'|(?:Rules?\s+)?(\d+)[,\s]*N[\s.]*D[\s.]*R[\s.]*Continuing[\s.]*Legal[\s.]*Ed)',
     re.IGNORECASE,
 )
 
 # N.D. Admission to Practice R. decimal
 _ADMISSION_DEC = re.compile(
-    r'(?:N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R[.\s]*(?:Rule\s+)?(\d+)\.(\d+)'
-    r'|(?:Rule\s+)?(\d+)\.(\d+)[,\s]*N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R)',
+    r'(?:N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R[.\s]*(?:Rules?\s+)?(\d+)\.(\d+)'
+    r'|(?:Rules?\s+)?(\d+)\.(\d+)[,\s]*N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R)',
     re.IGNORECASE,
 )
 
 # N.D. Admission to Practice R. simple
 _ADMISSION = re.compile(
-    r'(?:N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R[.\s]*(?:Rule\s+)?(\d+)(?![.\d])'
-    r'|(?:Rule\s+)?(\d+)(?![.\d])[,\s]*N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R)',
+    r'(?:N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R[.\s]*(?:Rules?\s+)?(\d+)(?![.\d])'
+    r'|(?:Rules?\s+)?(\d+)(?![.\d])[,\s]*N[\s.]*D[\s.]*Admission[\s.]*to[\s.]*Practice[\s.]*R)',
     re.IGNORECASE,
 )
 
@@ -393,9 +413,9 @@ _ADMIN_ORDER_POSSESSIVE = re.compile(
 # N.D.R. Proc. R. — the court writes "N.D.R.Proc.R. § 3.1", so the section
 # sign is optional and the number may carry a decimal part.
 _PROC_R = re.compile(
-    r'(?:N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R[.\s]*(?:§\s*)?(?:Rule\s+)?'
+    r'(?:N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R[.\s]*(?:§\s*)?(?:Rules?\s+)?'
     r'(\d+(?:\.\d+)?)'
-    r'|(?:§\s*)?(?:Rule\s+)?(\d+(?:\.\d+)?)[,\s]*'
+    r'|(?:§\s*)?(?:Rules?\s+)?(\d+(?:\.\d+)?)[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Proc[\s.]*R)',
     re.IGNORECASE,
 )
@@ -403,8 +423,8 @@ _PROC_R = re.compile(
 # N.D.R. Local Ct. Pr.
 _LOCAL_CT = re.compile(
     r'(?:N[\s.]*D[\s.]*R[\s.]*Local[\s.]*Ct[\s.]*P[\s.]*R?[.\s]*(?:§\s*)?'
-    r'(?:Rule\s+)?(\d+(?:\.\d+)?)'
-    r'|(?:§\s*)?(?:Rule\s+)?(\d+(?:\.\d+)?)[,\s]*'
+    r'(?:Rules?\s+)?(\d+(?:\.\d+)?)'
+    r'|(?:§\s*)?(?:Rules?\s+)?(\d+(?:\.\d+)?)[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Local[\s.]*Ct[\s.]*P[\s.]*R?)',
     re.IGNORECASE,
 )
@@ -412,8 +432,8 @@ _LOCAL_CT = re.compile(
 # N.D.R. Jud. Conduct Commission decimal
 _JUD_COMM_DEC = re.compile(
     r'(?:N[\s.]*D[\s.]*R[\s.]*Jud(?:icial)?[\s.]*Conduct[\s.]*Comm(?:ission)?[.\s]*'
-    r'(?:Rule\s+)?(\d+)\.(\d+)'
-    r'|(?:Rule\s+)?(\d+)\.(\d+)[,\s]*'
+    r'(?:Rules?\s+)?(\d+)\.(\d+)'
+    r'|(?:Rules?\s+)?(\d+)\.(\d+)[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Jud(?:icial)?[\s.]*Conduct[\s.]*Comm(?:ission)?)',
     re.IGNORECASE,
 )
@@ -421,8 +441,8 @@ _JUD_COMM_DEC = re.compile(
 # N.D.R. Jud. Conduct Commission simple
 _JUD_COMM = re.compile(
     r'(?:N[\s.]*D[\s.]*R[\s.]*Jud(?:icial)?[\s.]*Conduct[\s.]*Comm(?:ission)?[.\s]*'
-    r'(?:Rule\s+)?(\d+)(?![.\d])'
-    r'|(?:Rule\s+)?(\d+)(?![.\d])[,\s]*'
+    r'(?:Rules?\s+)?(\d+)(?![.\d])'
+    r'|(?:Rules?\s+)?(\d+)(?![.\d])[,\s]*'
     r'N[\s.]*D[\s.]*R[\s.]*Jud(?:icial)?[\s.]*Conduct[\s.]*Comm(?:ission)?)',
     re.IGNORECASE,
 )
@@ -506,7 +526,168 @@ class NDMatcher(BaseMatcher):
             ):
                 continue
             kept.append(cite)
+
+        # Recover the tail members of enumerated lists ("N.D.C.C. §§ 11-11-39,
+        # 11-11-43, and 28-34-01"). Runs on the deduplicated anchors so a cite
+        # parsed two ways expands once, and appends rather than replaces — the
+        # anchor stays exactly as the pattern module built it.
+        kept.extend(self._expand_enumerated(text, kept))
         return kept
+
+    # ------------------------------------------------------------------
+    # Enumerated lists
+    # ------------------------------------------------------------------
+
+    def _expand_enumerated(self, text: str, anchors: list[Citation]) -> list[Citation]:
+        added: list[Citation] = []
+        for spec in self._enum_specs():
+            added.extend(expand_enumerations(text, anchors, spec))
+        # Two families can lay claim to the same span — an N.D.A.C. list and
+        # the N.D.C.C. reading of its first three groups. Keep one cite per
+        # (normalized, position).
+        seen: set[tuple[str, int]] = set()
+        out: list[Citation] = []
+        anchored = {(c.normalized, c.position) for c in anchors}
+        for cite in added:
+            key = (cite.normalized, cite.position)
+            if key in seen or key in anchored:
+                continue
+            seen.add(key)
+            out.append(cite)
+        return out
+
+    def _enum_specs(self) -> list[EnumSpec]:
+        def dec(cite: Citation, key: str) -> str:
+            val = cite.components.get(key)
+            decval = cite.components.get(f"{key}_dec")
+            return f"{val}.{decval}" if decval else str(val)
+
+        def ndcc_section_groups(c: Citation) -> list[str] | None:
+            if c.cite_type != CitationType.STATUTE or "section" not in c.components:
+                return None
+            return [dec(c, "title"), dec(c, "chapter"), dec(c, "section")]
+
+        def ndcc_chapter_groups(c: Citation) -> list[str] | None:
+            if c.cite_type != CitationType.STATUTE or "section" in c.components:
+                return None
+            if "title" not in c.components:
+                return None
+            return [dec(c, "title"), dec(c, "chapter")]
+
+        def ndac_groups(c: Citation) -> list[str] | None:
+            if c.cite_type != CitationType.REGULATION or "part4" not in c.components:
+                return None
+            return [c.components[f"part{i}"] for i in range(1, 5)]
+
+        def const_groups(c: Citation) -> list[str] | None:
+            # The article is Roman and is not part of the enumerable number:
+            # "art. VI, §§ 2 and 6" is a list of sections within one article.
+            if c.cite_type != CitationType.CONSTITUTION or "article" not in c.components:
+                return None
+            return [str(c.components["section"])]
+
+        def rule_groups(c: Citation) -> list[str] | None:
+            parts = c.components.get("parts")
+            if c.cite_type != CitationType.COURT_RULE or not parts:
+                return None
+            return [".".join(str(p) for p in parts)]
+
+        return [
+            EnumSpec(3, self._build_ndcc_section, ndcc_section_groups, allow_truncated=True),
+            EnumSpec(2, self._build_ndcc_chapter, ndcc_chapter_groups),
+            EnumSpec(4, self._build_ndac_section, ndac_groups, allow_truncated=True),
+            EnumSpec(1, self._build_const_section, const_groups),
+            EnumSpec(1, self._build_rule, rule_groups),
+        ]
+
+    @staticmethod
+    def _split_dec(group: str) -> tuple[str, str | None]:
+        if "." in group:
+            whole, decimal = group.split(".", 1)
+            return whole, decimal
+        return group, None
+
+    def _build_ndcc_section(self, anchor, groups, raw, pos) -> Citation | None:
+        (title, title_dec), (chapter, chapter_dec), (section, section_dec) = (
+            self._split_dec(g) for g in groups
+        )
+        normalized = f"N.D.C.C. § {groups[0]}-{groups[1]}-{groups[2]}"
+        url = ndcc_section_url(title, chapter, section, title_dec, chapter_dec, section_dec)
+        return Citation(
+            raw_text=raw,
+            cite_type=CitationType.STATUTE,
+            jurisdiction="nd",
+            normalized=normalized,
+            components={
+                "title": title, "title_dec": title_dec,
+                "chapter": chapter, "chapter_dec": chapter_dec,
+                "section": section, "section_dec": section_dec,
+            },
+            sources=[Source("ndlegis", url)] if url else [],
+            position=pos,
+        )
+
+    def _build_ndcc_chapter(self, anchor, groups, raw, pos) -> Citation | None:
+        (title, title_dec), (chapter, chapter_dec) = (self._split_dec(g) for g in groups)
+        url = ndcc_chapter_url(title, chapter, title_dec, chapter_dec)
+        return Citation(
+            raw_text=raw,
+            cite_type=CitationType.STATUTE,
+            jurisdiction="nd",
+            normalized=f"N.D.C.C. ch. {groups[0]}-{groups[1]}",
+            components={
+                "title": title, "title_dec": title_dec,
+                "chapter": chapter, "chapter_dec": chapter_dec,
+            },
+            sources=[Source("ndlegis", url)] if url else [],
+            position=pos,
+        )
+
+    def _build_ndac_section(self, anchor, groups, raw, pos) -> Citation | None:
+        p1, p2, p3, p4 = groups
+        return Citation(
+            raw_text=raw,
+            cite_type=CitationType.REGULATION,
+            jurisdiction="nd",
+            normalized=f"N.D.A.C. § {p1}-{p2}-{p3}-{p4}",
+            components={"part1": p1, "part2": p2, "part3": p3, "part4": p4},
+            sources=[Source("ndlegis", ndac_url(p1, p2, p3))],
+            position=pos,
+        )
+
+    def _build_const_section(self, anchor, groups, raw, pos) -> Citation | None:
+        article = anchor.components.get("article")
+        if not article:
+            return None
+        section = groups[0]
+        return Citation(
+            raw_text=raw,
+            cite_type=CitationType.CONSTITUTION,
+            jurisdiction="nd",
+            normalized=f"N.D. Const. art. {article}, § {section}",
+            components={"article": article, "section": section},
+            sources=[Source("ndconst", nd_constitution_url(article, section))],
+            position=pos,
+        )
+
+    def _build_rule(self, anchor, groups, raw, pos) -> Citation | None:
+        rule_set = anchor.components.get("rule_set")
+        if not rule_set:
+            return None
+        # nd_court_rule_url takes the parts as a LIST and joins them with "-";
+        # handing it the already-joined string makes it iterate characters and
+        # emit ".../ndrcivp/5-0" for Rule 50.
+        parts = groups[0].split(".")
+        prefix = anchor.normalized.rsplit(" ", 1)[0]
+        return Citation(
+            raw_text=raw,
+            cite_type=CitationType.COURT_RULE,
+            jurisdiction="nd",
+            normalized=f"{prefix} {'.'.join(parts)}",
+            components={"rule_set": rule_set, "parts": parts},
+            sources=[Source("ndcourts", nd_court_rule_url(rule_set, parts))],
+            position=pos,
+        )
 
     def _match_ndcc(self, text: str, results: list[Citation]):
         for m in _NDCC_SECTION.finditer(text):
@@ -914,7 +1095,7 @@ class NDMatcher(BaseMatcher):
 _SPELLED_LEADING = [
     (slug, display, re.compile(
         r"North\s+Dakota\s+" + name +
-        r"\s+(?:Rule\s+)?(\d{1,3})(?:\.(\d{1,3}))?\b"))
+        r"\s+(?:Rules?\s+)?(\d{1,3})(?:\.(\d{1,3}))?\b"))
     for slug, display, name in (
         ("ndrcivp", "N.D.R.Civ.P.", r"Rules?\s+of\s+Civil\s+Procedure"),
         ("ndrcrimp", "N.D.R.Crim.P.", r"Rules?\s+of\s+Criminal\s+Procedure"),
