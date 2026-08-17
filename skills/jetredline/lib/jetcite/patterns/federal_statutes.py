@@ -2,6 +2,7 @@
 
 import re
 
+from jetcite.enumeration import EnumSpec, expand_enumerations
 from jetcite.models import Citation, CitationType, Source
 from jetcite.patterns import register
 from jetcite.patterns.base import BaseMatcher
@@ -62,7 +63,57 @@ class FederalStatuteMatcher(BaseMatcher):
                 position=m.start(),
             ))
 
+        # Recover the tail members of an enumerated list —
+        # "42 U.S.C. §§ 1983, 1985, and 1988". The title is stated once and
+        # inherited; only the section number varies, so these are arity-1
+        # lists whose members carry the anchor's title.
+        results.extend(expand_enumerations(text, results, self._usc_spec()))
+        results.extend(expand_enumerations(text, results, self._cfr_spec()))
         return results
+
+    def _usc_spec(self) -> EnumSpec:
+        def groups_of(c: Citation) -> list[str] | None:
+            if c.jurisdiction != "us" or c.cite_type != CitationType.STATUTE:
+                return None
+            return [str(c.components["section"])]
+
+        def build(anchor, groups, raw, pos) -> Citation | None:
+            title = anchor.components["title"]
+            section = groups[0]
+            return Citation(
+                raw_text=raw,
+                cite_type=CitationType.STATUTE,
+                jurisdiction="us",
+                normalized=f"{title} U.S.C. § {section}",
+                components={"title": title, "section": section, "subsection": None},
+                sources=[Source("govinfo", usc_url(title, section))],
+                position=pos,
+            )
+
+        # U.S.C. sections run to four digits with an optional letter suffix
+        # ("1981a"), which the dash-numbered default grammar cannot express.
+        return EnumSpec(1, build, groups_of, group_re=r"\d+[a-z]?")
+
+    def _cfr_spec(self) -> EnumSpec:
+        def groups_of(c: Citation) -> list[str] | None:
+            if c.jurisdiction != "us" or c.cite_type != CitationType.REGULATION:
+                return None
+            return [str(c.components["section"])]
+
+        def build(anchor, groups, raw, pos) -> Citation | None:
+            title = anchor.components["title"]
+            section = groups[0]
+            return Citation(
+                raw_text=raw,
+                cite_type=CitationType.REGULATION,
+                jurisdiction="us",
+                normalized=f"{title} C.F.R. § {section}",
+                components={"title": title, "section": section, "subsection": None},
+                sources=[Source("ecfr", cfr_url(title, section))],
+                position=pos,
+            )
+
+        return EnumSpec(1, build, groups_of, group_re=r"\d+(?:\.\d+)*")
 
 
 register(2, FederalStatuteMatcher())
