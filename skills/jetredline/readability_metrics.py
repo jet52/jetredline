@@ -60,6 +60,41 @@ for a in _ABBREVIATIONS:
     _ABBREV_SET.add(a.lower())
 
 
+_FK_FALLBACK_NOTED = False
+
+
+def _estimate_syllables(word: str) -> int:
+    w = re.sub(r"[^a-z]", "", word.lower())
+    if not w:
+        return 0
+    groups = len(re.findall(r"[aeiouy]+", w))
+    if w.endswith("e") and not w.endswith(("le", "ee")) and groups > 1:
+        groups -= 1
+    return max(1, groups)
+
+
+def fk_grade(text: str) -> float:
+    """Flesch-Kincaid grade via textstat, degrading to a vowel-group
+    syllable estimate when textstat's pronouncing dictionary (NLTK cmudict
+    in some textstat builds) is not installed. A fresh venv in an offline
+    sandbox otherwise dies here with an unhandled LookupError."""
+    global _FK_FALLBACK_NOTED
+    try:
+        return textstat.flesch_kincaid_grade(text)
+    except LookupError:
+        if not _FK_FALLBACK_NOTED:
+            print("Note: textstat's pronouncing dictionary is unavailable "
+                  "(NLTK cmudict not installed); Flesch-Kincaid uses a "
+                  "syllable estimate.", file=sys.stderr)
+            _FK_FALLBACK_NOTED = True
+    words = re.findall(r"[A-Za-z']+", text)
+    sents = max(1, len(re.findall(r"[.!?]+(?:\s|$)", text)))
+    if not words:
+        return 0.0
+    syl = sum(_estimate_syllables(w) for w in words)
+    return 0.39 * len(words) / sents + 11.8 * syl / len(words) - 15.59
+
+
 def _is_abbreviation(word: str) -> bool:
     """Check if a word (without trailing period) is a known abbreviation."""
     clean = word.rstrip(".").lower()
@@ -402,7 +437,7 @@ def analyze_section(name: str, text: str, para_range: tuple) -> dict:
     longest_sentence = max(sentence_lengths) if sentence_lengths else 0
 
     # Flesch-Kincaid
-    fk_grade = round(textstat.flesch_kincaid_grade(text), 1)
+    fk_grade = round(fk_grade(text), 1)
 
     # Passive voice
     passive_count, total_sents = count_passive(sentences)
@@ -458,7 +493,7 @@ def analyze_document(text: str) -> dict:
     total_words = sum(all_lengths)
     total_sents = len(all_sentences)
 
-    overall_fk = round(textstat.flesch_kincaid_grade(text), 1)
+    overall_fk = round(fk_grade(text), 1)
     avg_sent_len = round(total_words / total_sents, 1) if total_sents else 0
 
     passive_count, _ = count_passive(all_sentences)
