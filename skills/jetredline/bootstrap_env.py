@@ -183,7 +183,37 @@ def build_venv(venv_dir: Path, requirements: Path) -> Path | None:
         pass
     if needs_install and not pip_install(python, requirements):
         return None
+    warm_textstat(python)
     return python
+
+
+def warm_textstat(python: Path) -> None:
+    """Best-effort: some textstat builds look up syllables through NLTK's
+    cmudict corpus, which pip does not install. Probe once at build time and
+    fetch the corpus if the probe raises LookupError. Never fatal --
+    readability_metrics.py falls back to a syllable estimate without it."""
+    probe = (
+        "import sys\n"
+        "try:\n"
+        "    import textstat\n"
+        "except ImportError:\n"
+        "    sys.exit(0)\n"
+        "try:\n"
+        "    textstat.flesch_kincaid_grade('The cat sat on the mat.')\n"
+        "except LookupError:\n"
+        "    try:\n"
+        "        import nltk\n"
+        "        for c in ('cmudict', 'punkt', 'punkt_tab'):\n"
+        "            nltk.download(c, quiet=True)\n"
+        "    except Exception as e:\n"
+        "        print('textstat corpus download skipped: %s' % e,\n"
+        "              file=sys.stderr)\n"
+    )
+    try:
+        subprocess.run([str(python), "-c", probe], capture_output=True,
+                       timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        pass
 
 
 def ensure_venv(skill_dir: Path, cache_root: Path, tmp_root: Path) -> Path | None:

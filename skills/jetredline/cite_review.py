@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Citation Review Generator — produces a self-contained HTML file for
-human review of citations in a judicial opinion or bench memo.
+Citation Review Generator — produces an HTML review page (plus, when
+record/brief/local PDFs are embedded, a sibling <stem>_pdfs/ sidecar
+directory that must travel with it; --bundle zips both, --link-pdfs
+embeds nothing) for human review of citations in a judicial opinion or
+bench memo.
 
 Left sidebar lists all citations with status indicators.
 Main pane is split horizontally: full draft opinion on top (with paragraph
@@ -1354,18 +1357,42 @@ def _resolve_fact_source(src: dict, record_dir: Path | None,
                 if p.exists():
                     return p
 
-    frag = re.sub(r"[^A-Za-z0-9-]", "", token.replace(" ", "-"))
+    # Both sides go through the same normalizer: runs of anything that is
+    # not a letter or digit collapse to one hyphen. The earlier asymmetric
+    # form (needle: space->hyphen then strip; haystack: strip only) turned
+    # "Brief - Appellee" into "brief---appellee" against a haystack of
+    # "brief-appelleepdf" and never matched ordinary brief filenames.
+    frag = _norm_frag(token)
     if len(frag) >= 4:
         for e in manifest:
             fn = e.get("filename") or ""
-            if frag.lower() in re.sub(r"[^A-Za-z0-9-]", "", fn).lower():
+            if frag in _norm_frag(Path(fn).stem):
                 p = manifest_dir / fn
                 if p.exists():
                     return p
         for p in sorted(base_dir.glob("*.pdf")):
-            if frag.lower() in re.sub(r"[^A-Za-z0-9-]", "", p.name).lower():
+            if frag in _norm_frag(p.stem):
                 return p
     return None
+
+
+def _norm_frag(s: str) -> str:
+    """Filename/ref normalizer for fragment matching: lowercase, any run of
+    non-alphanumerics becomes a single hyphen, ends trimmed."""
+    return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
+
+
+def _is_record_ref(src: dict) -> bool:
+    """True when a facts-ledger source ref names a district-court record item
+    (R243 / "R. 243" in ``item``, or bare digits corroborated by ``raw``)."""
+    item = (src.get("item") or src.get("raw") or "").strip()
+    raw = (src.get("raw") or "").strip()
+    head = item.split(",")[0].strip()
+    if _RECORD_ITEM_RE.match(head):
+        return True
+    bare = _BARE_ITEM_RE.match(head)
+    raw_m = _RAW_RECORD_RE.match(raw)
+    return bool(bare and raw_m and bare.group(1) == raw_m.group(1))
 
 
 def _viewer_name(pdf_path: Path, taken: set[str]) -> str:
@@ -2451,9 +2478,13 @@ _JS = """\
           render: function() {
             srcBody.innerHTML = banner + (s.href
               ? '<iframe src="' + esc(s.href) + '"></iframe>'
-              : '<div class="no-local"><p>Source PDF not found for ' +
-                esc(s.label) + '</p>' +
-                (s.quote ? '<blockquote>' + esc(s.quote) + '</blockquote>' : '') +
+              : '<div class="no-local"><p>No PDF supplied for ' +
+                esc(s.label) + (s.quote
+                  ? ' \\u2014 the passage below is the fact-check ' +
+                    'ledger\\u2019s quote and was not re-verified against ' +
+                    'the source in this page.</p><blockquote>' +
+                    esc(s.quote) + '</blockquote>'
+                  : '.</p>') +
                 '</div>');
           }});
       });
@@ -3434,6 +3465,20 @@ def main():
                              "link, and the degradation is reported on "
                              "stderr. No cap by default. Moot with "
                              "--link-pdfs, which embeds nothing.")
+    parser.add_argument("--no-fact-sources", action="store_true",
+                        help="Render the Facts lane text-only on purpose: "
+                             "skip resolving fact-ledger source refs to PDFs "
+                             "and suppress the unresolved-source errors. "
+                             "Without it, a facts ledger that cites record "
+                             "items while --record-dir is absent, or one "
+                             "where fewer than 20%% of refs resolve, is an "
+                             "error (not a note).")
+    parser.add_argument("--bundle", metavar="ZIP",
+                        help="Also write the HTML and its <stem>_pdfs/ "
+                             "sidecar into one zip archive at this path, for "
+                             "delivery as a single file. Relative links "
+                             "inside the page are preserved; unzip and open "
+                             "the HTML.")
     parser.add_argument("--ndlaw-base", default=_NDLAW_DEFAULT_BASE,
                         help="Base URL of the ndlaw citation site used for the "
                              "reading-copy pane (default: %(default)s). Point "
@@ -3545,15 +3590,39 @@ def main():
 
     fact_pdfs: list[Path] = []
     unresolved = 0
-    for f in facts:
-        for s in f["sources"]:
-            p = _resolve_fact_source(s, record_dir, manifest, base_dir,
-                                     manifest_dir)
-            if p:
-                s["_resolved_path"] = str(p.resolve())
-                fact_pdfs.append(p)
-            else:
-                unresolved += 1
+    total_refs = sum(len(f["sources"]) for f in facts)
+    record_refs = [s for f in facts for s in f["sources"] if _is_record_ref(s)]
+    if args.no_fact_sources:
+        if total_refs:
+            print(f"  Facts lane: --no-fact-sources; {total_refs} source "
+                  "ref(s) rendered text-only by request.", file=sys.stderr)
+    else:
+        # Guaranteed-failure precondition: record-item refs with no record
+        # dir cannot resolve, every one of them. Refuse rather than emit a
+        # page where every fact reads "source PDF not found".
+        if record_refs and record_dir is None:
+            items = []
+            for s in record_refs:
+                lbl = (s.get("item") or s.get("raw") or "").split(",")[0]
+                if lbl not in items:
+                    items.append(lbl)
+            shown = ", ".join(items[:6]) + (" ..." if len(items) > 6 else "")
+            print(f"ERROR: facts.json contains {len(record_refs)} "
+                  f"record-item source ref(s) ({shown}) but --record-dir "
+                  "was not supplied. Every one of them would render as "
+                  "'No PDF supplied'.\n       Pass --record-dir <dir>, or "
+                  "pass --no-fact-sources to render the Facts lane "
+                  "text-only on purpose.", file=sys.stderr)
+            return 1
+        for f in facts:
+            for s in f["sources"]:
+                p = _resolve_fact_source(s, record_dir, manifest, base_dir,
+                                         manifest_dir)
+                if p:
+                    s["_resolved_path"] = str(p.resolve())
+                    fact_pdfs.append(p)
+                else:
+                    unresolved += 1
     auth_unresolved = 0
     for a in authorities:
         for s in a["sources"]:
@@ -3564,9 +3633,21 @@ def main():
                 fact_pdfs.append(p)
             else:
                 auth_unresolved += 1
-    if unresolved:
-        print(f"  Note: {unresolved} fact source ref(s) did not resolve to a "
-              "PDF; shown as text-only.", file=sys.stderr)
+    if total_refs and not args.no_fact_sources:
+        resolved = total_refs - unresolved
+        pct = 100 * resolved / total_refs
+        line = (f"Fact sources: {resolved} of {total_refs} resolved "
+                f"({pct:.0f}%)")
+        if pct < 20:
+            print(f"ERROR: {line}. Fewer than one in five fact source refs "
+                  "found a PDF -- check --record-dir / --case-dir / the "
+                  "manifest, or pass --no-fact-sources to render the Facts "
+                  "lane text-only on purpose.", file=sys.stderr)
+            return 1
+        level = "Warning" if pct < 80 else "Note"
+        print(f"  {level}: {line}"
+              + ("; unresolved refs show the ledger quote only."
+                 if unresolved else "."), file=sys.stderr)
     if auth_unresolved:
         print(f"  Note: {auth_unresolved} supplied-authority source(s) did "
               "not resolve to a PDF; shown as text-only.", file=sys.stderr)
@@ -3648,7 +3729,32 @@ def main():
                  if authorities else "")
     print(f"Wrote {out} ({len(citations)} citations{auth_note}"
           f"{fact_note}{extra})")
+    pdf_dir = out.parent / (out.stem + "_pdfs")
+    sidecar_files = (sorted(pdf_dir.glob("*.html")) if pdf_dir.is_dir()
+                     else [])
+    if sidecar_files:
+        size = sum(f.stat().st_size for f in sidecar_files)
+        print(f"  Sidecar: {pdf_dir} ({len(sidecar_files)} files, "
+              f"{size / 1e6:.1f} MB) -- must accompany the HTML"
+              + ("" if args.bundle else "; use --bundle <zip> to ship one "
+                 "file"))
+    if args.bundle:
+        bundle = Path(args.bundle).expanduser()
+        _write_bundle(bundle, out, sidecar_files)
+        print(f"  Bundle: {bundle} ({bundle.stat().st_size / 1e6:.1f} MB)")
+    return 0
+
+
+def _write_bundle(bundle: Path, html: Path, sidecar_files: list[Path]) -> None:
+    """Zip the review page and its sidecar viewers, preserving the relative
+    layout (<stem>.html beside <stem>_pdfs/) the page's links depend on."""
+    import zipfile
+    bundle.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(html, html.name)
+        for f in sidecar_files:
+            zf.write(f, f"{f.parent.name}/{f.name}")
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

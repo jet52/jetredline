@@ -403,3 +403,146 @@ class TestFactsPageJavaScriptParses:
         r = subprocess.run([node, "--check", str(f)],
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
+
+
+# ---------------------------------------------------------------------------
+# Name-fragment matching (bug report 2026-08-19, defect 2)
+# ---------------------------------------------------------------------------
+
+class TestFragmentMatching:
+    @pytest.mark.parametrize("item,filename", [
+        ("Brief - Appellee", "Brief - Appellee.pdf"),
+        ("Brief of Appellants Burleigh County & Morton County",
+         "Brief of Appellants Burleigh County & Morton County.pdf"),
+    ])
+    def test_space_hyphen_and_ampersand_names_match(self, tmp_path, item,
+                                                    filename):
+        _write_pdf(tmp_path / filename)
+        got = _resolve_fact_source({"item": item}, None, [], tmp_path)
+        assert got is not None and got.name == filename
+
+    def test_whole_filename_matches_via_stem(self, tmp_path):
+        # The old haystack kept the ".pdf" suffix glued on, so a needle
+        # ending at the true end of the filename could never match.
+        _write_pdf(tmp_path / "Reply Brief.pdf")
+        got = _resolve_fact_source({"item": "Reply Brief"}, None, [], tmp_path)
+        assert got.name == "Reply Brief.pdf"
+
+    def test_unrelated_fragment_does_not_match(self, tmp_path):
+        _write_pdf(tmp_path / "Brief - Reply.pdf")
+        assert _resolve_fact_source({"item": "Reply Br."}, None, [],
+                                    tmp_path) is None
+
+    def test_manifest_fragment_uses_same_normalizer(self, tmp_path):
+        _write_pdf(tmp_path / "Brief - Appellee.pdf")
+        manifest = [{"docketId": 9, "filename": "Brief - Appellee.pdf"}]
+        got = _resolve_fact_source({"item": "Brief - Appellee"}, None,
+                                   manifest, tmp_path)
+        assert got.name == "Brief - Appellee.pdf"
+
+    def test_record_prefix_boundary_still_holds(self, tmp_path):
+        d = tmp_path / "record"
+        d.mkdir()
+        _write_pdf(d / "R197-Order-Granting.pdf")
+        assert _resolve_fact_source({"item": "R197"}, d, [], tmp_path) is not None
+        assert _resolve_fact_source({"item": "R19"}, d, [], tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# CLI preconditions, resolution rate, sidecar report, --bundle
+# (bug report 2026-08-19, defects 1 and 3)
+# ---------------------------------------------------------------------------
+
+SCRIPT = __import__("pathlib").Path(__file__).resolve().parent.parent \
+    / "skills" / "jetredline" / "cite_review.py"
+
+
+def _run_cli(tmp_path, facts, *extra):
+    import sys
+    op = tmp_path / "opinion.md"
+    op.write_text("[¶1] The court found the road was public. "
+                  "Doe v. Roe, 2023 ND 219, ¶ 5.\n")
+    fj = tmp_path / "facts.json"
+    fj.write_text(json.dumps(facts))
+    cites = tmp_path / "cites.json"
+    cites.write_text(json.dumps([{
+        "cite_text": "2023 ND 219, ¶ 5", "cite_type": "neutral_cite",
+        "normalized": "2023 ND 219", "pinpoint": "¶ 5", "url": None,
+        "local_path": str(tmp_path / "missing.md"), "local_exists": False,
+    }]))
+    out = tmp_path / "out" / "review.html"
+    out.parent.mkdir(exist_ok=True)
+    cmd = [sys.executable, str(SCRIPT), "--opinion", str(op),
+           "--cite-json", str(cites),
+           "--refs-dir", str(tmp_path / "refs"),
+           "--facts-json", str(fj), "--output", str(out),
+           "--case-dir", str(tmp_path), *extra]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r, out
+
+
+def _fact(item, raw=None, quote="the road was public"):
+    return {"claim": "the road was public", "para": 1, "result": "verified",
+            "draft_quote": "the road was public",
+            "sources": [{"raw": raw or f"{item}, p. 1", "item": item,
+                         "page": 1, "quote": quote}]}
+
+
+class TestCliGuards:
+    def test_record_refs_without_record_dir_is_an_error(self, tmp_path):
+        r, out = _run_cli(tmp_path, [_fact("R197"), _fact("R2")])
+        assert r.returncode == 1, r.stderr
+        assert "record-item source ref" in r.stderr
+        assert "R197" in r.stderr and "--record-dir" in r.stderr
+        assert not out.exists()
+
+    def test_no_fact_sources_opts_out(self, tmp_path):
+        r, out = _run_cli(tmp_path, [_fact("R197")], "--no-fact-sources")
+        assert r.returncode == 0, r.stderr
+        assert "text-only by request" in r.stderr
+        html = out.read_text()
+        assert "No PDF supplied for" in html
+        assert "not re-verified" in html
+
+    def test_low_resolution_rate_is_an_error(self, tmp_path):
+        d = tmp_path / "record"
+        d.mkdir()
+        _write_pdf(d / "R1 - Complaint.pdf")
+        facts = [_fact("R1")] + [_fact(f"R{n}") for n in range(50, 59)]
+        r, out = _run_cli(tmp_path, facts, "--record-dir", str(d))
+        assert r.returncode == 1
+        assert "Fact sources: 1 of 10 resolved (10%)" in r.stderr
+
+    def test_partial_resolution_warns_and_reports_rate(self, tmp_path):
+        d = tmp_path / "record"
+        d.mkdir()
+        _write_pdf(d / "R1 - Complaint.pdf")
+        facts = [_fact("R1")] * 3 + [_fact("R50")]
+        r, out = _run_cli(tmp_path, facts, "--record-dir", str(d))
+        assert r.returncode == 0, r.stderr
+        assert "Warning: Fact sources: 3 of 4 resolved (75%)" in r.stderr
+
+    def test_sidecar_reported_and_bundled(self, tmp_path):
+        d = tmp_path / "record"
+        d.mkdir()
+        _write_pdf(d / "R1 - Complaint.pdf")
+        bundle = tmp_path / "review.zip"
+        r, out = _run_cli(tmp_path, [_fact("R1")], "--record-dir", str(d),
+                          "--bundle", str(bundle))
+        assert r.returncode == 0, r.stderr
+        assert "Sidecar:" in r.stdout and "must accompany the HTML" in r.stdout
+        assert "Bundle:" in r.stdout
+        import zipfile
+        names = zipfile.ZipFile(bundle).namelist()
+        assert "review.html" in names
+        assert any(n.startswith("review_pdfs/") and n.endswith(".html")
+                   for n in names)
+
+    def test_link_pdfs_has_no_sidecar_line(self, tmp_path):
+        d = tmp_path / "record"
+        d.mkdir()
+        _write_pdf(d / "R1 - Complaint.pdf")
+        r, out = _run_cli(tmp_path, [_fact("R1")], "--record-dir", str(d),
+                          "--link-pdfs")
+        assert r.returncode == 0, r.stderr
+        assert "Sidecar:" not in r.stdout
