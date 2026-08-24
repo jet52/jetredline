@@ -33,6 +33,12 @@ Passes 1–7 run as parallel subagents where possible; each delegated pass reads
 
 ## Analysis Document
 
+The analysis document is written as markdown (`<case>-ANALYSIS.md`) and rendered to a single self-contained HTML page (`<case>-ANALYSIS.html`) beside it. The markdown is the record; the HTML is what you read.
+
+The page is built for triage: a banner and a sidebar table of contents show how many rows each section flagged, status cells become badges (each with a glyph and its label, so the colors are not doing the work), and every substantial table gets a filter box and a **Problems only** toggle. It prints cleanly — use the browser's print-to-PDF for a chambers copy. Open it in any browser; nothing is fetched from the network.
+
+One caution: a count of zero flagged rows is not a clean bill of health. Only columns with a recognized status vocabulary are counted, and findings also live in tables without one and in the narrative sections.
+
 The analysis document includes the following sections (some vary by document type):
 
 - **Case Highlight** (opinions only) — case name, citation, disposition, and core holdings
@@ -218,6 +224,7 @@ jetredline/
 │       ├── extract_text.py         # .docx → markdown extraction (direct ZIP)
 │       ├── cite_check.py           # Citation checker (uses bundled jetcite)
 │       ├── cite_review.py          # Interactive citation review HTML generator
+│       ├── analysis_to_html.py     # Analysis report → readable, printable HTML
 │       ├── parallel_check.py       # Parallel-cite consistency check (ndlaw / CourtListener)
 │       ├── review_state.py         # Review marks round-trip: export → case folder → next run
 │       ├── ndlaw_export.py         # ND opinion text/URL export from ndlaw corpus
