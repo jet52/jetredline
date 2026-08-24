@@ -141,6 +141,69 @@ Trigger phrases:
 
 Provide a `.docx` draft opinion in the working directory. Optionally include `.pdf` briefs or record materials for fact-checking.
 
+## Reviewing citations
+
+The last step produces `cite-review.html` — a page that lists every citation in
+the draft and shows you the source next to it, so you can confirm each one
+against the official text or the scanned record yourself.
+
+**Opening it.** Open the file from the case folder in Chrome or Edge. If the
+page arrived as a `.zip`, unzip it first and keep the `_pdfs` folder next to the
+HTML — the page needs it to show the record and the authorities.
+
+**Working through it.**
+
+| Key | Does |
+| --- | --- |
+| `j` / `k` | Next / previous citation (arrow keys work too) |
+| `Space` or `Enter` | Mark verified and move to the next one |
+| `v` | Mark verified (without moving on) |
+| `f` | Flag it — something is wrong or needs a second look |
+| `s` | Skip it |
+| `h` / `l` | Switch the source pane between the local copy and the official source |
+| `n` | Type a note on this citation |
+| `a` | Stop (or resume) jumping to the next citation automatically |
+| `?` | Show all shortcuts |
+
+Most of a pass is `Space` when a citation checks out and `f` when it does not.
+Use `h` and `l` to put the official text or the scanned page in front of you
+before you decide.
+
+Your marks are remembered in the browser as you go, so you can close the page
+and come back to it on the same computer.
+
+**Saving your review when you finish** — this is the part that matters, because
+the marks only live in your browser until you do it:
+
+1. Click **Save review**. Your browser saves a file named
+   `cite-review-state__<case>__<date>.json`.
+2. Put that file in the **case folder** — the same folder the review page came
+   from. That is what makes your review available to everyone else and to the
+   next run.
+
+To make that one click instead of two, turn on **Ask where to save each file**
+once, in your browser settings under Downloads. Your browser will then ask where
+to put the file, and you can pick the case folder directly. It is a personal
+setting and needs no administrator rights. Without it, the file lands in your
+Downloads folder and you drag it into the case folder yourself.
+
+If saving a file is awkward, click **Copy** instead and paste the review back
+into the chat — it can be filed for you from there.
+
+**Picking up where you left off.** When the opinion is run again, the marks you
+saved come back automatically and you continue from where you stopped. If the
+draft was edited in between, citations that are no longer in it are reported and
+dropped rather than being matched to the wrong citation — so a mark never shows
+a citation as verified that nobody verified. The page tells you how many marks
+were restored when it opens.
+
+**A note on what "verified" means here.** The tool finds the source and puts it
+in front of you; it does not decide whether the citation is right. A citation
+counts as verified when a person has looked at the official text or the scanned
+record and agrees. Text that has been through OCR or any automated extraction is
+there to help you find the right page — it is not the thing you are checking
+against.
+
 ## File Structure
 
 ```
@@ -155,6 +218,8 @@ jetredline/
 │       ├── extract_text.py         # .docx → markdown extraction (direct ZIP)
 │       ├── cite_check.py           # Citation checker (uses bundled jetcite)
 │       ├── cite_review.py          # Interactive citation review HTML generator
+│       ├── parallel_check.py       # Parallel-cite consistency check (ndlaw / CourtListener)
+│       ├── review_state.py         # Review marks round-trip: export → case folder → next run
 │       ├── ndlaw_export.py         # ND opinion text/URL export from ndlaw corpus
 │       ├── lib/
 │       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)

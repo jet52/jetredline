@@ -30,8 +30,17 @@ import os
 import re
 import sys
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote, urlparse
+
+# Sibling module. Direct script invocation puts this file's directory on
+# sys.path, but importing cite_review from elsewhere does not — make it work
+# either way, as the lib/ imports below already do.
+if str(Path(__file__).parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).parent))
+import parallel_check as _pcheck
+import review_state as _rstate
 
 # ---------------------------------------------------------------------------
 # Paragraph splitting
@@ -1650,6 +1659,41 @@ main { display:flex; flex:1; overflow:hidden; }
   border:1px solid var(--border); color:var(--text-muted);
   text-transform:lowercase; letter-spacing:.02em;
 }
+/* Parallel-cite verdict. Blue/amber/slate, never red-green: the three
+   states must stay distinguishable to a red-green colorblind reviewer, and
+   each carries a distinct word and border weight as well as a hue. */
+.cite-group-hdr .pbadge {
+  font-size:9px; flex-shrink:0; padding:1px 5px; border-radius:3px;
+  border:1px solid var(--border); color:var(--text-muted);
+  text-transform:lowercase; letter-spacing:.02em; cursor:help;
+}
+.cite-group-hdr .pbadge.p-consistent {
+  color:#1a6f6f; background:#dcecec; border-color:#7fb5b5;
+}
+.cite-group-hdr .pbadge.p-mismatch {
+  color:#8a2f3b; background:#f6dee1; border-color:#c98793;
+  border-width:2px; font-weight:600;
+}
+.cite-group-hdr .pbadge.p-not_found {
+  color:#8a6d1a; background:#f5edd2; border-color:#e3d49a;
+  border-width:2px; font-weight:600;
+}
+.cite-group-hdr .pbadge.p-unverified {
+  color:#5a6472; background:#e6e9ed; border-color:#aab2bd;
+  border-style:dashed;
+}
+/* Confirmation for a save or copy. The page cannot write to the case
+   folder itself, so the reviewer needs to be told what to do with the file
+   and that something happened at all. */
+.save-status {
+  font-size:11px; color:var(--accent); margin-left:10px;
+  opacity:0; transition:opacity .2s; pointer-events:none;
+  max-width:46ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.save-status.show { opacity:1; }
+@media (prefers-reduced-motion: reduce) {
+  .save-status { transition:none; }
+}
 .cite-group-hdr .glink {
   flex-shrink:0; color:var(--accent); text-decoration:none; font-size:12px;
 }
@@ -2008,10 +2052,33 @@ _JS = """\
   const SOURCES = __SOURCES__;
   const STORAGE_KEY = 'cite-review-' + __FILE_KEY__;
   const LAYOUT_KEY = 'cite-review-layout-' + __FILE_KEY__;
+  const META = __META__;
+  // Marks carried over from a previous review, already re-keyed to this
+  // build's offsets by review_state.py. Empty unless --resume-state was used.
+  const RESUME = __RESUME__;
 
   let currentIdx = 0;
   let autoAdvance = true;
   let state = loadState();
+  const resumed = applyResume();
+
+  // Additive merge: a restored mark fills an entry this browser has not
+  // touched, and never overwrites work done here. Silent restoration would
+  // be indistinguishable from work the reviewer did themselves, so it is
+  // announced.
+  function applyResume() {
+    let n = 0;
+    for (const k in RESUME) {
+      if (!Object.prototype.hasOwnProperty.call(RESUME, k)) continue;
+      const cur = state[k];
+      if (cur && (cur.status || cur.notes)) continue;
+      state[k] = { status: RESUME[k].status || null,
+                   notes: RESUME[k].notes || '' };
+      n++;
+    }
+    if (n) saveState();
+    return n;
+  }
 
   function loadState() {
     try {
@@ -2051,6 +2118,16 @@ _JS = """\
     return document.querySelector('.cite-item[data-idx="' + idx + '"]');
   }
 
+  // Parallel-cite verdicts. 'consistent' earns the collapse to a single
+  // lead-reporter row; 'mismatch' and 'not_found' keep every member visible
+  // because the draft's pairing is contradicted or unlocatable.
+  const PBADGE = {
+    consistent: 'parallels ok',
+    mismatch:   'parallel mismatch',
+    not_found:  'parallel not located',
+    unverified: 'parallels unchecked'
+  };
+
   // Render sidebar grouped by authority: one header per cited case/
   // authority, one row per occurrence (full cite, repeat, short form, Id.)
   const listEl = document.querySelector('.cite-list');
@@ -2066,7 +2143,7 @@ _JS = """\
     let g = groupByKey[key];
     if (!g) {
       g = { key: key, items: [], name: null, url: null, via: null,
-            parallel: null };
+            parallel: null, pstatus: null, pdetail: null };
       groupByKey[key] = g;
       groups.push(g);
     }
@@ -2075,6 +2152,12 @@ _JS = """\
     if (!g.url && d.url) g.url = d.url;
     if (!g.via && d.via) g.via = d.via;
     if (!g.parallel && d.parallel_cite && !d.is_repeat) g.parallel = d.parallel_cite;
+    // Parallel-cite verdict is an authority-level fact; take it from any
+    // occurrence that carries one. A flagged group keeps every member as its
+    // own row, so the badge must appear on the group header above them all.
+    if (!g.pstatus && d.parallel_status) {
+      g.pstatus = d.parallel_status; g.pdetail = d.parallel_detail || '';
+    }
     g.items.push(i);
   });
 
@@ -2088,6 +2171,8 @@ _JS = """\
       (g.name ? '<span class="gcite">' + esc(g.key) +
         (g.parallel ? ', ' + esc(g.parallel) : '') + '</span>' : '') +
       (g.via ? '<span class="via' + viaCls + '" title="Verified via ' + esc(g.via) + '">' + esc(g.via) + '</span>' : '') +
+      (g.pstatus ? '<span class="pbadge p-' + esc(g.pstatus) + '" title="' +
+        esc(g.pdetail || '') + '">' + esc(PBADGE[g.pstatus] || g.pstatus) + '</span>' : '') +
       (g.url ? '<a class="glink" href="' + esc(g.url) + '" target="_blank" title="' + esc(g.url) + '">&#x2197;</a>' : '') +
       '<span class="gcount">' + g.items.length + '</span>';
     var glink = hdr.querySelector('.glink');
@@ -2800,34 +2885,109 @@ _JS = """\
     }
   });
 
-  // Export state
-  window.exportReviewState = function() {
-    const out = DATA.map((d, i) => {
+  // ---- Review state round-trip --------------------------------------
+  // The page cannot write to disk (the File System Access API needs a secure
+  // context; file:// is not one), so the export travels through the case
+  // folder the reviewer already has open. The payload carries what identifies
+  // each entry to a reader — paragraph and occurrence, never the character
+  // offset — because offsets move when the draft is edited and a mark
+  // restored onto the wrong citation is worse than a mark lost.
+
+  function reviewPayload() {
+    const entries = DATA.map((d, i) => {
       const cs = getCiteState(i);
-      if (d.kind === 'fact') {
-        return {
-          kind: 'fact',
-          claim: d.claim,
-          para_num: d.para_num,
-          machine_result: d.result_label,
-          status: cs.status,
-          notes: cs.notes
-        };
-      }
-      return {
-        cite_text: d.cite_text,
-        cite_type: d.cite_type,
-        para_num: d.para_num,
-        url: d.url,
-        status: cs.status,
-        notes: cs.notes
+      const base = {
+        kind: d.kind === 'fact' ? 'fact' : 'cite',
+        para_num: d.para_num != null ? d.para_num : null,
+        occurrence: d.occurrence || 0,
+        status: cs.status || null,
+        notes: cs.notes || ''
       };
+      if (d.kind === 'fact') {
+        base.claim = d.claim;
+        base.machine_result = d.result_label || null;
+      } else {
+        base.cite_text = d.cite_text;
+        base.cite_type = d.cite_type || null;
+        base.authority = d.authority || null;
+        base.url = d.url || null;
+        if (d.parallel_status) base.parallel_status = d.parallel_status;
+      }
+      return base;
     });
-    const blob = new Blob([JSON.stringify(out, null, 2)], {type: 'application/json'});
+    const tally = {total: entries.length, verified: 0, flagged: 0,
+                   skipped: 0, unreviewed: 0};
+    entries.forEach(e => {
+      tally[(e.status === 'verified' || e.status === 'flagged' ||
+             e.status === 'skipped') ? e.status : 'unreviewed'] += 1;
+    });
+    return {
+      schema: 'jetredline/cite-review-state',
+      schema_version: 1,
+      case_id: META.case_id,
+      title: META.title,
+      draft_sha256: META.draft_sha256,
+      generated: META.generated,
+      exported: new Date().toISOString(),
+      counts: tally,
+      entries: entries
+    };
+  }
+
+  function stateFilename() {
+    const d = new Date(), z = n => String(n).padStart(2, '0');
+    const stamp = d.getFullYear() + z(d.getMonth() + 1) + z(d.getDate()) +
+                  '-' + z(d.getHours()) + z(d.getMinutes()) + z(d.getSeconds());
+    const safe = (META.case_id || 'review')
+      .replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'review';
+    return 'cite-review-state__' + safe + '__' + stamp + '.json';
+  }
+
+  function flashStatus(msg) {
+    const el = document.getElementById('save-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 6000);
+  }
+
+  window.exportReviewState = function() {
+    const name = stateFilename();
+    const blob = new Blob([JSON.stringify(reviewPayload(), null, 2)],
+                          {type: 'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'cite-review-state.json';
+    a.download = name;
     a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+    flashStatus('Saved ' + name + ' — put it in the case folder.');
+  };
+
+  // Clipboard path, for when the download folder is awkward to reach: paste
+  // straight back into the chat and let the skill file it.
+  window.copyReviewState = function() {
+    const text = JSON.stringify(reviewPayload(), null, 2);
+    const done = () => flashStatus('Review copied — paste it back to file it.');
+    const fail = () => {
+      // execCommand is deprecated but still the only path on a file:// page
+      // in browsers that gate navigator.clipboard on a secure context.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      flashStatus(ok ? 'Review copied — paste it back to file it.'
+                     : 'Could not copy. Use Export instead.');
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done, fail);
+    } else {
+      fail();
+    }
   };
 
   // Auto-advance indicator
@@ -2839,6 +2999,9 @@ _JS = """\
   // Init first citation
   navigate(0);
   updateAutoAdvanceIndicator();
+  if (resumed) {
+    flashStatus('Restored ' + resumed + ' mark(s) from the previous review.');
+  }
 })();
 """
 
@@ -2848,30 +3011,46 @@ _SCT_RE = re.compile(r"S\.\s*Ct\.")
 _LED_RE = re.compile(r"L\.\s*Ed\.")
 
 
-def _dedup_parallel_citations(citations: list[dict]) -> tuple[list[dict], dict[str, str]]:
+def _dedup_parallel_citations(
+        citations: list[dict],
+        verdicts: dict | None = None) -> tuple[list[dict], dict[str, str]]:
     """Remove secondary parallel citations from the list.
 
     Rules (type-based, no reliance on parallel_cite directionality):
-    - regional_reporter (N.W.2d/3d) that has a parallel_cite → drop it
-    - federal_reporter matching S.Ct. or L.Ed. → always drop
+    - regional_reporter (N.W.2d/3d) that has a parallel_cite -> drop it
+    - federal_reporter matching S.Ct. or L.Ed. -> always drop
     - Any citation whose parallel_cite points to a primary already kept
-      and the citation itself is a reporter (not neutral/U.S.) → drop
+      and the citation itself is a reporter (not neutral/U.S.) -> drop
 
-    Returns (kept entries, alias map of dropped norm → its kept parallel
+    ``verdicts`` maps a folded citation to the ``parallel_check.Verdict`` for
+    its group.  A group whose members do not demonstrably name the same case
+    is **not** collapsed: dropping the wrong half of a bad pairing is how such
+    an error escapes review entirely.  Every entry is annotated with its
+    group's status so the page can badge it.
+
+    Returns (kept entries, alias map of dropped norm -> its kept parallel
     norm) so consumers can fold occurrences citing the dropped form into
     the primary authority's group.
     """
-    # Build a set of primary normalizations we want to keep
-    primary_norms: set[str] = set()
+    verdicts = verdicts or {}
+
+    def verdict_for(norm: str):
+        return verdicts.get(_pcheck.fold(norm))
+
+    # Annotate first, so a flagged group carries its finding onto every row
+    # it kept — including the lead cite the reviewer actually opens.
     for c in citations:
-        ct = c.get("cite_type", "")
-        norm = c.get("normalized", "")
-        # Neutral citations are always primary
-        if ct == "neutral_cite":
-            primary_norms.add(norm)
-        # U.S. Reports are always primary
-        elif ct == "us_supreme_court":
-            primary_norms.add(norm)
+        v = verdict_for(c.get("normalized", ""))
+        if v is not None:
+            c["parallel_status"] = v.status
+            if v.detail:
+                c["parallel_detail"] = v.detail
+
+    # First appearance of each normalized form, for electing a lead when a
+    # parallel cycle has to be broken.
+    order: dict[str, int] = {}
+    for idx, c in enumerate(citations):
+        order.setdefault(c.get("normalized", ""), idx)
 
     skip_norms: set[str] = set()
     alias: dict[str, str] = {}
@@ -2880,20 +3059,26 @@ def _dedup_parallel_citations(citations: list[dict]) -> tuple[list[dict], dict[s
         ct = c.get("cite_type", "")
         pc = c.get("parallel_cite", "")
 
-        # N.W.2d/3d parallel of a neutral cite → drop
+        # An unresolved or contradicted group keeps every member as its own
+        # review row. Nothing is hidden behind a collapse that was not earned.
+        v = verdict_for(norm)
+        if v is not None and v.blocks_collapse:
+            continue
+
+        # N.W.2d/3d parallel of a neutral cite -> drop
         if ct == "regional_reporter" and _NW_RE.search(norm) and pc:
             skip_norms.add(norm)
             alias[norm] = pc
             continue
 
-        # S.Ct. → always drop (SCOTUS parallel)
+        # S.Ct. -> always drop (SCOTUS parallel)
         if ct == "federal_reporter" and _SCT_RE.search(norm):
             skip_norms.add(norm)
             if pc:
                 alias[norm] = pc
             continue
 
-        # L.Ed. → always drop (SCOTUS parallel)
+        # L.Ed. -> always drop (SCOTUS parallel)
         if ct == "federal_reporter" and _LED_RE.search(norm):
             skip_norms.add(norm)
             if pc:
@@ -2901,13 +3086,32 @@ def _dedup_parallel_citations(citations: list[dict]) -> tuple[list[dict], dict[s
             continue
 
         # Old ND cases cited only by N.W.2d (no neutral) with no parallel
-        # → keep (e.g., 543 N.W.2d 491 for pre-1997 ND cases)
+        # -> keep (e.g., 543 N.W.2d 491 for pre-1997 ND cases)
 
-    # Collapse alias chains (dropped → dropped → kept)
+    # Collapse alias chains (dropped -> dropped -> kept).
+    #
+    # Guard against cycles. jetcite links parallels pairwise, so a S. Ct. and
+    # an L. Ed. cite whose U.S. cite went unlinked (a pin page between them
+    # breaks the chain) each name the other as their parallel. Both match a
+    # drop rule, so the alias map contains A -> B and B -> A, and an
+    # unguarded walk spins forever. Worse, dropping every member would delete
+    # the authority from review altogether — so elect a lead and keep it.
     for norm in list(alias):
+        if norm not in alias:
+            continue
         target = alias[norm]
-        while target in alias:
+        seen = {norm}
+        while target in alias and target not in seen:
+            seen.add(target)
             target = alias[target]
+        if target in seen:
+            cycle = sorted(seen, key=lambda n: order.get(n, 1 << 30))
+            lead = next((n for n in cycle if n not in skip_norms), cycle[0])
+            skip_norms.discard(lead)
+            for n in cycle:
+                alias[n] = lead
+            alias.pop(lead, None)
+            continue
         alias[norm] = target
 
     removed = len(skip_norms)
@@ -2979,7 +3183,9 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 authorities: list[dict] | None = None,
                 link_pdfs: bool = False,
                 italic_spans: list[tuple[int, int]] | None = None,
-                quote_spans: list[tuple[int, int]] | None = None) -> str:
+                quote_spans: list[tuple[int, int]] | None = None,
+                resume_payload: dict | None = None,
+                resume_source=None) -> str:
     """Build the self-contained HTML string."""
     viewers = viewers or {}
     via_map = via_map or {}
@@ -3135,6 +3341,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "parent_normalized": parent_norm,
             "pin_warning": c.get("pin_warning"),
             "parallel_cite": c.get("parallel_cite"),
+            "parallel_status": c.get("parallel_status"),
+            "parallel_detail": c.get("parallel_detail"),
             "search_hint": c.get("search_hint", ""),
             "pinpoint": pinpoint,
             "pin_anchor": pin_anchor,
@@ -3262,9 +3470,35 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     sources_json = json.dumps(sources_map, ensure_ascii=False)
     file_key_json = json.dumps(file_key, ensure_ascii=False)
 
+    # Identity the export carries back out, so an ingested file can be matched
+    # to its case and its draft.
+    draft_sha = hashlib.sha256(opinion_text.encode("utf-8")).hexdigest()
+    meta_json = json.dumps({
+        "case_id": file_key,
+        "title": title,
+        "draft_sha256": draft_sha,
+        "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }, ensure_ascii=False)
+
+    # Prior marks, re-keyed onto this build. Mapping happens here rather than
+    # in the page so it is testable in Python and so the operator sees what
+    # could not be carried over.
+    resume_state: dict = {}
+    if resume_payload:
+        restore = _rstate.build_restore(resume_payload, enriched,
+                                        draft_sha=draft_sha,
+                                        source=resume_source)
+        resume_state = restore.state
+        print(f"  Resume: {restore.summary()}", file=sys.stderr)
+        for d in restore.dropped:
+            print(f"    dropped: {d}", file=sys.stderr)
+    resume_json = json.dumps(resume_state, ensure_ascii=False)
+
     js = (_JS
           .replace("__DATA__", data_json)
           .replace("__SOURCES__", sources_json)
+          .replace("__META__", meta_json)
+          .replace("__RESUME__", resume_json)
           .replace("__FILE_KEY__", file_key_json))
     escaped_title = html.escape(title)
     opinion_html = _opinion_to_html(opinion_text, paragraphs, italic_spans,
@@ -3333,9 +3567,15 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         <button class="btn v-btn"><span class="kbd">v</span> Verified</button>
         <button class="btn f-btn"><span class="kbd">f</span> Flag</button>
         <button class="btn s-btn"><span class="kbd">s</span> Skip</button>
-        <button class="btn" onclick="exportReviewState()" style="margin-left:12px;">
-          Export JSON
+        <button class="btn" onclick="exportReviewState()" style="margin-left:12px;"
+                title="Save the review as a file, then put it in the case folder">
+          Save review
         </button>
+        <button class="btn" onclick="copyReviewState()"
+                title="Copy the review to the clipboard to paste back">
+          Copy
+        </button>
+        <span id="save-status" class="save-status"></span>
       </div>
       <input type="text" class="notes-input" id="notes-input"
              placeholder="Notes for this citation..." />
@@ -3484,6 +3724,18 @@ def main():
                              "reading-copy pane (default: %(default)s). Point "
                              "at a local instance to test unreleased corpus "
                              "changes.")
+    parser.add_argument("--resume-state", metavar="PATH_OR_AUTO",
+                        help="Restore marks from a previously exported "
+                             "cite-review-state JSON. Pass 'auto' to use the "
+                             "newest matching export in --case-dir (or the "
+                             "opinion's directory).")
+    parser.add_argument("--no-parallel-check", action="store_true",
+                        help="Skip the parallel-citation consistency check; "
+                             "collapse by reporter type alone (pre-4.22 "
+                             "behavior). Groups render as unchecked.")
+    parser.add_argument("--ndlaw-db",
+                        help="ndlaw opinions.db for the parallel check "
+                             "(or NDLAW_DB env). Falls back to NDLAW_URL.")
     parser.add_argument("--no-ndlaw", action="store_true",
                         help="Do not embed ndlaw reading copies; official "
                              "sources and local refs only.")
@@ -3550,10 +3802,62 @@ def main():
         print("No citations found.", file=sys.stderr)
         sys.exit(1)
 
-    citations, authority_alias = _dedup_parallel_citations(citations)
+    # Parallel-cite consistency. Runs before the collapse because the
+    # verdict decides whether a group may be collapsed at all: a contradicted
+    # pairing keeps every member as its own review row.
+    parallel_verdicts: dict = {}
+    if not args.no_parallel_check:
+        try:
+            resolvers = _pcheck.default_resolvers(
+                local_only=args.local_only, nd_db=args.ndlaw_db)
+            if resolvers:
+                print("Checking parallel citations...", file=sys.stderr)
+                parallel_verdicts = _pcheck.check_citations(
+                    citations, resolvers, verbose=True)
+                flagged = {id(v) for v in parallel_verdicts.values()
+                           if v.blocks_collapse}
+                if flagged:
+                    print(f"  {len(flagged)} parallel group(s) flagged for "
+                          "review", file=sys.stderr)
+            else:
+                print("No parallel-cite resolver available; groups render "
+                      "as unchecked.", file=sys.stderr)
+        except Exception as e:
+            # Never let a source outage block the review page.
+            print(f"  Warning: parallel check failed ({e}); "
+                  "groups render as unchecked.", file=sys.stderr)
+            parallel_verdicts = {}
+
+    citations, authority_alias = _dedup_parallel_citations(
+        citations, parallel_verdicts)
 
     text = opinion_path.read_text(encoding="utf-8")
     paragraphs = _split_paragraphs(text)
+
+    # Prior review marks. 'auto' looks in the shared case folder the reviewer
+    # saved into; an explicit path wins. A bad file is reported and skipped —
+    # it must never stop the page being built.
+    resume_payload = None
+    resume_source = None
+    if args.resume_state:
+        if args.resume_state.lower() == "auto":
+            search_dir = Path(args.case_dir).expanduser() if args.case_dir \
+                else opinion_path.parent
+            resume_source = _rstate.find_latest(search_dir, opinion_path.stem)
+            if resume_source is None:
+                print(f"  Resume: no {_rstate.FILENAME_GLOB} in {search_dir}",
+                      file=sys.stderr)
+        else:
+            resume_source = Path(args.resume_state).expanduser()
+        if resume_source is not None:
+            try:
+                resume_payload = _rstate.load(resume_source)
+                print(f"  Resume: reading {resume_source}", file=sys.stderr)
+            except _rstate.StateFileError as e:
+                print(f"  Warning: {e}; starting a fresh review.",
+                      file=sys.stderr)
+                resume_payload = None
+
 
     title = args.title or opinion_path.stem
     file_key = opinion_path.stem
@@ -3713,6 +4017,8 @@ def main():
 
     html_str = _build_html(title, citations, paragraphs, file_key, text, viewers,
                            via_map=via_map, sources_meta=sources_meta,
+                           resume_payload=resume_payload,
+                           resume_source=resume_source,
                            passages=passages, authority_alias=authority_alias,
                            ndlaw_base=None if args.no_ndlaw else args.ndlaw_base,
                            facts=facts, fact_viewers=fact_viewers,

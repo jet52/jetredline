@@ -1,6 +1,7 @@
 # Cite review UI — options for a better review surface
 
-Research logged 2026-08-15 against jetredline 4.19.2. **Nothing here is built.**
+Research logged 2026-08-15 against jetredline 4.19.2; scoped for build 2026-08-24
+(§G). Sections A–F are research only — **nothing in them is built**.
 The question that prompted it: could an Artifact or a cross-platform app framework
 give a better cite-review surface than the current self-contained HTML page —
 specifically by escaping the `X-Frame-Options` limitation, by making source review
@@ -223,3 +224,205 @@ allowlist of legal-source domains.
 - [Electron #32630 — Ignore X-Frame-Options](https://github.com/electron/electron/issues/32630)
 - [Tauri #2709 — BrowserView for embedding web content](https://github.com/tauri-apps/tauri/issues/2709)
 - [MDN — X-Frame-Options](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/X-Frame-Options)
+
+
+---
+
+## G. Scoped work items (2026-08-24)
+
+Revisits A–F under constraints that were not on the table when they were written:
+
+- **Users are non-technical staff without admin rights.** No installs. This removes
+  options C, D, and E outright — Electron, Tauri, and a loaded-unpacked extension all
+  require something the users cannot do.
+- **They work in Cowork, not Claude Code.** Cowork is a sandboxed Linux container
+  (`/mnt` read-only, `~` is `/root`, network via SOCKS proxy). The skill's filesystem
+  is not the staff member's filesystem.
+- **Confidence comes from human eyes on the raw source** — an official government page
+  or a scan of the record — *not* from text filtered through OCR or a model. Trust in
+  the OCR must not be a precondition of trusting the review.
+
+### G.0 The principle that replaces option B
+
+**OCR and model output are navigation aids, never evidence.** Using a located pinpoint
+to turn the reviewer to the right page of the right scan is legitimate; rendering
+extracted text *as the thing being verified against* is not, because it moves the trust
+anchor from the source to the pipeline.
+
+This demotes §C option B from "the option that changes how review feels" to a
+page-finding aid behind the existing PDF viewers. The review surface stays what it is
+today: the official page or the scanned record image, embedded and read by a human.
+The passages ledger and `pdfsource find` keep their value — they decide *which page to
+open*, not what the reviewer reads.
+
+### G.1 Parallel-citation consistency check — **BUILT** (`parallel_check.py`)
+
+**The defect.** `_dedup_parallel_citations` (`cite_review.py:2851`) already collapses
+parallel cites to the lead reporter — that part works. But it decides what to drop
+**by reporter type alone, without resolving anything**: any `S. Ct.` or `L. Ed.` cite
+is dropped unconditionally, as is any `N.W.2d/3d` cite carrying a parallel link. A
+*wrong* parallel is therefore not shown as a redundant row — it is silently deleted
+from the queue and no human ever sees it. The collapse actively conceals the error
+class it should be catching.
+
+**Worked example** (verified 2026-08-24). A draft reading
+`Whalen v. United States, 445 U.S. 684, 100 S. Ct. 1371` is wrong — *Whalen* is
+100 S. Ct. **1432**. `100 S. Ct. 1371` is *Payton v. New York*, 445 U.S. 573, decided
+the day before. Two adjacent SCOTUS cases from the same term; entirely plausible on the
+page. Today that cite is dropped unread.
+
+**Grouping.** jetcite links parallels **pairwise**, not as a set — for
+`445 U.S. 684, 100 S. Ct. 1371, 63 L. Ed. 2d 639`, each entry carries only
+`parallel_cite` (singular, `parallel_cites[0]` per `legacy.py:253`). Union-find over
+those links recovers the full group.
+
+**Ground truth is jurisdiction-specific — this is the load-bearing finding.**
+
+| Cite class | Authoritative source | Verified |
+|---|---|---|
+| ND neutral (`2020 ND 30`), N.W./2d/3d | ndlaw corpus via `ndlaw_export.py` backends | yes |
+| U.S., S. Ct., L. Ed., F.2d/F.3d | CourtListener search API (anonymous, no token) | yes |
+
+**CourtListener must not be used for ND cites.** It returned `2020 ND 30` with *no*
+N.W.2d parallel, and `938 N.W.2d 897` and `10 N.W.3d 500` as not found at all. Treating
+that as ground truth would manufacture false mismatches on the most common cite class
+in this tool. `ndlaw_export.py` already provides exactly what is needed via both its
+sqlite and MCP-over-HTTP backends: `lookup()` returns `citations: [...]`, the full
+parallel set ordered `is_primary DESC`.
+
+**Verdicts.** A negative counts only from a source authoritative for that cite
+class; absence from a non-authoritative source is silence, not evidence.
+(Consistent with the standing rule that unmatched references are reported as "not
+located," never "does not exist.")
+
+**Corpus gap vs. corpus conflict — corrected during the build.** The first cut
+treated "authoritative source has no record of this citation" as a finding. That
+was wrong, and testing caught it: the ndlaw corpus holds `2024 ND 156`
+(*Fiebiger v. Anderson*) with **no N.W.3d parallel recorded at all**, because
+reporter assignments lag the opinion. Flagging that would have fired a false
+mismatch on every recent ND case — the same trap identified for CourtListener,
+one level down. The rule that replaces it turns on **reporter series**:
+
+- the source records a cite of the *same series* and it differs → **conflict**
+  (`mismatch`), and the badge names the cite the source records;
+- the source records *no cite of that series* for the case → **gap**
+  (`unverified`), collapse as before.
+
+| Verdict | Condition | Rows | Badge |
+|---|---|---|---|
+| `consistent` | every asserted parallel confirmed same case | 1, lead reporter | `parallels ok` |
+| `mismatch` | a parallel resolves to a different case, **or** conflicts with a recorded cite of its own series | all kept, **not** collapsed | `parallel mismatch` |
+| `not_found` | no member resolves at all, though a claiming source was asked | all kept, **not** collapsed | `parallel not located` |
+| `unverified` | corpus gap in that series, no source, or offline | 1, lead reporter | `parallels unchecked` |
+
+Verified end to end 2026-08-24: *Whalen* + *Payton*'s `100 S. Ct. 1371` →
+`mismatch`; `938 N.W.2d 879` → `mismatch` naming the recorded `938 N.W.2d 897`;
+`100 S. Ct. 999999` → `mismatch` naming `100 S. Ct. 1432`; *Fiebiger* + its
+N.W.3d → `unverified`, no false alarm; correct pairs → `consistent`.
+
+**Known limitation — a pin page breaks the group.** jetcite links parallels by
+adjacency, so `445 U.S. 684, 691, 100 S. Ct. 1371, 63 L. Ed. 2d 715` leaves the
+*lead* cite unlinked: the group becomes `{100 S. Ct. 1371, 63 L. Ed. 2d 715}` and
+`445 U.S. 684` carries no badge. The mismatch is still caught and still shown —
+the badge just sits on the S. Ct./L. Ed. rows rather than on the U.S. row above
+them. Fixing it properly belongs in jetcite's parallel linker (spanning a pin
+page); bridging it here by text position would be a heuristic over a heuristic.
+**Logged upstream 2026-08-24** as an open jetcite issue with root cause, a
+one-line fix and its dry-run verification ("Bug: a bare page pin between
+parallel cites breaks the parallel link"). When it lands, re-vendor and this
+limitation disappears with no change to `parallel_check.py` — `build_groups`
+already takes the transitive closure and will simply see the complete group.
+jetredline's `TODO.md` carries the re-vendor checklist.
+
+**Bug found and fixed while building: an infinite loop in the existing
+collapse.** `_dedup_parallel_citations` walked alias chains with an unguarded
+`while target in alias`. jetcite links parallels pairwise, so a `S. Ct.` and an
+`L. Ed.` cite whose `U.S.` cite went unlinked — the pin-page case above — each
+name the other as their parallel. Both match a drop rule, the alias map holds
+`A -> B` and `B -> A`, and the walk never terminates. This is **shipped
+behavior**, reachable today on an ordinary citation form; the new check masked
+it on the default path (a flagged group never enters the alias map), which is
+how `--no-parallel-check` surfaced it. Fixed with cycle detection that elects a
+lead and keeps it — the unguarded version would also have dropped *every*
+member, deleting the authority from review entirely. Four regression tests.
+
+**Lead-reporter selection stays as-is.** The existing type rules (ND neutral leads for
+ND; U.S. leads for SCOTUS) already produce Redbook order, so the resolver's `is_primary`
+is not needed to pick the lead and is not wired in — avoiding a change to `authority`
+grouping keys and the regressions that would invite.
+
+**Offline behavior.** `--local-only` and any unreachable backend yield `unverified`
+everywhere: collapse as today, but visibly badged so nobody reads a short queue as a
+checked one. `--no-parallel-check` restores pre-build behavior exactly.
+
+**Shipped surface.** `parallel_check.py` (resolvers, grouping, verdicts; also runs
+standalone against a cite JSON for debugging), `lookup_meta()` added to both
+`ndlaw_export.py` backends so the check never pulls full opinion text, verdict
+plumbing through `_dedup_parallel_citations` into the page, a colorblind-safe
+badge on the sidebar group header, and flags `--no-parallel-check` / `--ndlaw-db`.
+23 new tests; 390 pass.
+
+### G.2 Review-state round-trip — **BUILT** (`review_state.py`)
+
+**The constraint that decides it.** The File System Access API
+(`showSaveFilePicker`) requires a secure context, and `file://` is not one. A
+double-clicked local HTML page **cannot write to any folder**, in any browser, with or
+without admin rights. The round-trip cannot be a silent file write.
+
+**What makes it work anyway:** the case folder is a *shared/synced* folder visible to
+both the staff member's machine and Cowork. So the export needs to land there and be
+findable:
+
+- export as `cite-review-state__<case-id>__<timestamp>.json`, carrying case id, schema
+  version, and cite counts so the skill can confirm the file belongs to this case;
+- the staff member saves it into the folder the review page came from. Chrome/Edge's
+  **"Ask where to save each file"** (per-user, no admin) makes this one click; without
+  it the file lands in Downloads and is dragged over;
+- the skill globs that folder for the newest matching file, ingests it, and reloads it
+  into a regenerated page so review **resumes** rather than restarting.
+
+**Open question:** how Cowork reads that shared folder — a Drive/SharePoint connector,
+or a per-session upload. Determines whether the skill finds the file itself or is
+handed it. Does not change the design.
+
+**Restoring is the part that had to be careful.** Marks are keyed by character
+offset (`stateKey()` in the page JS), and jetredline exists to edit drafts — so
+offsets move, and a mark restored onto a shifted offset would show a citation as
+verified that nobody verified. Nothing is restored by offset. Each exported entry
+carries what identifies it to a *reader* — kind, citation text, paragraph, and
+occurrence within that paragraph — and the offset is re-derived. Matching is two
+tiers:
+
+1. **same paragraph and occurrence** — exact identity;
+2. **the paragraph moved, but the citation is unique on both sides** — exactly one
+   entry can be meant, so no guess is involved. This recovers a renumbered draft,
+   which tier 1 alone would drop entirely.
+
+Anything still unmatched is **dropped and named on stderr**, never guessed. Tier 2
+refuses to choose between candidates: a citation appearing more than once on
+either side drops instead. A `draft_sha256` in the payload reports whether the
+draft changed at all, so a clean resume is distinguishable from a remapped one.
+
+**Merge policy in the page is additive.** A restored mark fills an entry this
+browser has not touched and never overwrites work done locally; the page
+announces `Restored N mark(s) from the previous review` rather than restoring
+silently, since silent restoration is indistinguishable from the reviewer's own
+work.
+
+**Shipped surface.** `review_state.py` (schema, validation, newest-export
+discovery, two-tier restore; also a standalone CLI that summarizes a review and
+lists what was flagged), a `META`/`RESUME` channel into the page, `Save review`
+and `Copy` buttons with a confirmation line telling the reviewer what to do with
+the file, and `--resume-state PATH|auto` on `cite_review.py`. Files are named
+`cite-review-state__<case-id>__<YYYYMMDD-HHMMSS>.json`; `find_latest` sorts on the
+embedded stamp rather than mtime, because copying a file into a shared folder
+rewrites mtime and would make an older review look newer. A malformed or foreign
+file warns and starts a fresh review — it never blocks the page being built.
+28 new tests; 418 pass.
+
+**Verified end to end 2026-08-24:** unchanged draft → 6/6 restored; draft with a
+paragraph inserted above → 6/6, one re-matched by tier 2, draft-change reported;
+vanished citation → dropped and named; foreign JSON → warned and skipped.
+
+**Not pursued:** serving over `localhost` would give a secure context and a silent
+POST, but depends on Cowork port-forwarding, which is untested.

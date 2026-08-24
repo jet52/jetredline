@@ -103,6 +103,32 @@ class SqliteBackend:
         self.conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         self.conn.row_factory = sqlite3.Row
 
+    def lookup_meta(self, citation: str) -> dict | None:
+        """Metadata only — same shape as lookup() but without the text.
+
+        The parallel-cite check needs only ``citations``; pulling the full
+        opinion body for it would be pure waste (and, over MCP, a paged
+        round trip per authority).
+        """
+        row = self.conn.execute(
+            """SELECT o.id, o.case_name, o.date_filed
+               FROM opinions o JOIN citations c ON c.opinion_id = o.id
+               WHERE c.citation = ?""",
+            (citation,),
+        ).fetchone()
+        if row is None:
+            return None
+        all_cites = [
+            r["citation"] for r in self.conn.execute(
+                "SELECT citation FROM citations WHERE opinion_id = ? "
+                "ORDER BY is_primary DESC", (row["id"],))
+        ]
+        return {
+            "case_name": row["case_name"],
+            "date_filed": row["date_filed"],
+            "citations": all_cites,
+        }
+
     def lookup(self, citation: str) -> dict | None:
         row = self.conn.execute(
             """SELECT o.id, o.case_name, o.date_filed, o.opinion_url,
@@ -227,6 +253,17 @@ class McpBackend:
             if item.get("type") == "text":
                 return json.loads(item["text"])
         raise RuntimeError(f"{name}: no parseable content")
+
+    def lookup_meta(self, citation: str) -> dict | None:
+        """Metadata only — skips the paged get_opinion_text loop."""
+        meta = self._call_tool("lookup_opinion", {"citation": citation})
+        if not isinstance(meta, dict) or meta.get("error"):
+            return None
+        return {
+            "case_name": meta.get("case_name"),
+            "date_filed": meta.get("date_filed"),
+            "citations": meta.get("citations") or [citation],
+        }
 
     def lookup(self, citation: str) -> dict | None:
         meta = self._call_tool("lookup_opinion", {"citation": citation})
