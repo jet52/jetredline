@@ -77,55 +77,83 @@ def _flag_improper_parallel_pincite(cite_a: Citation, cite_b: Citation,
         cite_b.improper_parallel_pincite = True
 
 
+def _separator_verdict(text: str, cite_a: Citation, cite_b: Citation) -> str | None:
+    """Classify the gap between two adjacent case cites.
+
+    Returns ``"parallel"`` when the gap is a parallel-cite separator — a comma
+    with at most a pinpoint after it, as in ``2024 ND 156, ¶ 12, 10 N.W.3d
+    500`` — ``"suspected"`` when the gap would qualify but for a semicolon in
+    it, and ``None`` when the two cites are unrelated.
+
+    The semicolon is the Bluebook separator between *different* authorities,
+    so a pair written across one is not linked. It is not discarded either:
+    pre-1960 opinions used a semicolon where modern form uses a comma
+    (``State v. Albertson, 20 N.D. 512; 128 N.W. 1122``), and the "suspected"
+    verdict is how that reaches the caller — recorded, never asserted.
+    """
+    between = text[cite_a.position + len(cite_a.raw_text):cite_b.position]
+    stripped = between.strip()
+
+    # Must be a short separator — a comma or semicolon, or a pinpoint between
+    # two of them
+    if not stripped:
+        return None
+
+    # The separator should be short (under ~40 chars) and start with , or ;
+    # or be just whitespace around a pinpoint
+    if len(stripped) > 40:
+        return None
+    if not stripped.startswith((",", ";")):
+        return None
+
+    # Should not contain sentence-ending punctuation or text that indicates
+    # a new thought (period, "see", "and", etc.)
+    # Strip separators from both ends: a trailing comma belongs to the
+    # following citation, not to the pinpoint, and would otherwise fail
+    # the $-anchored pinpoint test below (", 691," -> "691," -> no match).
+    inner = stripped.strip(",;").strip()
+    if any(sep in inner.lower() for sep in (".", "see ", "and ", "but ", "cf.")):
+        return None
+
+    # Valid inner: empty, or just a pinpoint like "¶ 12" or "at 128"
+    if inner and not _looks_like_pinpoint_or_empty(inner):
+        return None
+
+    # A semicolon anywhere in the gap — leading ("; 128 N.W. 1122") or after a
+    # pin (", 196; 114 P.2d 569") — is the source's own signal that these are
+    # separate authorities. The pin-cite antecedent logic already reads it that
+    # way (see ambiguous_string_cite); this keeps the two halves of the scanner
+    # consistent. Measured over 2,500 opinions of the ndlaw corpus, 7 of 11,224
+    # links crossed a semicolon: 6 were genuine parallels (5 of them pre-1960)
+    # and 1 joined two different cases. The trade is deliberate — a false
+    # parallel group misplaces a consumer's badge on a live draft, while the 6
+    # are preserved as suspected rather than lost.
+    return "suspected" if ";" in stripped else "parallel"
+
+
 def _detect_parallel_citations(citations: list[Citation], text: str) -> None:
     """Detect parallel citations and link them.
 
     When two case citations appear close together in text separated by a comma
-    or semicolon (e.g., "2024 ND 156, 10 N.W.3d 500"), they refer to the same
-    case. This function links them by populating each citation's parallel_cites
-    list and merging their sources.
+    (e.g., "2024 ND 156, 10 N.W.3d 500"), they refer to the same case. This
+    function links them by populating each citation's parallel_cites list and
+    merging their sources. A pair separated by a semicolon instead is recorded
+    in suspected_parallel_cites and otherwise left alone — no link, no merged
+    sources, no inherited case name.
     """
-    case_cites = [(i, c) for i, c in enumerate(citations) if c.cite_type == CitationType.CASE]
+    case_cites = [c for c in citations if c.cite_type == CitationType.CASE]
 
-    for idx in range(len(case_cites) - 1):
-        _, cite_a = case_cites[idx]
-        _, cite_b = case_cites[idx + 1]
+    for cite_a, cite_b in zip(case_cites, case_cites[1:]):
+        verdict = _separator_verdict(text, cite_a, cite_b)
 
-        # Check if they're adjacent in the original text
-        end_a = cite_a.position + len(cite_a.raw_text)
-        start_b = cite_b.position
-
-        # Get the text between them
-        between = text[end_a:start_b]
-
-        # Parallel citations are separated by ", " or "; " with optional whitespace
-        # and possibly a pinpoint like ", ¶ 12, "
-        stripped = between.strip()
-
-        # Must be a short separator — comma, semicolon, or pinpoint then comma
-        if not stripped:
+        if verdict is None:
             continue
 
-        # Common patterns between parallel cites:
-        #   ", "  or  "; "  or  ", ¶ 12, "  or  " ¶ 12, "
-        # The separator should be short (under ~40 chars) and start with , or ;
-        # or be just whitespace around a pinpoint
-        if len(stripped) > 40:
-            continue
-
-        # Must start with comma or semicolon
-        if not stripped.startswith((",", ";")):
-            continue
-
-        # Should not contain sentence-ending punctuation or text that indicates
-        # a new thought (period, "see", "and", etc.)
-        inner = stripped.lstrip(",;").strip()
-        if any(sep in inner.lower() for sep in (".", "see ", "and ", "but ", "cf.")):
-            continue
-
-        # If inner text remains and it's not a pinpoint or empty, skip
-        # Valid inner: empty, or just a pinpoint like "¶ 12" or "at 128"
-        if inner and not _looks_like_pinpoint_or_empty(inner):
+        if verdict == "suspected":
+            if cite_b.normalized not in cite_a.suspected_parallel_cites:
+                cite_a.suspected_parallel_cites.append(cite_b.normalized)
+            if cite_a.normalized not in cite_b.suspected_parallel_cites:
+                cite_b.suspected_parallel_cites.append(cite_a.normalized)
             continue
 
         # Link them

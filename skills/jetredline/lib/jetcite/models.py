@@ -31,6 +31,14 @@ class Citation:
     sources: list[Source] = field(default_factory=list)
     position: int = 0  # character offset in source text
     parallel_cites: list[str] = field(default_factory=list)  # normalized forms of parallel citations
+    # Cites the source appears to have meant as parallels but did not punctuate
+    # that way: "State v. Albertson, 20 N.D. 512; 128 N.W. 1122", where a
+    # semicolon — the separator between *different* authorities — stands where
+    # a comma belongs. Recorded, never asserted: parallel_cites stays empty and
+    # no sources or case name are merged, so nothing downstream treats the
+    # guess as a link. Same statute as the court's own typos: preserve what was
+    # written, point at what was meant, let the reader decide.
+    suspected_parallel_cites: list[str] = field(default_factory=list)
     antecedent_name: str | None = None  # best-effort case name governing the cite (heuristic; may be None)
     is_pin_cite: bool = False  # short-form back-reference ("491 F.3d at 363", "Id. ¶ 14")
     is_repeat: bool = False  # full-form case cite whose normalized form appeared earlier in the document
@@ -56,6 +64,8 @@ class Citation:
             d["pinpoint"] = self.pinpoint
         if self.parallel_cites:
             d["parallel_cites"] = self.parallel_cites
+        if self.suspected_parallel_cites:
+            d["suspected_parallel_cites"] = self.suspected_parallel_cites
         if self.improper_parallel_pincite:
             d["improper_parallel_pincite"] = True
         if self.antecedent_name:

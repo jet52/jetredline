@@ -233,7 +233,7 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
 
 
 def add_parallel_info(entries: list[dict], citations: list[Citation]) -> None:
-    """Add parallel_cite and preferred fields to legacy entries.
+    """Add parallel_cite, suspected_parallel_cites, and preferred fields.
 
     ``entries`` must be the element-wise conversion of ``citations``
     (same order). Repeat occurrences get their own parallel_cite link —
@@ -247,6 +247,14 @@ def add_parallel_info(entries: list[dict], citations: list[Citation]) -> None:
     }
 
     for entry, cite in zip(entries, citations):
+        if cite.suspected_parallel_cites:
+            # Recorded, never asserted: the source punctuated these as separate
+            # authorities (a semicolon) where a parallel pair was apparently
+            # meant — the pre-1960 style, or a stray semicolon. Consumers must
+            # not read it as parallel_cite; it carries no preferred marking and
+            # no merged sources.
+            entry["suspected_parallel_cites"] = list(cite.suspected_parallel_cites)
+
         if not cite.parallel_cites:
             continue
 
