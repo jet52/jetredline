@@ -58,9 +58,10 @@ ALLOWED_FAMILIES = ("opus", "fable", "mythos")
 WEAK_FAMILIES = ("sonnet", "haiku")
 
 WARN_TEXT = (
-    "This skill's reliability testing is based on Opus-class models. Do not "
-    "start any pass until the user explicitly confirms proceeding on this "
-    "model — see Step 0.0 in the skill's SKILL.md."
+    "This skill strongly recommends an Opus-class model — its reliability "
+    "testing is based on one. Do not start any pass until the user has "
+    "chosen whether to continue on this model; running here is supported, "
+    "just less reliable. See Step 0.0 in the skill's SKILL.md."
 )
 
 # Strips a context-window suffix (claude-opus-5[1m]) and a provider prefix

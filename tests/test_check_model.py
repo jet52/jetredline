@@ -167,6 +167,7 @@ def test_cli_warn_exits_two_and_says_do_not_start(tmp_path):
     assert res.stdout.startswith(
         "MODEL_GATE: warn model=claude-sonnet-5 tier=sonnet source=transcript"
     )
+    assert "strongly recommends an Opus-class model" in res.stdout
     assert "Do not start any pass" in res.stdout
 
 

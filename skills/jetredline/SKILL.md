@@ -281,11 +281,11 @@ Stdlib only — run it on system `python3`, before the bootstrap. It prints one 
 
 **On `warn`, ask with `AskUserQuestion`.** Do not pose it rhetorically and proceed, and do not decide for the user that Opus-class "is probably fine either way."
 
-- **Question:** "jetredline is running on `<model>`. Its reliability testing is based on Opus-class models, which catch materially more citation and record-fact errors on this workload. Run anyway?"
+- **Question:** "jetredline is running on `<model>`. We strongly recommend Opus for this work — reliability testing shows Opus-class models catch materially more citation and record-fact errors on this workload. How would you like to proceed?"
 - **Header:** "Model"
 - **Options:**
-  1. **Stop — switch to Opus** — End here, having done no work. Tell the user to run `/model opus` (or restart with `claude --model opus`) and re-invoke jetredline.
-  2. **Proceed on `<model>`** — Run the full review on the current model, with the reduced-reliability caveat recorded in the outputs.
+  1. **Switch to Opus (recommended)** — End here, having done no work. Tell the user to run `/model opus` (or restart with `claude --model opus`) and re-invoke jetredline.
+  2. **Continue on `<model>`** — Run the full review now, with the reduced-reliability caveat recorded in the outputs. **Supported, not a defect:** Opus is not on every plan, and a review on this model is still worth having — it simply carries a higher miss rate, which the outputs will say.
 
 If the user proceeds, carry it forward in exactly two places: one clause in the Step 0.6 announcement ("running on `<model>`, outside jetredline's validated set — verify citation and fact findings with extra care"), and the **⚠ Reduced-Reliability Model** section of the analysis document (see Output Format). Do not repeat the warning in every pass or in every finding.
 
