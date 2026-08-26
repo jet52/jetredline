@@ -7,6 +7,8 @@ from pathlib import Path
 
 from jetcite.casename import extract_antecedent_name
 from jetcite.cleanup import preprocess_document_text
+from dataclasses import replace
+
 from jetcite.models import Citation, CitationType
 from jetcite.patterns import get_matchers
 from jetcite.resolver import resolve_nd_opinion_urls
@@ -164,15 +166,24 @@ def _detect_parallel_citations(citations: list[Citation], text: str) -> None:
 
         _flag_improper_parallel_pincite(cite_a, cite_b, text)
 
-        # Merge sources: each citation gets the other's sources it doesn't have
+        # Merge sources: each citation gets the other's sources it doesn't
+        # have, stamped with the member it actually addresses. The merge is
+        # what makes a reporter cite fetchable at all -- a bare "29 N.W.3d
+        # 885" has no resolver of its own -- but the URL only reaches that
+        # opinion because *this document* paired the two. Cached content
+        # fetched through such a source therefore confirms the document's
+        # assertion and not the pairing, and via_parallel is what lets the
+        # cache say so instead of laundering one into the other.
         a_source_names = {s.name for s in cite_a.sources}
         b_source_names = {s.name for s in cite_b.sources}
-        for src in cite_b.sources:
+        for src in list(cite_b.sources):
             if src.name not in a_source_names:
-                cite_a.sources.append(src)
-        for src in cite_a.sources:
+                cite_a.sources.append(replace(
+                    src, via_parallel=src.via_parallel or cite_b.normalized))
+        for src in list(cite_a.sources):
             if src.name not in b_source_names:
-                cite_b.sources.append(src)
+                cite_b.sources.append(replace(
+                    src, via_parallel=src.via_parallel or cite_a.normalized))
 
 
 def _detect_antecedent_names(citations: list[Citation], text: str) -> None:

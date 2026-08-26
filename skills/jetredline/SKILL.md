@@ -508,7 +508,9 @@ $VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" \
     2. Launch **one** subagent (Task tool, `model: haiku`, subagent_type `general-purpose`) with that list and these instructions: for each citation, call `lookup_opinion(<cite>)` and record `case_name`, `url`, `url_source`, `date_filed`, and `citations`; then page through `get_opinion_text(<cite>, offset=..., limit=50000)` until `has_more` is false and **Write the concatenated text verbatim** (do not summarize, reformat, or strip the frontmatter block) to the refs path: `~/refs/opin/ND/<year>/<year>ND<n>.md` for `YYYY ND N`; `~/refs/opin/NW2d/<vol>/<page>.md` for `V N.W.2d P` (analogously `NW3d`, `NW`). Write `<TMPDIR>/sources.json` **incrementally**: after each `lookup_opinion` call and *before* paging that opinion's text, re-read the file, add entries mapping **every** citation form from `citations` to `{"case_name", "url", "url_source", "date_filed", "via": "ndlaw"}`, and write it back — paging text is the context-expensive step, and metadata held only in memory has been lost to context exhaustion on long lists. Finish by counting the refs files actually on disk (not from memory) and return only that tally ("N exported, M not in corpus") — never opinion text.
     3. The token cost stays inside the subagent's isolated context (and within the subscription); main context must never page opinion text through its own tool results just to embed it.
 
-    If MCP tools are also unavailable, skip `--sources-meta` below and fall through silently (never stall on this step) — or, at most, build a minimal `sources.json` from one cheap `lookup_opinion` call per unique ND case (URL + case name only) if a stray connection allows it.
+    If MCP tools are also unavailable, skip `--sources-meta` below and fall through (never stall on this step) — or, at most, build a minimal `sources.json` from one cheap `lookup_opinion` call per unique ND case (URL + case name only) if a stray connection allows it.
+
+    **Fall through, but never silently.** When neither the corpus nor the MCP connection was reachable, the citation text the review rests on is whatever `~/refs` already held — copies of unrecorded age, which the corpus has since corrected in ways they cannot know about (`opinions.db` carries Westlaw merges and quality-scan fixes that never reach a refs file). Record it: say so in the Step 12 summary, and render the **⚠ Authority Text Not Refreshed** section of the analysis document. A run that could not check its authorities against the corpus must not read as one that did.
 
     **11b. Generate the page.** Write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndlaw", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "local"}`:
 ```bash
@@ -947,6 +949,14 @@ One or more provided source files could not be fully read. Fact-check and brief-
 | [file.pdf] | image-only / no text layer (or OCR-low-confidence) | Pass 4, Pass 6 | OCR attempted (ocrmypdf) — failed / low-confidence; recommend manual review or re-OCR |
 
 **Inputs ingested: N of M.**
+```
+
+**Authority-text warning (conditional — render whenever Step 11a reached neither the ndlaw corpus nor the MCP connection).** Place it with the other warnings near the top. Omit it entirely when the refresh succeeded:
+
+```
+## ⚠ Authority Text Not Refreshed
+
+The ndlaw corpus was not reachable for this run, so cited authorities were checked against whatever local copies `~/refs` already held. Those copies carry no record of when they were fetched, and the corpus has since corrected opinion text in ways a cached copy cannot reflect. **Quotation and citation findings below are weaker than usual in both directions** — an unverified quotation may be accurate, and a verified one may rest on superseded text. Re-run with the corpus reachable to settle them.
 ```
 
 **Reduced-reliability model warning (conditional — render only when Step 0.0 reported `warn` and the user chose to proceed).** Place it immediately after the source-materials warning, or in its place when every input was ingested. Omit the section entirely on an Opus-, Fable-, or Mythos-class model:

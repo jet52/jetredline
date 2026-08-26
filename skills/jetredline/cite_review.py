@@ -931,6 +931,28 @@ def _download_pdf(url: str, dest: Path, timeout: int = 15) -> bool:
         return False
 
 
+def _local_trust(local_path: str) -> dict:
+    """What jetcite says a cached copy may be relied on for.
+
+    The pane shows the text either way — it is still the opinion a reviewer
+    wants to read. What changes is the badge: a file fetched through a
+    pairing this draft asserted cannot stand as verification of that pairing,
+    and a reviewer looking at the source pane deserves to be told which kind
+    of file they are looking at. Degrades to unknown if the vendored jetcite
+    predates source_trust().
+    """
+    try:
+        from jetcite.cache import source_trust
+    except ImportError:
+        return {"origin": "unknown", "confirms": False, "pairing_basis": None,
+                "fetched": None}
+    try:
+        return source_trust(Path(local_path).expanduser())
+    except Exception:
+        return {"origin": "unknown", "confirms": False, "pairing_basis": None,
+                "fetched": None}
+
+
 def _read_local_markdown(local_path: str | None) -> str | None:
     """Read the full markdown file for a citation. Returns None if unavailable."""
     if not local_path:
@@ -2420,6 +2442,32 @@ _JS = """\
     const modeBtn = srcHdr.querySelector('.src-mode');
     const modeBadge = srcHdr.querySelector('.src-badge');
     const srcBody = document.querySelector('.src-body');
+    // How much a cached copy is worth saying out loud. The text shows either
+    // way; the badge is where a reviewer learns whether this file can stand
+    // as verification. A copy fetched through a pairing THIS draft asserted
+    // cannot confirm that pairing -- it is the draft's own claim, round-
+    // tripped through a filename -- and a file cached before jetcite
+    // recorded provenance says nothing about where it came from.
+    function localBadge(d) {
+      const t = d.source_trust || {};
+      if (t.pairing_basis === 'asserted-by-source') return {
+        badge: 'asserted pairing',
+        title: 'Cached under this reporter cite only because the draft paired '
+             + 'it with another citation. Confirms the draft\\'s assertion, not '
+             + 'the pairing — verify the parallel cite independently.'};
+      if (t.origin === 'ndlaw-corpus') return {
+        badge: 'corpus',
+        title: 'Text from the ndlaw corpus, which carries validation fixes '
+             + 'the scraped copies do not. Readable with no network.'};
+      if (t.origin === 'web-fetch') return {
+        badge: 'cached',
+        title: 'Fetched copy under ~/refs' + (t.fetched ? ', ' + t.fetched.slice(0, 10) : '')
+             + '. Readable with no network; may predate later corrections.'};
+      return {
+        badge: 'unverified copy',
+        title: 'Cached under ~/refs with no record of where it came from or '
+             + 'when. Readable offline; not evidence of anything.'};
+    }
     const sourceHtml = d.source_key ? SOURCES[d.source_key] : null;
 
     // ---- Source view modes -------------------------------------------------
@@ -2646,8 +2694,8 @@ _JS = """\
           '<iframe src="' + esc(d.authority_pdf.href) + '"></iframe>';
       }});
     if (sourceHtml) modes.push({
-      key: 'local', label: 'Local reference', badge: 'offline',
-      badgeTitle: 'Cached copy under ~/refs. Readable with no network.',
+      key: 'local', label: 'Local reference', badge: localBadge(d).badge,
+      badgeTitle: localBadge(d).title,
       url: null, render: renderLocal});
     else if (d.passage) modes.push({
       key: 'passage', label: 'Verification passage', badge: 'excerpt',
@@ -3214,6 +3262,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     # Pin/repeat entries carry no file of their own; their parent's path
     # (parent_local_path) keys the same map.
     sources_map: dict[str, str] = {}  # local_path → rendered HTML
+    trust_map: dict[str, dict] = {}   # local_path → jetcite source_trust()
     for c in citations:
         for lp, exists in ((c.get("local_path"), c.get("local_exists")),
                            (c.get("parent_local_path"),
@@ -3222,6 +3271,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
                 md = _read_local_markdown(lp)
                 if md:
                     sources_map[lp] = _md_to_html(md)
+                    trust_map[lp] = _local_trust(lp)
 
     # Position→paragraph mapping happens on the same preprocessed text the
     # scanner indexed; paragraph numbers are shared with the display split.
@@ -3370,6 +3420,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "viewer_path": viewer_path,
             "search_term": search_term,
             "source_key": lp if has_source else None,
+            "source_trust": trust_map.get(lp) if has_source else None,
             "passage": passage,
             "via": via,
         })

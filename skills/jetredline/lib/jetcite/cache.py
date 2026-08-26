@@ -224,6 +224,8 @@ def cache_content(
     original: bytes | None = None,
     original_content_type: str | None = None,
     http_headers: dict | None = None,
+    via_parallel: str | None = None,
+    origin: str = "web-fetch",
     # Backward compat: accept raw_html as alias for original
     raw_html: str | None = None,
 ) -> Path | None:
@@ -234,9 +236,23 @@ def cache_content(
     alongside the markdown.
 
     The ``.meta.json`` sidecar includes:
-      - citation, source_url, fetched, content_type (always)
+      - citation, source_url, fetched, content_type, origin (always)
       - original_content_type, original_file, content_hash (when original provided)
       - etag, last_modified (when http_headers provided)
+      - pairing (when the URL came from a parallel member -- see below)
+
+    ``origin`` says how the bytes got here: ``web-fetch`` (this module went
+    and got them) or ``ndlaw-corpus`` (a corpus exporter wrote them). It is
+    not a claim about who published the text -- that is the source host's
+    business -- only about this file's route.
+
+    ``via_parallel`` is the normalized citation a merged source actually
+    addresses. When set, the fetch reached this opinion only because the
+    document under review paired the two cites, so the sidecar records
+    ``pairing: {resolved_from, basis: "asserted-by-source"}`` and
+    :func:`confirms_citation` answers False for the file. Without it, the
+    next run finds a cached file at the reporter's path and reads it as
+    independent verification of a pairing nobody ever checked.
 
     Best-effort: returns None silently if the refs directory is missing,
     read-only, or any write fails (e.g., sandboxed environments).
@@ -271,7 +287,13 @@ def cache_content(
             "source_url": source_url or (citation.sources[0].url if citation.sources else None),
             "fetched": datetime.now(timezone.utc).isoformat(),
             "content_type": content_type,
+            "origin": origin,
         }
+        if via_parallel:
+            meta["pairing"] = {
+                "resolved_from": via_parallel,
+                "basis": "asserted-by-source",
+            }
 
         # Write original as dot-prefixed sibling and record in metadata
         if original:
@@ -300,6 +322,41 @@ def cache_content(
         return None
 
     return full
+
+
+def source_trust(path: Path) -> dict:
+    """What a cached file may be relied on for.
+
+    One place for consumers to ask, so nobody re-derives the policy. Returns:
+
+      origin          -- "ndlaw-corpus", "web-fetch", or "unknown" for a file
+                         cached before this metadata existed.
+      fetched         -- ISO timestamp, or None.
+      pairing_basis   -- "asserted-by-source" when the fetch reached this
+                         opinion only through a pairing the reviewed document
+                         asserted; None otherwise.
+      confirms        -- False when the file must not stand as verification of
+                         its own citation. True only for a file fetched
+                         through a source that addressed that citation
+                         directly.
+
+    A missing sidecar, or one predating these keys, yields origin "unknown"
+    and confirms False: silence is not evidence, and every file written
+    before this policy shipped was written without it.
+    """
+    meta = read_meta(path) or {}
+    pairing = meta.get("pairing") or {}
+    basis = pairing.get("basis")
+    origin = meta.get("origin")
+    if not origin:
+        # ndlaw_export stamped `via` before `origin` existed.
+        origin = "ndlaw-corpus" if meta.get("via") == "ndlaw" else "unknown"
+    return {
+        "origin": origin,
+        "fetched": meta.get("fetched"),
+        "pairing_basis": basis,
+        "confirms": origin in ("ndlaw-corpus", "web-fetch") and basis is None,
+    }
 
 
 def read_meta(path: Path) -> dict | None:
@@ -526,6 +583,7 @@ def fetch_and_cache(
     original_content_type: str | None = None
     http_headers: dict | None = None
     source_url = None
+    used: Source | None = None
 
     for s in citation.sources:
         if s.name == "local":
@@ -534,7 +592,7 @@ def fetch_and_cache(
         if extractor is not None:
             content, _meta, raw_content = extractor(s.url, citation, timeout)
             if content:
-                source_url = s.url
+                source_url, used = s.url, s
                 if raw_content is not None:
                     if isinstance(raw_content, bytes):
                         original = raw_content
@@ -549,7 +607,7 @@ def fetch_and_cache(
         for s in citation.sources:
             if s.name == "local":
                 continue
-            source_url = s.url
+            source_url, used = s.url, s
             break
         if source_url is None:
             return None
@@ -567,7 +625,8 @@ def fetch_and_cache(
                          content_type="text/markdown",
                          original=original,
                          original_content_type=original_content_type,
-                         http_headers=http_headers)
+                         http_headers=http_headers,
+                         via_parallel=used.via_parallel if used else None)
     if path is not None:
         add_local_source(citation, path)
     return path

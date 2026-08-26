@@ -330,6 +330,10 @@ def _write_refs(path: Path, record: dict, queried: str) -> None:
         "source_url": record.get("url"),
         "fetched": datetime.now(timezone.utc).isoformat(),
         "content_type": "text/markdown",
+        # `origin` is jetcite's field (cache.source_trust reads it); `via` is
+        # this script's older name for the same fact and stays for the files
+        # already on disk that carry only it.
+        "origin": "ndlaw-corpus",
         "via": "ndlaw",
     }
     path.with_suffix(path.suffix + ".meta.json").write_text(

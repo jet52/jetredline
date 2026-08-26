@@ -18,6 +18,13 @@ class Source:
     url: str
     verified: bool | None = None
     anchor: str | None = None
+    # Set when this source did not belong to the citation that carries it, but
+    # was merged in from a parallel member -- the normalized form of the cite
+    # it actually addresses. A URL built from "2025 ND 228" and attached to
+    # "29 N.W.3d 885" resolves that pairing only because the document under
+    # review asserted it, so anything fetched through it confirms the
+    # assertion, never the pairing. See _merge_parallel_sources in scanner.py.
+    via_parallel: str | None = None
 
 
 @dataclass
