@@ -27,11 +27,11 @@ def _read_local_version() -> str | None:
     # Installed location
     version_file = Path.home() / ".claude" / "skills" / SKILL_NAME / "VERSION"
     if version_file.exists():
-        return version_file.read_text().strip()
+        return version_file.read_text(encoding="utf-8").strip()
     # Repo location (same directory as this script)
     version_file = Path(__file__).resolve().parent / "VERSION"
     if version_file.exists():
-        return version_file.read_text().strip()
+        return version_file.read_text(encoding="utf-8").strip()
     return None
 
 
@@ -43,7 +43,7 @@ def _parse_version(v: str) -> tuple[int, ...]:
 def _read_cache() -> dict | None:
     """Read the cached update check result."""
     try:
-        data = json.loads(CACHE_FILE.read_text())
+        data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
         if time.time() - data.get("checked", 0) < CHECK_INTERVAL:
             return data
     except Exception:
@@ -58,7 +58,7 @@ def _write_cache(remote_version: str) -> None:
         CACHE_FILE.write_text(json.dumps({
             "checked": time.time(),
             "remote_version": remote_version,
-        }))
+        }), encoding="utf-8")
     except Exception:
         pass
 

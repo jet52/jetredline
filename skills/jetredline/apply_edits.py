@@ -1227,7 +1227,7 @@ def main():
         _die(f"Edits file not found: {args.edits}")
 
     try:
-        edits = json.loads(edits_path.read_text())
+        edits = json.loads(edits_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         _die(f"Invalid JSON in edits file: {e}")
 

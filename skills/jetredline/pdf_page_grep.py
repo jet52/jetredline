@@ -42,7 +42,7 @@ def _from_sidecar(pdf: Path):
     for candidate in (pdf.with_suffix(".txt"), pdf.with_suffix(".ocr.txt")):
         if candidate.exists():
             try:
-                return candidate.read_text(errors="replace")
+                return candidate.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 return None
     return None
@@ -85,7 +85,7 @@ def pages_of(pdf: Path):
         text = _from_pdftotext(pdf) or _from_pypdf(pdf)
     if text is None and pdf.suffix.lower() != ".pdf":
         try:
-            text = pdf.read_text(errors="replace")
+            text = pdf.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
     if text is None:

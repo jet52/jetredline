@@ -1169,8 +1169,11 @@ def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path,
         # Clean up the intermediate PDF file
         pdf_file.unlink(missing_ok=True)
 
-        # Relative path from output HTML to viewer
-        viewers[url] = str(viewer_file.relative_to(output_path.parent))
+        # Relative path from output HTML to viewer. as_posix(), never str():
+        # on Windows a bare str() yields `..._pdfs\\R370_-_Judgment.html`, and
+        # while Chrome normalizes backslashes in a file: URL, that is not
+        # spec-guaranteed and breaks on any other engine or over http://.
+        viewers[url] = viewer_file.relative_to(output_path.parent).as_posix()
 
     return viewers
 
@@ -1372,17 +1375,34 @@ def _resolve_fact_source(src: dict, record_dir: Path | None,
     # "Brief - Appellee" into "brief---appellee" against a haystack of
     # "brief-appelleepdf" and never matched ordinary brief filenames.
     frag = _norm_frag(token)
-    if len(frag) >= 4:
-        for e in manifest:
-            fn = e.get("filename") or ""
-            if frag in _norm_frag(Path(fn).stem):
-                p = manifest_dir / fn
-                if p.exists():
-                    return p
-        for p in sorted(base_dir.glob("*.pdf")):
-            if frag in _norm_frag(p.stem):
+    for e in manifest:
+        fn = e.get("filename") or ""
+        if _frag_matches(frag, Path(fn).stem):
+            p = manifest_dir / fn
+            if p.exists():
                 return p
+    for p in sorted(base_dir.glob("*.pdf")):
+        if _frag_matches(frag, p.stem):
+            return p
     return None
+
+
+def _frag_matches(frag: str, stem: str) -> bool:
+    """Does a source label identify this filename?
+
+    Four characters or more match as a substring — long enough that a
+    coincidence is unlikely. Exactly three must match a whole hyphen-delimited
+    token, so "ROA" (Register of Actions) finds ``R12 - ROA.pdf`` without also
+    claiming ``Broad-Order.pdf``; the older flat four-character floor could not
+    resolve a three-letter label at all. Anything shorter never matches: a
+    two-character token collides with too much to be evidence of anything.
+    """
+    hay = _norm_frag(stem)
+    if len(frag) >= 4:
+        return frag in hay
+    if len(frag) == 3:
+        return frag in hay.split("-")
+    return False
 
 
 def _norm_frag(s: str) -> str:
@@ -1489,8 +1509,8 @@ def _generate_local_pdf_viewers(pdf_paths: list[Path], output_path: Path,
             _PDFJS_VIEWER_TEMPLATE.replace(
                 "__PDF_BASE64__", base64.b64encode(data).decode("ascii")),
             encoding="utf-8")
-        out[str(p)] = by_hash[digest] = str(
-            viewer_file.relative_to(output_path.parent))
+        out[str(p)] = by_hash[digest] = viewer_file.relative_to(
+            output_path.parent).as_posix()
         spent += len(data)
     if deduped or linked:
         embedded = len(by_hash) - len(linked)

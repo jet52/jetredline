@@ -50,7 +50,7 @@ def _frontmatter(skill_dir: Path) -> dict:
     """Best-effort parse of SKILL.md YAML frontmatter scalar fields."""
     out: dict = {}
     try:
-        text = (skill_dir / "SKILL.md").read_text()
+        text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
     except OSError:
         return out
     if not text.startswith("---"):
@@ -68,13 +68,13 @@ def skill_name(skill_dir: Path) -> str:
 
 def read_version(skill_dir: Path) -> str:
     try:
-        v = (skill_dir / "VERSION").read_text().strip()
+        v = (skill_dir / "VERSION").read_text(encoding="utf-8").strip()
         if v:
             return v
     except OSError:
         pass
     try:
-        v = json.loads((skill_dir / "version.json").read_text()).get("version")
+        v = json.loads((skill_dir / "version.json").read_text(encoding="utf-8")).get("version")
         if v:
             return str(v)
     except (OSError, ValueError):
@@ -85,7 +85,7 @@ def read_version(skill_dir: Path) -> str:
 def import_names(requirements: Path) -> list[str]:
     names: list[str] = []
     try:
-        lines = requirements.read_text().splitlines()
+        lines = requirements.read_text(encoding="utf-8").splitlines()
     except OSError:
         return names
     for line in lines:
@@ -178,7 +178,7 @@ def build_venv(venv_dir: Path, requirements: Path) -> Path | None:
         return None
     needs_install = False
     try:
-        needs_install = bool(requirements.read_text().strip())
+        needs_install = bool(requirements.read_text(encoding="utf-8").strip())
     except OSError:
         pass
     if needs_install and not pip_install(python, requirements):
@@ -276,7 +276,7 @@ def ensure_node(skill_dir: Path, cache_root: Path) -> Path | None:
               file=sys.stderr)
         return None
     try:
-        spec = json.loads((skill_dir / "package.json").read_text())
+        spec = json.loads((skill_dir / "package.json").read_text(encoding="utf-8"))
         docx_spec = "docx@" + spec["dependencies"]["docx"]
     except (OSError, KeyError, ValueError):
         docx_spec = "docx"

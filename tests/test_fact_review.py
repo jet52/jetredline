@@ -120,6 +120,25 @@ class TestSourceResolution:
         got = _resolve_fact_source({"item": "Apt-Br"}, None, [], tmp_path)
         assert got.name == "20260029_017_Apt-Br.pdf"
 
+    def test_three_character_label_resolves_as_a_whole_token(self, tmp_path):
+        """`ROA` (Register of Actions) is three characters. The old flat
+        four-character floor skipped the name-fragment fallback entirely, so
+        it could not resolve at all and needed a hand-injected `file` hint."""
+        _write_pdf(tmp_path / "R12 - ROA.pdf")
+        got = _resolve_fact_source({"item": "ROA"}, None, [], tmp_path)
+        assert got.name == "R12 - ROA.pdf"
+
+    def test_three_character_label_does_not_match_inside_a_word(self, tmp_path):
+        """Which is why three characters match a whole token and not a
+        substring: `roa` must not claim `Broad-Order`."""
+        _write_pdf(tmp_path / "Broad-Order.pdf")
+        assert _resolve_fact_source({"item": "ROA"}, None, [], tmp_path) is None
+
+    def test_two_character_label_never_matches(self, tmp_path):
+        """A two-character token collides with too much to be evidence."""
+        _write_pdf(tmp_path / "R12 - Ex.pdf")
+        assert _resolve_fact_source({"item": "Ex"}, None, [], tmp_path) is None
+
     def test_explicit_file_hint_wins(self, tmp_path):
         _write_pdf(tmp_path / "custom.pdf")
         got = _resolve_fact_source({"file": "custom.pdf", "item": "R999"},

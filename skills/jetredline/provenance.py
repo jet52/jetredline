@@ -448,12 +448,12 @@ def read_version(skill_dir: Path) -> str:
     """Authoritative version: SKILL.md frontmatter `version:`, then VERSION file."""
     skill_md = skill_dir / "SKILL.md"
     if skill_md.exists():
-        m = re.search(r"^version:\s*(.+?)\s*$", skill_md.read_text(), re.M)
+        m = re.search(r"^version:\s*(.+?)\s*$", skill_md.read_text(encoding="utf-8"), re.M)
         if m:
             return m.group(1).strip().strip("'\"")
     version_file = skill_dir / "VERSION"
     if version_file.exists():
-        return version_file.read_text().strip()
+        return version_file.read_text(encoding="utf-8").strip()
     return "unknown"
 
 
@@ -468,13 +468,13 @@ def footer_line(model: str, skill: str, version: str, on_date: str) -> str:
 
 def stamp(path: Path, model: str, skill: str, version: str, on_date: str,
           rows: list = None) -> None:
-    text = path.read_text().rstrip()
+    text = path.read_text(encoding="utf-8").rstrip()
     text = _FOOTER_RE.sub("", text).rstrip()
     footer = footer_line(model, skill, version, on_date)
     table = subagent_table(rows or [])
     if table:
         footer += "\n\n" + table
-    path.write_text(text + "\n\n---\n\n" + footer + "\n")
+    path.write_text(text + "\n\n---\n\n" + footer + "\n", encoding="utf-8")
 
 
 def main() -> int:
