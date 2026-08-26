@@ -24,9 +24,12 @@ allow_grep() {
 scan_range() {
   local range="$1"
 
-  # Added lines only (diff +...)
+  # Added lines only (diff +...), excluding the allow file itself: it is the
+  # rulebook, so every pattern it lists reads as a hit against its own rules
+  # and a new exemption can never be pushed.
   local added
-  added=$(git log --format='' -p "$range" 2>/dev/null | grep -E '^\+' || true)
+  added=$(git log --format='' -p "$range" -- . ":(exclude)$ALLOW_FILE" \
+    2>/dev/null | grep -E '^\+' || true)
 
   # 1. ND Supreme Court docket 2000-2026 series
   local sc_hits
