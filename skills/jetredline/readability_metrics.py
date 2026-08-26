@@ -315,8 +315,15 @@ _KNOWN_HEADINGS = {
     'CONCURRENCE', 'DISSENT', 'DISSENTING OPINION', 'CONCURRING OPINION',
 }
 
+# Section headings in an opinion are bare roman numerals as often as they are
+# numerals with a period, and the old pattern required the period. `I`, `II`,
+# and `IV` then fell through to the ALL-CAPS branch below, which requires three
+# characters -- so on a four-section opinion exactly one heading resolved, and
+# it was `III`. Longest-first so `XIV` is not read as `X`.
+_ROMAN_NUMERALS = ("XX XIX XVIII XVII XVI XV XIV XIII XII XI X "
+                   "IX VIII VII VI V IV III II I").split()
 _ROMAN_PATTERN = re.compile(
-    r'^(?:(?:IX|IV|V?I{0,3})\.|[A-Z]\.)(?:\s|$)', re.MULTILINE
+    r'^(?:' + '|'.join(_ROMAN_NUMERALS) + r'|[A-Z])\.?(?:\s+.*)?$'
 )
 
 
@@ -328,7 +335,8 @@ def detect_sections(text: str) -> list[dict]:
     lines = text.split('\n')
 
     # First, find all paragraph markers to build a line->para map
-    para_map = {}  # line_index -> para_number
+    para_map = {}     # line_index -> the paragraph that line belongs to
+    marker_lines = {}  # line_index -> paragraph, only where the marker appears
     current_para = None
     for i, line in enumerate(lines):
         m = re.match(r'\[?\u00b6\s*(\d+)\]?', line)
@@ -336,6 +344,7 @@ def detect_sections(text: str) -> list[dict]:
             m = re.match(r'\[¶\s*(\d+)\]', line)
         if m:
             current_para = int(m.group(1))
+            marker_lines[i] = current_para
         if current_para is not None:
             para_map[i] = current_para
 
@@ -382,8 +391,15 @@ def detect_sections(text: str) -> list[dict]:
                     if idx + 1 < len(section_starts) else len(lines))
         section_text = '\n'.join(lines[start_line:end_line])
 
-        # Determine paragraph range
+        # Determine paragraph range from the markers that actually open
+        # inside the section. Using para_map here counted the heading line
+        # itself, which inherits the *previous* paragraph's number, so every
+        # section reported starting one paragraph early. Fall back to the
+        # inherited numbering for a section that contains no marker at all.
         paras_in_section = [
+            marker_lines[j] for j in range(start_line, end_line)
+            if j in marker_lines
+        ] or [
             para_map[j] for j in range(start_line, end_line) if j in para_map
         ]
         para_start = min(paras_in_section) if paras_in_section else None
@@ -436,8 +452,11 @@ def analyze_section(name: str, text: str, para_range: tuple) -> dict:
     avg_sentence_length = round(word_count / len(sentences), 1) if sentences else 0
     longest_sentence = max(sentence_lengths) if sentence_lengths else 0
 
-    # Flesch-Kincaid
-    fk_grade = round(fk_grade(text), 1)
+    # Flesch-Kincaid. Named `grade`, not `fk_grade`: assigning to the
+    # function's own name makes it local for the whole function body, so the
+    # call on the right raised UnboundLocalError and every section with text
+    # in it failed. Introduced in 4.21.0 when fk_grade became module-level.
+    grade = round(fk_grade(text), 1)
 
     # Passive voice
     passive_count, total_sents = count_passive(sentences)
@@ -451,7 +470,7 @@ def analyze_section(name: str, text: str, para_range: tuple) -> dict:
         'name': name,
         'para_range': _format_range(para_range),
         'word_count': word_count,
-        'fk_grade': fk_grade,
+        'fk_grade': grade,
         'avg_sentence_length': avg_sentence_length,
         'longest_sentence': longest_sentence,
         'passive_pct': passive_pct,
@@ -472,6 +491,31 @@ def _format_range(para_range: tuple) -> str:
 # ---------------------------------------------------------------------------
 # Document-level analysis
 # ---------------------------------------------------------------------------
+
+_PARA_MARKER_RE = re.compile(r'\[?[¶\u00b6]\s*(\d+)\]?')
+
+
+def paragraph_blocks(text: str) -> list[tuple[int | None, str]]:
+    """(paragraph number, block text) for each ``[¶N]``-marked block, in order.
+
+    Flags are keyed by walking these rather than by searching the document for
+    a sentence's own opening words. A phrase that recurs -- and in an opinion
+    "The district court found that" recurs constantly -- resolves to its first
+    occurrence, so a flag belonging to ¶ 30 was reported at ¶ 4. Any text
+    before the first marker is yielded under None.
+    """
+    marks = list(_PARA_MARKER_RE.finditer(text))
+    if not marks:
+        return [(None, text)]
+    blocks: list[tuple[int | None, str]] = []
+    head = text[:marks[0].start()]
+    if head.strip():
+        blocks.append((None, head))
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(text)
+        blocks.append((int(m.group(1)), text[m.start():end]))
+    return blocks
+
 
 def _find_para_for_line(text: str, char_offset: int) -> int | None:
     """Find the paragraph number for a character offset in the text."""
@@ -522,12 +566,11 @@ def analyze_document(text: str) -> dict:
     flags = []
 
     # Flag long sentences (> 40 words)
-    for sentence in all_sentences:
-        words = sentence.split()
-        if len(words) > 40:
-            # Find paragraph number
-            idx = text.find(sentence[:50])
-            para = _find_para_for_line(text, idx) if idx >= 0 else None
+    for para, block in paragraph_blocks(text):
+        for sentence in split_sentences(block):
+            words = sentence.split()
+            if len(words) <= 40:
+                continue
             preview = ' '.join(words[:10]) + '...'
             flags.append({
                 'para': para,
@@ -582,6 +625,11 @@ def main():
     text = path.read_text(encoding="utf-8")
     result = analyze_document(text)
 
+    # ensure_ascii=False emits real en dashes in para_range; on a cp1252
+    # console that reaches the file as mojibake ("17?32"). Reported from a
+    # Windows run.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     indent = 2 if args.json else None
     print(json.dumps(result, indent=indent, ensure_ascii=False))
 

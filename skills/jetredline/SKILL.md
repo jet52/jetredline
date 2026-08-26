@@ -203,7 +203,7 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 | Authority matching | `$SKILL_DIR/authorities.py` |
 | Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
-| OOXML validate | `$SKILL_DIR/ooxml_validate.py` |
+| OOXML validate | `$SKILL_DIR/ooxml_validate.py <file.docx>` — run it on the tracked-changes .docx after Step 9; exit 1 with diagnostic JSON means Word would call the file unreadable |
 | Citation review | `$SKILL_DIR/cite_review.py` |
 | Analysis report HTML | `$SKILL_DIR/analysis_to_html.py` |
 | Batch edit helper | `$SKILL_DIR/apply_edits.py` |
@@ -495,7 +495,7 @@ The markdown stays the source of truth. If you edit the report afterward, re-run
 
 11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification.
 
-    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost).** Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance over Streamable HTTP (`NDLAW_URL` + `NDLAW_AUTH` env, or `--url`/`--auth`; for Claude Code users the URL and Basic-Auth header are in their MCP config — `claude mcp get ndlaw`). The script speaks to the server directly, so no opinion text passes through model context.
+    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost).** Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance over Streamable HTTP (`NDLAW_URL` + `NDLAW_AUTH` env, or `--url`/`--auth`; for Claude Code users the URL and Basic-Auth header may be in their MCP config — `claude mcp get ndlaw` reads it, but only for a server configured in `.mcp.json`/`~/.claude.json` under that exact name. ndlaw often arrives instead as a connector, whose tools appear in-session under an opaque server id (`mcp__claude_ai_ndlaw__*`); `claude mcp get` then answers "No MCP server named ndlaw" while the tools are plainly available. Do not read that as absence — check whether ndlaw tools are in your own tool list, and if they are, take the scribe-subagent path below rather than hunting for a URL that does not exist on disk). The script speaks to the server directly, so no opinion text passes through model context.
 ```bash
 $VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" \
   --opinion <opinion_md_path> \

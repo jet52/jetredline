@@ -413,15 +413,44 @@ class TestFactsPageJavaScriptParses:
         node = shutil.which("node")
         if not node:
             pytest.skip("node not on PATH")
-        from cite_review import _PDFJS_VIEWER_TEMPLATE
+        from cite_review import _pdfjs_viewer_template
+        template = _pdfjs_viewer_template()
         js = re.findall(r"<script[^>]*type=.module.[^>]*>(.*?)</script>",
-                        _PDFJS_VIEWER_TEMPLATE, re.DOTALL)[0]
+                        template, re.DOTALL)[0]
         js = re.sub(r"^import .*$", "", js, flags=re.M).replace("await ", "")
         f = tmp_path / "viewer.mjs"
         f.write_text(js.replace("__PDF_BASE64__", ""), encoding="utf-8")
         r = subprocess.run([node, "--check", str(f)],
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
+
+    def test_viewer_load_timeout_script_parses(self, tmp_path):
+        """The classic script that notices a blocked CDN. It cannot live in
+        the module script it guards: a failed ES-module import never runs the
+        module body, which is the whole reason the timer exists."""
+        node = shutil.which("node")
+        if not node:
+            pytest.skip("node not on PATH")
+        from cite_review import _pdfjs_viewer_template
+        template = _pdfjs_viewer_template()
+        classic = [b for b in re.findall(
+            r"<script(?![^>]*type=.module.)[^>]*>(.*?)</script>",
+            template, re.DOTALL) if "__pdfjsLoaded" in b]
+        assert classic, "no load-timeout script in the viewer template"
+        f = tmp_path / "timeout.js"
+        f.write_text(classic[0], encoding="utf-8")
+        r = subprocess.run([node, "--check", str(f)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+
+    def test_viewer_names_the_blocked_host(self):
+        """The message has to name the host, or it tells the reader nothing
+        they can act on."""
+        from cite_review import _pdfjs_viewer_template
+        assert "cdnjs.cloudflare.com</b>" in _pdfjs_viewer_template()
+        mirror = _pdfjs_viewer_template("https://mirror.example.org/pdfjs/4.10.38/")
+        assert "mirror.example.org</b>" in mirror
+        assert "mirror.example.org/pdfjs/4.10.38/pdf.min.mjs" in mirror
 
 
 # ---------------------------------------------------------------------------

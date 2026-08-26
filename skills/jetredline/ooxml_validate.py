@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
-"""OOXML pre-pack validation for JetRedline.
+"""OOXML validation for JetRedline.
 
-Checks an unpacked .docx directory for common OOXML issues that cause
-Word to report "unreadable content."
+Checks a .docx — or an already-unpacked .docx directory — for common OOXML
+issues that cause Word to report "unreadable content."
 
 Usage:
+    python ooxml_validate.py <file.docx>
     python ooxml_validate.py <unpacked_dir>
+
+A .docx is unpacked into a temporary directory that is removed on the way
+out; nothing is written beside the document. Passing one used to fail with
+"is not a directory", which made the post-apply_edits check — the one place
+you would actually want this — undocumented and unreachable.
 
 Exits 0 if clean. Exits 1 with diagnostic JSON on stdout if issues found.
 """
 
 import json
+import shutil
 import sys
+import tempfile
+import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import defusedxml.minidom as minidom
@@ -319,22 +329,58 @@ def check_xml_space(unpacked_dir):
 # Main
 # ---------------------------------------------------------------------------
 
+@contextmanager
+def unpacked(target: Path):
+    """Yield a directory of OOXML parts for ``target``.
+
+    A directory is used as-is. A .docx is extracted to a temp directory that
+    is removed on exit, so validating a document never leaves an unpacked
+    tree beside it.
+    """
+    if target.is_dir():
+        yield target
+        return
+    if not target.is_file():
+        raise FileNotFoundError(f"{target} is neither a .docx nor a directory")
+    if not zipfile.is_zipfile(target):
+        raise ValueError(f"{target} is not a .docx (not a zip archive)")
+    tmp = Path(tempfile.mkdtemp(prefix="ooxml-validate-"))
+    try:
+        with zipfile.ZipFile(target) as zf:
+            # Refuse absolute or parent-traversing member names rather than
+            # writing outside the temp directory.
+            for name in zf.namelist():
+                if name.startswith("/") or ".." in Path(name).parts:
+                    raise ValueError(f"{target}: unsafe archive member {name!r}")
+            zf.extractall(tmp)
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def validate(unpacked_dir: Path) -> list:
+    """Every check, against a directory of OOXML parts."""
+    issues = []
+    issues.extend(check_unique_ids(unpacked_dir))
+    issues.extend(check_comment_consistency(unpacked_dir))
+    issues.extend(check_comment_artifacts(unpacked_dir))
+    issues.extend(check_duplicate_entries(unpacked_dir))
+    issues.extend(check_xml_space(unpacked_dir))
+    return issues
+
+
 def main():
     if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <unpacked_dir>", file=sys.stderr)
+        print(f"Usage: {sys.argv[0]} <file.docx | unpacked_dir>", file=sys.stderr)
         sys.exit(1)
 
-    unpacked_dir = Path(sys.argv[1])
-    if not unpacked_dir.is_dir():
-        print(f"Error: {unpacked_dir} is not a directory", file=sys.stderr)
+    target = Path(sys.argv[1])
+    try:
+        with unpacked(target) as unpacked_dir:
+            all_issues = validate(unpacked_dir)
+    except (FileNotFoundError, ValueError, zipfile.BadZipFile) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    all_issues = []
-    all_issues.extend(check_unique_ids(unpacked_dir))
-    all_issues.extend(check_comment_consistency(unpacked_dir))
-    all_issues.extend(check_comment_artifacts(unpacked_dir))
-    all_issues.extend(check_duplicate_entries(unpacked_dir))
-    all_issues.extend(check_xml_space(unpacked_dir))
 
     if all_issues:
         result = {

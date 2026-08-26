@@ -579,13 +579,32 @@ def _url_source_info(url: str) -> tuple[str, str, str, str]:
 
 
 # PDF.js CDN version
-_PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38"
+_PDFJS_CDN_DEFAULT = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38"
+# Set once by main() from --pdfjs-cdn. A module-level value rather than a
+# threaded parameter because the two viewer builders sit several layers
+# down and nothing else in the run varies it.
+_PDFJS_CDN_OVERRIDE: str | None = None
+
+
+def _pdfjs_cdn(override: str | None = None) -> str:
+    """Base URL for pdf.min.mjs / pdf.worker.min.mjs.
+
+    Overridable because the embedded viewers are useless where cdnjs is
+    blocked, which is common on court and agency networks: --pdfjs-cdn, else
+    $JETREDLINE_PDFJS_CDN, else cdnjs. Vendoring the library instead is not
+    an option -- an ES module imported from a file:// page is CORS-blocked --
+    so the escape hatch has to be a different host, not a local copy.
+    """
+    import os
+    return (override or _PDFJS_CDN_OVERRIDE
+            or os.environ.get("JETREDLINE_PDFJS_CDN")
+            or _PDFJS_CDN_DEFAULT).rstrip("/")
 
 # Self-contained PDF.js viewer HTML template.
 # The search term is read from the URL hash (#search=...) so one viewer file
 # can serve multiple pinpoints for the same opinion.
 # Placeholder: __PDF_BASE64__
-_PDFJS_VIEWER_TEMPLATE = """\
+_PDFJS_VIEWER_TEMPLATE_RAW = """\
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -611,8 +630,28 @@ html, body { margin:0; padding:0; background:#444; height:100%%; overflow:auto; 
 <div id="search-bar"></div>
 <div id="loading">Loading PDF\u2026</div>
 <div id="pages"></div>
+<script>
+// A failed ES-module import raises no unhandledrejection and reaches no
+// error handler -- the module body simply never runs -- so a blocked CDN
+// leaves "Loading PDF..." on screen indefinitely with nothing to click and
+// nothing in the console a reader would think to open. This timer is the
+// only thing that notices, and it names the host so the fix is obvious.
+setTimeout(function () {
+  if (window.__pdfjsLoaded) return;
+  var l = document.getElementById('loading');
+  if (!l) return;
+  l.innerHTML = 'Could not load the PDF viewer from <b>%(cdnhost)s</b> within '
+    + '15 seconds \u2014 the host is most likely blocked on this network.<br><br>'
+    + 'Rebuild the review page with a reachable mirror:<br>'
+    + '<code>cite_review.py --pdfjs-cdn https://your-mirror/pdf.js/4.10.38 ...</code>'
+    + '<br>or set <code>JETREDLINE_PDFJS_CDN</code>.<br><br>'
+    + 'The cited source is still readable in its original PDF; only the '
+    + 'embedded viewer needs the library.';
+}, 15000);
+</script>
 <script type="module">
 import * as pdfjsLib from '%(cdn)s/pdf.min.mjs';
+window.__pdfjsLoaded = true;
 pdfjsLib.GlobalWorkerOptions.workerSrc = '%(cdn)s/pdf.worker.min.mjs';
 
 const PDF_DATA = '__PDF_BASE64__';
@@ -799,7 +838,16 @@ try {
 </script>
 </body>
 </html>
-""" % {"cdn": _PDFJS_CDN}
+"""
+
+
+def _pdfjs_viewer_template(cdn: str | None = None) -> str:
+    """The viewer page for one embedded PDF, bound to a CDN base."""
+    base = _pdfjs_cdn(cdn)
+    return _PDFJS_VIEWER_TEMPLATE_RAW % {
+        "cdn": base,
+        "cdnhost": urlparse(base).netloc or base,
+    }
 
 
 def _nd_direct_url(local_path: str | None) -> str | None:
@@ -1183,7 +1231,7 @@ def _generate_pdfjs_viewers(enriched: list[dict], output_path: Path,
 
         pdf_b64 = base64.b64encode(pdf_file.read_bytes()).decode("ascii")
 
-        viewer_html = _PDFJS_VIEWER_TEMPLATE.replace("__PDF_BASE64__", pdf_b64)
+        viewer_html = _pdfjs_viewer_template().replace("__PDF_BASE64__", pdf_b64)
 
         viewer_file = pdf_dir / f"{normalized}.html"
         viewer_file.write_text(viewer_html, encoding="utf-8")
@@ -1528,7 +1576,7 @@ def _generate_local_pdf_viewers(pdf_paths: list[Path], output_path: Path,
         pdf_dir.mkdir(exist_ok=True)
         viewer_file = pdf_dir / (_viewer_name(p, taken) + ".html")
         viewer_file.write_text(
-            _PDFJS_VIEWER_TEMPLATE.replace(
+            _pdfjs_viewer_template().replace(
                 "__PDF_BASE64__", base64.b64encode(data).decode("ascii")),
             encoding="utf-8")
         out[str(p)] = by_hash[digest] = viewer_file.relative_to(
@@ -3761,6 +3809,13 @@ def main():
                              "manifest.json (default: the opinion file's "
                              "directory). Pass this when the opinion "
                              "markdown lives in a temp dir.")
+    parser.add_argument("--pdfjs-cdn", default=None, metavar="URL",
+                        help="Base URL for pdf.min.mjs / pdf.worker.min.mjs "
+                             "(default cdnjs; or $JETREDLINE_PDFJS_CDN). Use a "
+                             "reachable mirror where cdnjs is blocked — the "
+                             "embedded viewers cannot load a local copy, "
+                             "because an ES module imported from file:// is "
+                             "CORS-blocked.")
     parser.add_argument("--link-pdfs", action="store_true",
                         help="Reference record/authority PDFs via native "
                              "iframes (relative file links + #page=N) "
@@ -3811,6 +3866,9 @@ def main():
                         help="Do not embed ndlaw reading copies; official "
                              "sources and local refs only.")
     args = parser.parse_args()
+
+    global _PDFJS_CDN_OVERRIDE
+    _PDFJS_CDN_OVERRIDE = args.pdfjs_cdn
 
     opinion_path = Path(args.opinion).expanduser()
     if not opinion_path.exists():
