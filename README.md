@@ -58,6 +58,7 @@ The analysis document includes the following sections (some vary by document typ
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (CLI) or [Claude Desktop](https://claude.ai/download) with Cowork
+- An **Opus-class model** (Opus, Fable, or Mythos). jetredline checks at startup and asks you to confirm before running on Sonnet or Haiku — those models miss materially more citation and record-fact errors on this workload, and the miss is silent. Switch with `/model opus`.
 - Python 3.10+
 - Node.js 18+ (for creating new .docx from scratch; not needed for tracked-changes editing)
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
@@ -230,6 +231,7 @@ jetredline/
 │       ├── ndlaw_export.py         # ND opinion text/URL export from ndlaw corpus
 │       ├── lib/
 │       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)
+│       ├── check_model.py          # Opus-class model gate (Step 0.0)
 │       ├── check_update.py         # Version check on session start
 │       ├── provenance.py           # Model/version/date stamp for analysis documents
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.

@@ -19,6 +19,7 @@ Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a 
    - Output = **analysis-only**. **Write no files** — no .docx, no `-ANALYSIS.md`, no `cite-review.html`. Return everything inline to the caller.
    - The draft arrives as a **markdown file path** (or pasted text), not a .docx. Read it directly; skip Step 0's `.docx`/`.pdf` scan, the temp-dir setup, and the docx-plugin discovery.
    - **Preserve markdown link syntax.** The memo arrives with record-citation hyperlinks (`[R45](url)`) and possibly authority links already in it. Never edit a URL, and when an edit touches linked text, keep the `[text](url)` wrapper intact.
+   - **Model gate: report, never block.** Run Step 0.0's `check_model.py`. On `warn` or `unknown`, do not ask the caller anything and do not stop — add one line under `### Coverage` in Part 2 naming the model and continue the audit.
 
 2. **Run inline.** Execute all selected passes inline in this context (as in Web mode) — do **not** delegate to Task subagents. The caller has already spawned you as a subagent. For passes whose detailed instructions live in `references/pass-instructions/` (Pass 1, Pass 4, Pass 6), Read the matching file and apply it inline.
 
@@ -257,6 +258,38 @@ where `<TMPDIR>` is the literal path captured in Step 0 (e.g., `/path/to/cases/s
 Note: `apply_edits.py` operates directly on the .docx ZIP archive — pure Python (`zipfile` + `defusedxml`), no unpack/pack pipeline and no external converter.
 
 ## Workflow
+
+### Step 0.0: Model Gate (run before anything else)
+
+jetredline's reliability was measured on Opus-class models. On this workload — citation verification, quotation accuracy, record fact-checking — Sonnet- and Haiku-class models miss materially more errors, and the miss is silent: the report still comes out looking complete. Confirm the runtime model before starting any pass.
+
+**CLI mode:**
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/check_model.py"
+```
+
+Stdlib only — run it on system `python3`, before the bootstrap. It prints one line, `MODEL_GATE: <status> model=<id> tier=<family> source=<origin>`, and exits 0 (`ok`), 2 (`warn`), or 3 (`unknown`). **A nonzero exit is the gate firing, not a broken script.**
+
+- **`ok`** — an Opus-, Fable-, or Mythos-class model. Continue to Step 0 and say nothing about the model; do not mention that the check ran.
+- **`unknown`** — the model could not be detected (no transcript yet, no `$CLAUDE_CODE_SESSION_ID`, Web mode). Identify yourself from your own system prompt and re-run once with that id — substitute your actual model, do not copy the example:
+  ```bash
+  python3 "${CLAUDE_SKILL_DIR}/check_model.py" --model claude-opus-5
+  ```
+  If it still reports `unknown`, treat it as `warn`.
+- **`warn`** — a Sonnet- or Haiku-class model, or any model name the gate does not recognize. **Stop. Run no pass, create no temp directory, read no draft, until the user answers.**
+
+**On `warn`, ask with `AskUserQuestion`.** Do not pose it rhetorically and proceed, and do not decide for the user that Opus-class "is probably fine either way."
+
+- **Question:** "jetredline is running on `<model>`. Its reliability testing is based on Opus-class models, which catch materially more citation and record-fact errors on this workload. Run anyway?"
+- **Header:** "Model"
+- **Options:**
+  1. **Stop — switch to Opus** — End here, having done no work. Tell the user to run `/model opus` (or restart with `claude --model opus`) and re-invoke jetredline.
+  2. **Proceed on `<model>`** — Run the full review on the current model, with the reduced-reliability caveat recorded in the outputs.
+
+If the user proceeds, carry it forward in exactly two places: one clause in the Step 0.6 announcement ("running on `<model>`, outside jetredline's validated set — verify citation and fact findings with extra care"), and the **⚠ Reduced-Reliability Model** section of the analysis document (see Output Format). Do not repeat the warning in every pass or in every finding.
+
+**Where `AskUserQuestion` is unavailable — Web mode, headless `claude -p`, and audit mode — never block.** State the warning once in text and run the full review anyway. A caller that cannot answer a question must still get its results. In audit mode, report it instead as one line under `### Coverage` in Part 2, e.g. `Model: claude-sonnet-5 — outside jetredline's validated Opus-class set; findings below carry a higher miss rate.` In Web mode, where no script can run, classify from your own identity: Opus, Fable, or Mythos → say nothing; anything else → state the caveat.
 
 ### Step 0: Initialize and Scan Working Directory
 
@@ -915,6 +948,14 @@ One or more provided source files could not be fully read. Fact-check and brief-
 | [file.pdf] | image-only / no text layer (or OCR-low-confidence) | Pass 4, Pass 6 | OCR attempted (ocrmypdf) — failed / low-confidence; recommend manual review or re-OCR |
 
 **Inputs ingested: N of M.**
+```
+
+**Reduced-reliability model warning (conditional — render only when Step 0.0 reported `warn` and the user chose to proceed).** Place it immediately after the source-materials warning, or in its place when every input was ingested. Omit the section entirely on an Opus-, Fable-, or Mythos-class model:
+
+```
+## ⚠ Reduced-Reliability Model
+
+This review ran on **[model id]**, which is outside the Opus-class set jetredline's reliability testing is based on. Citation, quotation, and record-fact findings below carry a higher miss rate than the same review on an Opus-class model — a clean section is weaker evidence than usual. Re-running on Opus is the way to raise confidence.
 ```
 
 **Both document types continue with:**
