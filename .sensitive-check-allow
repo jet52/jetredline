@@ -1,1 +1,11 @@
-20260998
+# Literal regexes, one per line, exempted from scripts/check-sensitive.sh.
+# Keep every entry narrow enough that a real case caption still trips the hook.
+#
+# N.D.R.App.P. text, verbatim from ndcourts.gov via the ndlaw corpus, in the
+# generated block of references/nd-appellate-rules.md. The scanner matches
+# "termination of parental rights" because TPR cases are confidential; these
+# three strings are the rule's own words and name no case. A ND TPR caption
+# reads "Interest of K.B." or "In re J.S." and matches none of them.
+N\.D\.R\.App\.P\. 2\.2 . Termination of Parental Rights
+Except for an appeal in a termination of parental rights proceeding
+\| Termination of parental rights \| 30 days
