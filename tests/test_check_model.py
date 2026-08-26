@@ -193,3 +193,13 @@ def test_cli_unknown_without_session_id():
     res = run(env=env)
     assert res.returncode == 3
     assert "reason=no-session-id" in res.stdout
+
+
+# --- vendoring contract ----------------------------------------------------
+
+
+def test_user_facing_strings_name_no_skill():
+    """The file is vendored byte-identical into sibling skills and drift-checked
+    with cmp, so nothing it prints may name one particular skill."""
+    assert "jetredline" not in check_model.WARN_TEXT
+    assert "jetmemo" not in check_model.WARN_TEXT

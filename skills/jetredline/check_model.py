@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Report which Claude model this session is running on, and gate on it.
 
-Shared across jet52 projects: jetredline (others may adopt it).
+Shared across jet52 projects: jetredline (canonical), jetmemo. Vendored
+copies must stay byte-identical — each consumer's `make drift-check` cmp's this
+file, which is what lets jetredline's test suite cover every copy. Keep every
+string in here skill-agnostic.
 
-Why: jetredline's reliability was measured on Opus-class models. Sonnet- and
+Why: these skills' reliability was measured on Opus-class models. Sonnet- and
 Haiku-class models miss citation, quotation, and record-fact errors on this
 workload at a materially higher rate, and the failure is silent — the report
-still looks complete. The skill therefore requires an explicit human decision
-before running on a model outside the allow-list.
+still looks complete. The calling skill therefore requires an explicit human
+decision before running on a model outside the allow-list.
 
 Detection is deterministic where it can be: the runtime model is read from the
 live session transcript (the `model` field of the most recent assistant
@@ -46,8 +49,8 @@ import sys
 from glob import glob
 from pathlib import Path
 
-# Families jetredline is validated on. Add a new top-tier family here when one
-# ships; everything absent from this tuple warns.
+# Families these skills are validated on. Add a new top-tier family here when
+# one ships; everything absent from this tuple warns.
 ALLOWED_FAMILIES = ("opus", "fable", "mythos")
 
 # Known lower-capability families, named only so the warning can say which one.
@@ -55,9 +58,9 @@ ALLOWED_FAMILIES = ("opus", "fable", "mythos")
 WEAK_FAMILIES = ("sonnet", "haiku")
 
 WARN_TEXT = (
-    "jetredline's reliability testing is based on Opus-class models. Do not "
+    "This skill's reliability testing is based on Opus-class models. Do not "
     "start any pass until the user explicitly confirms proceeding on this "
-    "model — see SKILL.md Step 0.0."
+    "model — see Step 0.0 in the skill's SKILL.md."
 )
 
 # Strips a context-window suffix (claude-opus-5[1m]) and a provider prefix
