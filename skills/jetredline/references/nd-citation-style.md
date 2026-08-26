@@ -91,8 +91,11 @@ Where a parallel citation to a public domain source is required, the `id.` form
 is:
 
 ```
-Id. at ¶ 7.
+Id. ¶ 7.
 ```
+
+No `at` before a paragraph pin — the supplement dropped it here as it did in
+the special short form below.
 
 ### Special short form — full form or full short form in the same paragraph
 
