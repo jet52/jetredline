@@ -9,11 +9,13 @@ TEXTQUALITY_SRC := ../splitmarks/textquality.py
 TEXTQUALITY_DEST := skills/jetredline/textquality.py
 CITESTYLE_SRC := ../jetcite/reference/nd-citation-style.md
 CITESTYLE_DEST := skills/jetredline/references/nd-citation-style.md
+NDRULES_DB := $(HOME)/code/ndlaw-mcp/rules.db
+NDRULES_DEST := skills/jetredline/references/nd-appellate-rules.md
 
 PLUGIN_ZIP := $(SKILL_NAME)-plugin-$(VERSION).zip
 WEB_ZIP := $(SKILL_NAME)-web-$(VERSION).zip
 
-.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release check-assets vendor-jetcite vendor-splitmarks vendor-textquality vendor-citestyle drift-check version-check
+.PHONY: package package-plugin package-web package-all clean install test test-structure test-unit release check-assets vendor-jetcite vendor-splitmarks vendor-textquality vendor-citestyle vendor-ndrules drift-check version-check
 
 # Public package targets clean first (so zip -r never updates a stale archive),
 # then delegate to a build-* recipe. package-all cleans once and builds all three
@@ -125,6 +127,13 @@ vendor-citestyle:
 
 # Fail if the vendored splitmarks copy has drifted from its canonical source.
 # Tolerant of canonical being absent (e.g. on an install-only machine).
+# The appellate-rules reference. Not a vendored copy of a file: the rule text
+# is generated from the ndlaw corpus, because the hand-maintained version
+# drifted into misstating four Rule 4 subdivisions at once. The preamble and
+# the quick-reference notes outside the generated markers are preserved.
+vendor-ndrules:
+	python3 skills/jetredline/nd_rules_export.py
+
 drift-check:
 	@if [ -f $(SPLITMARKS_SRC) ]; then \
 	  cmp -s $(SPLITMARKS_SRC) $(SPLITMARKS_DEST) || { echo "DRIFT: $(SPLITMARKS_DEST) differs from canonical $(SPLITMARKS_SRC) — run 'make vendor-splitmarks'"; exit 1; }; \
@@ -143,6 +152,11 @@ drift-check:
 	  echo "nd-citation-style: in sync with canonical."; \
 	else \
 	  echo "nd-citation-style: canonical repo not present ($(CITESTYLE_SRC)); skipping drift check."; \
+	fi
+	@if [ -f "$(NDRULES_DB)" ] || [ -n "$$NDLAW_URL" ]; then \
+	  python3 skills/jetredline/nd_rules_export.py --check; \
+	else \
+	  echo "nd-appellate-rules: ndlaw corpus not present ($(NDRULES_DB)); skipping drift check."; \
 	fi
 
 # The version lives in three places that must agree: VERSION (canonical, drives
@@ -168,6 +182,7 @@ test-structure: drift-check version-check
 	@test -d skills/jetredline/lib/jetcite || (echo "FAIL: skills/jetredline/lib/jetcite/ missing — run 'make vendor-jetcite'" && exit 1)
 	@test -f skills/jetredline/splitmarks.py || (echo "FAIL: skills/jetredline/splitmarks.py missing — run 'make vendor-splitmarks'" && exit 1)
 	@test -f skills/jetredline/textquality.py || (echo "FAIL: skills/jetredline/textquality.py missing — run 'make vendor-textquality'" && exit 1)
+	@test -f skills/jetredline/nd_rules_export.py || (echo "FAIL: skills/jetredline/nd_rules_export.py missing" && exit 1)
 	@test -f install.sh || (echo "FAIL: install.sh missing" && exit 1)
 	@test -f install.ps1 || (echo "FAIL: install.ps1 missing" && exit 1)
 	@test -f README.md || (echo "FAIL: README.md missing" && exit 1)

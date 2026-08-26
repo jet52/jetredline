@@ -229,6 +229,7 @@ jetredline/
 │       ├── parallel_check.py       # Parallel-cite consistency check (ndlaw / CourtListener)
 │       ├── review_state.py         # Review marks round-trip: export → case folder → next run
 │       ├── ndlaw_export.py         # ND opinion text/URL export from ndlaw corpus
+│       ├── nd_rules_export.py      # Regenerates the appellate-rules reference from ndlaw
 │       ├── lib/
 │       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)
 │       ├── check_model.py          # Opus-class model gate (Step 0.0)

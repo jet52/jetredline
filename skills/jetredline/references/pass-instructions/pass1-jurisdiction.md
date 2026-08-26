@@ -29,7 +29,7 @@ this" — the wrong conclusion, reached invisibly.
 
 ## If DOC_TYPE is `opinion`
 
-- Read `<SKILL_ROOT>/references/nd-appellate-rules.md`
+- Read `<SKILL_ROOT>/references/nd-appellate-rules.md`. **Cite the subdivision from the verbatim rule text in its generated block, not from the quick-reference tables below it** — those are derived commentary. When you name a rule in a finding, name the subdivision the words actually come from (`N.D.R.App.P. 4(b)(3)(A)`, not `Rule 4`).
 - Read the draft opinion file (path supplied by the caller) — focus on the procedural-posture and standard-of-review sections
 - Verify: Was there a timely appeal under N.D.R.App.P. Rules 2.1, 2.2, 3, and 4?
 - Verify: Does the opinion correctly identify the procedural posture and standard of review?
@@ -38,7 +38,7 @@ this" — the wrong conclusion, reached invisibly.
 
 ## If DOC_TYPE is `memo`
 
-- Read `<SKILL_ROOT>/references/nd-appellate-rules.md`
+- Read `<SKILL_ROOT>/references/nd-appellate-rules.md`. **Cite the subdivision from the verbatim rule text in its generated block, not from the quick-reference tables below it** — those are derived commentary. When you name a rule in a finding, name the subdivision the words actually come from (`N.D.R.App.P. 4(b)(3)(A)`, not `Rule 4`).
 - Read the draft memo file (path supplied by the caller)
 - Check whether the memo addresses appealability: timeliness, subject-matter jurisdiction, and procedural prerequisites (e.g., OMB notification for claims against the state under N.D.C.C. § 32-12.2-04)
 - Check whether the parties' briefs (if available in the working directory) raise jurisdictional issues
