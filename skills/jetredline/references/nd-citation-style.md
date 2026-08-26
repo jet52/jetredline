@@ -100,11 +100,12 @@ Often `id.` is unavailable because another citation intervenes between the
 reference and the one you wish to `id.` to. Where `id.` is not permissible, and
 **if — and only if —** the full form or the full short form has previously been
 cited **in the same paragraph**, a short form using only the first party's name,
-a comma, and the pin cite preceded by `at` may be used:
+a comma, and the pin cite may be used. A **page** pin takes `at`; a
+**paragraph** pin does not:
 
 ```
 State v. Falcon, 546 N.W.2d 835, 836 (N.D. 1996)   →   Falcon, at 836.
-Kuntz v. State, 2019 ND 46, ¶ 11, 923 N.W.2d 513   →   Kuntz, at ¶ 11.
+Kuntz v. State, 2019 ND 46, ¶ 11, 923 N.W.2d 513   →   Kuntz, ¶ 11.
 ```
 
 The same-paragraph condition is a real limit, not a formality: this form is
@@ -167,7 +168,7 @@ reviewer or model must apply.
 | ---- | --------- |
 | `ND App` is a distinct court sharing a number space with `ND` | Parsed; `components["court"]`, normalized as `YYYY ND App N`, cached under `opin/NDApp/` so it cannot collide with a Supreme Court cite |
 | No pin cite to the reporter in a public-domain parallel | `improper_parallel_pincite: true` on the reporter half of the pair. Scoped to ND pairs, and **not** raised for pre-1997 cites, where the reporter pin cite is correct |
-| Special short form (`Kuntz, at ¶ 11`) | Parsed as a pin cite and resolved to its parent full cite |
+| Special short form (`Kuntz, ¶ 11`; `Falcon, at 836`) | Parsed as a pin cite and resolved to its parent full cite |
 
 Not mechanically checked — apply by reading:
 
