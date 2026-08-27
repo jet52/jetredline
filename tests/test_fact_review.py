@@ -75,9 +75,9 @@ class TestQuotePosition:
         assert _find_quote_position("abc the court held xyz", "court held") == 8
 
     def test_curly_quote_folding_both_directions(self):
-        text = "the court denied Osman’s motion"
-        assert _find_quote_position(text, "Osman's motion") == 17
-        assert _find_quote_position("Osman's motion", "Osman’s motion") == 0
+        text = "the court denied Gion’s motion"
+        assert _find_quote_position(text, "Gion's motion") == 17
+        assert _find_quote_position("Gion's motion", "Gion’s motion") == 0
 
     def test_absent_returns_none(self):
         assert _find_quote_position("abc", "zzz") is None
@@ -110,15 +110,15 @@ class TestSourceResolution:
         assert got.name == "R243 - Order Denying Motion.pdf"
 
     def test_docket_number_via_manifest(self, tmp_path):
-        _write_pdf(tmp_path / "20260029_017_Apt-Br.pdf")
-        manifest = [{"docketId": 17, "filename": "20260029_017_Apt-Br.pdf"}]
+        _write_pdf(tmp_path / "20990001_017_Apt-Br.pdf")
+        manifest = [{"docketId": 17, "filename": "20990001_017_Apt-Br.pdf"}]
         got = _resolve_fact_source({"item": "017"}, None, manifest, tmp_path)
-        assert got.name == "20260029_017_Apt-Br.pdf"
+        assert got.name == "20990001_017_Apt-Br.pdf"
 
     def test_brief_name_fragment(self, tmp_path):
-        _write_pdf(tmp_path / "20260029_017_Apt-Br.pdf")
+        _write_pdf(tmp_path / "20990001_017_Apt-Br.pdf")
         got = _resolve_fact_source({"item": "Apt-Br"}, None, [], tmp_path)
-        assert got.name == "20260029_017_Apt-Br.pdf"
+        assert got.name == "20990001_017_Apt-Br.pdf"
 
     def test_three_character_label_resolves_as_a_whole_token(self, tmp_path):
         """`ROA` (Register of Actions) is three characters. The old flat
@@ -171,11 +171,11 @@ class TestSourceResolution:
 
     def test_bare_digit_still_reaches_manifest(self, tmp_path):
         """The docket-number path must survive the record-item change."""
-        _write_pdf(tmp_path / "20260029_017_Apt-Br.pdf")
-        manifest = [{"docketId": 17, "filename": "20260029_017_Apt-Br.pdf"}]
+        _write_pdf(tmp_path / "20990001_017_Apt-Br.pdf")
+        manifest = [{"docketId": 17, "filename": "20990001_017_Apt-Br.pdf"}]
         got = _resolve_fact_source({"item": "017", "raw": "Appellee Br., p. 3"},
                                    None, manifest, tmp_path)
-        assert got.name == "20260029_017_Apt-Br.pdf"
+        assert got.name == "20990001_017_Apt-Br.pdf"
 
 
 class TestManifestDiscovery:
@@ -303,9 +303,9 @@ class TestViewerGeneration:
 # Page integration
 # ---------------------------------------------------------------------------
 
-OPINION = """[¶5] In October 2024, the court denied Osman’s motion.
+OPINION = """[¶5] In October 2019, the court denied Gion’s motion.
 
-[¶6] The court awarded support of $10,000 to Ali.
+[¶6] The court awarded support of $1,234 to Marek.
 """
 
 CITES = [{"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
@@ -317,14 +317,14 @@ CITES = [{"cite_text": "2023 ND 219", "cite_type": "neutral_cite",
 def _facts():
     return [{
         "para": "5",
-        "claim": "The court denied the motion in October 2024",
-        "draft_quote": "the court denied Osman's motion",
+        "claim": "The court denied the motion in October 2019",
+        "draft_quote": "the court denied Gion's motion",
         "result": "discrepancy",
         "result_label": "Discrepancy",
-        "note": "Order dated January 27, 2025.",
+        "note": "Order dated March 3, 2020.",
         "sources": [
             {"raw": "R243, p. 6", "item": "R243", "page": 6,
-             "quote": "Dated this 27th day of January, 2025",
+             "quote": "Dated this 3rd day of March, 2020",
              "_resolved_path": "/abs/R243.pdf"},
             {"raw": "R999", "item": "R999"},   # unresolved
         ],
@@ -353,7 +353,7 @@ class TestBuildHtmlFacts:
         assert f["position"] is not None       # curly-quote fold found it
         assert f["result"] == "discrepancy"
         assert f["sources"][0]["href"] == \
-            "review_pdfs/R243.html#page=6&hl=Dated%20this%2027th%20day%20of%20January%2C%202025"
+            "review_pdfs/R243.html#page=6&hl=Dated%20this%203rd%20day%20of%20March%2C%202020"
         assert f["sources"][1]["href"] is None  # unresolved ref degrades
 
     def test_link_pdfs_uses_page_only_hash(self):
