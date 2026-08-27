@@ -57,11 +57,11 @@ class TestPinCiteEntries:
         goss = next(e for e in _pins(entries) if e["normalized"] == "Goss at 365")
         assert goss["parent_normalized"] == "491 F.3d 355"
         niemeyer = next(e for e in _pins(entries) if e["normalized"] == "Niemeyer, ¶ 12")
-        assert niemeyer["parent_normalized"] in ("2024 ND 156", "9 N.W.3d 100")
+        assert niemeyer["parent_normalized"] in ("2024 ND 907", "9 N.W.3d 100")
 
     def test_id_resolves_transitively(self, entries):
         id_pin = next(e for e in _pins(entries) if e["normalized"] == "Id. ¶ 15")
-        assert id_pin["parent_normalized"] in ("2024 ND 156", "9 N.W.3d 100")
+        assert id_pin["parent_normalized"] in ("2024 ND 907", "9 N.W.3d 100")
         assert id_pin["pin_paragraph"] == "15"
 
     def test_transposed_volume_flagged(self, entries):
