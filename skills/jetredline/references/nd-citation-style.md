@@ -116,6 +116,76 @@ improper if the antecedent full cite is in an earlier paragraph.
 
 ---
 
+## Citations to briefs
+
+**Author preference.** Neither the Bluebook nor the Redbook supplies these
+abbreviations; BT1 has no short form for "appellant" or "appellee." This is a
+local convention, not a rule of the Court. It is collected here so the drafting
+skills apply one form.
+
+North Dakota briefs carry numbered paragraphs, and a reference to material in a
+document with numbered paragraphs "must be to the paragraph number."
+N.D.R.App.P. 32(a)(7); *see also* N.D.R.App.P. 32(b)(1). Pages are numbered from
+the cover, N.D.R.App.P. 32(a)(4), so a page pin locates the paragraph quickly
+without displacing it.
+
+Cite the shorthand title of the brief, then the page, then the paragraph:
+
+```
+(At. Br. 1, ¶ 2)
+(Ae. Br. 2, ¶ 3)
+```
+
+No `at` before either pin — consistent with Bluebook practice for court
+documents, and with the paragraph forms above. Put a **non-breaking space**
+between `¶` and the number, as in a case-law cite.
+
+### Placement
+
+**Within a sentence**, parenthesize, with no period inside the parentheses:
+
+```
+The appellant argues the statute is ambiguous (At. Br. 1, ¶ 2), but the text
+admits of only one reading.
+```
+
+**After a sentence**, as a separate citation sentence, omit the parentheses and
+close with a period:
+
+```
+The appellee reads the same clause as a limitation. Ae. Br. 3, ¶ 9.
+```
+
+### Shorthand titles
+
+| Document | Form |
+| -------- | ---- |
+| Appellant's brief | `At. Br.` |
+| Appellee's brief | `Ae. Br.` |
+| Reply brief | `At. Reply Br.` |
+| Cross-appellee's reply brief | `Ae. Reply Br.` |
+| Supplemental brief | `At. Supp. Br.` / `Ae. Supp. Br.` |
+| Amicus brief | `Amicus Br.` — name the amicus if more than one: `Amicus Br. (ACLU) 5, ¶ 11` |
+| Petitioner's brief (writ proceedings) | `Pet. Br.` |
+| Respondent's brief (writ proceedings) | `Resp. Br.` |
+
+Where more than one party occupies a side, name the party rather than relying on
+the shorthand alone: `At. Br. (Johnson) 6, ¶ 14`.
+
+### Pin cites, spans, and non-compliant briefs
+
+- **Multiple paragraphs** take `¶¶` and an en dash: `(At. Br. 3, ¶¶ 9–11)`.
+- **A span crossing pages** gives both spans: `(At. Br. 3–4, ¶¶ 9–11)`.
+- **No `id.`** for briefs. Repeat the shorthand: `At. Br. 4, ¶ 9`, never
+  `Id. ¶ 9` — the shorthand is three characters, and an `id.` here is
+  indistinguishable from an `id.` to a case paragraph.
+- **A brief without numbered paragraphs** — an older filing, or one that does
+  not comply with N.D.R.App.P. 32(a)(7) — is cited to the page alone:
+  `(At. Br. 7)`. Note the defect rather than passing the page-only cite off as
+  the normal form.
+
+---
+
 ## Statutes and session laws
 
 ### North Dakota Century Code
@@ -180,3 +250,5 @@ Not mechanically checked — apply by reading:
 - Whether a `(year)` parenthetical is warranted on an N.D.C.C. cite because the
   statute was later amended or repealed.
 - Non-breaking vs ordinary space before a case-law `¶`.
+- Brief citations — the shorthand titles, the page/paragraph pair, and the
+  parenthetical-vs-citation-sentence placement. `jetcite` does not parse them.
