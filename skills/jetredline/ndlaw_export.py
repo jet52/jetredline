@@ -11,6 +11,8 @@ left behind. Runs with zero model-context cost via one of two backends:
   mcp     — a deployed ndlaw instance over Streamable HTTP with
             Basic Auth (--url/NDLAW_URL, --auth/NDLAW_AUTH). The script
             speaks JSON-RPC directly; no LLM tokens are spent.
+  public  — with neither of the above, the public server at
+            https://ndlaw.org/mcp (no auth). --no-public disables it.
 
 Usage:
     ndlaw_export.py --opinion draft.md --refs-dir ~/refs \
@@ -20,7 +22,9 @@ Usage:
     ndlaw_export.py --cites "2024 ND 156" "2023 ND 44" ...
 
 Exit codes: 0 = exported (possibly with misses); 2 = no backend
-reachable (callers should fall through to cached refs / link-only).
+reachable (callers should fall through to cached refs / link-only). When the
+public server is the one that failed, stderr says why -- an egress allowlist
+refusal, a network failure, or an HTTP error -- and what to allowlist.
 """
 
 from __future__ import annotations
@@ -40,6 +44,9 @@ SKILL_DIR = Path(__file__).parent
 sys.path.insert(0, str(SKILL_DIR / "lib"))
 
 DEFAULT_DB = "~/code/ndlaw-mcp/opinions.db"
+# Public ndlaw server: serves the same corpus without authentication. The
+# apex host needs its own allowlist entry -- `*.ndlaw.org` does not cover it.
+PUBLIC_URL = "https://ndlaw.org/mcp"
 COURTLISTENER_BASE = "https://www.courtlistener.com"
 
 # Citations the ndlaw corpus can resolve: ND neutral cites and the
@@ -301,7 +308,16 @@ def _pick_backend(args):
     if url:
         auth = args.auth or os.environ.get("NDLAW_AUTH")
         return McpBackend(url, auth), f"mcp:{url}"
-    return None, None
+    if getattr(args, "no_public", False):
+        return None, None
+    try:
+        return McpBackend(PUBLIC_URL, None), f"mcp:{PUBLIC_URL} (public)"
+    except Exception as exc:
+        from preflight import NDLAW_ENTRIES, classify_error, fix_hint
+        kind = classify_error(exc)
+        raise RuntimeError(
+            f"public ndlaw server {PUBLIC_URL} unreachable ({kind}: {exc}). "
+            f"{fix_hint(kind, NDLAW_ENTRIES)}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +375,9 @@ def main():
                                   "(or NDLAW_URL env)")
     ap.add_argument("--auth", help="Basic auth as user:pass or base64 token "
                                    "(or NDLAW_AUTH env)")
+    ap.add_argument("--no-public", action="store_true",
+                    help=f"Do not fall back to the public server "
+                         f"({PUBLIC_URL}) when no --db or --url is available")
     ap.add_argument("--no-refresh", action="store_true",
                     help="Keep existing refs files instead of overwriting "
                          "them with corpus text")
@@ -383,8 +402,8 @@ def main():
         print(f"Backend unavailable: {exc}", file=sys.stderr)
         return 2
     if backend is None:
-        print("No ndlaw backend reachable: no opinions.db found and no "
-              "server URL given. Pass --url https://<server>/mcp "
+        print("No ndlaw backend: no opinions.db found, no server URL given, "
+              "and --no-public set. Pass --url https://<server>/mcp "
               "(plus --auth user:pass if the server requires it), or set "
               "NDLAW_URL/NDLAW_AUTH. Falling through to existing refs cache.",
               file=sys.stderr)

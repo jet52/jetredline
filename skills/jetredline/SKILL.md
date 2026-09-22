@@ -20,6 +20,7 @@ Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a 
    - The draft arrives as a **markdown file path** (or pasted text), not a .docx. Read it directly; skip Step 0's `.docx`/`.pdf` scan, the temp-dir setup, and the docx-plugin discovery.
    - **Preserve markdown link syntax.** The memo arrives with record-citation hyperlinks (`[R45](url)`) and possibly authority links already in it. Never edit a URL, and when an edit touches linked text, keep the `[text](url)` wrapper intact.
    - **Model gate: report, never block.** Run Step 0.0's `check_model.py`. On `warn` or `unknown`, do not ask the caller anything and do not stop — add one line under `### Coverage` in Part 2 naming the model and continue the audit.
+   - **Source preflight: MCP check only.** Skip `preflight.py` (no Step 11 export runs here), but do Step 0's MCP-tool check — Pass 3C needs ndlaw's `detect_overruled_in_draft`. A missing server is one line under `### Coverage`, never a stop.
 
 2. **Run inline.** Execute all selected passes inline in this context (as in Web mode) — do **not** delegate to Task subagents. The caller has already spawned you as a subagent. For passes whose detailed instructions live in `references/pass-instructions/` (Pass 1, Pass 4, Pass 6), Read the matching file and apply it inline.
 
@@ -293,9 +294,20 @@ If the user proceeds, carry it forward in exactly two places: one clause in the 
 
 ### Step 0: Initialize and Scan Working Directory
 
-**Web mode:** Skip temp directory creation, update check, and directory scanning. The user will paste text or upload .docx/.pdf files directly in the conversation. Claude can read uploaded .docx and .pdf files natively. Proceed to Step 0.1.
+**Web mode:** Skip temp directory creation, update check, and directory scanning. The user will paste text or upload .docx/.pdf files directly in the conversation. Claude can read uploaded .docx and .pdf files natively. Do the MCP-tool check under **Source preflight** below (it needs no shell), then proceed to Step 0.1.
 
 **Update check:** Run `python3 "${CLAUDE_SKILL_DIR}/check_update.py"` silently. If it prints output, include it as a note to the user.
+
+**Source preflight.** Find out now, not in Step 11, which sources this run cannot reach — a sandboxed session (Cowork, the Claude Code sandbox) blocks any host missing from its egress allowlist, and every script downstream then degrades quietly. Two checks:
+
+1. **Network** (CLI mode) — stdlib only, system `python3`, about a second:
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/preflight.py"
+   ```
+   It probes the public ndlaw server (the Step 11a export backend) and each official-source host jetcite fetches from, prints `PREFLIGHT ok <host>` or `PREFLIGHT warn <host> <kind> -- <what is lost>. <fix>` per host, and ends with `PREFLIGHT_SUMMARY warnings=<n>`. It always exits 0. `blocked` means the egress allowlist refused the host; the line names the entry to add.
+2. **MCP tools** (every mode — only you can see your tool list). Look for an ndlaw server's tools (`lookup_opinion`, `verify_citation`, under any server prefix — `mcp__ndlaw__`, `mcp__claude_ai_ndlaw__`, or another) and CourtListener's (`search`, `call_endpoint` under a `CourtListener` prefix). A server that exposes only `authenticate` / `complete_authentication` is **not** connected. Missing ndlaw → warn: "ndlaw MCP is not connected. ND citations and quotations will be verified through CourtListener and the web; treatment checks and pinpoint verification will be weaker." Missing CourtListener → warn: "CourtListener MCP is not connected. Federal and out-of-state citations will be web-verified only."
+
+**A warning never stops the run.** Carry each one forward in exactly three places: one line in the Step 0.6 announcement, the **⚠ Sources Out of Reach** section of the analysis document, and the Step 12 summary. When both checks come back clean, say nothing about them. (Audit mode runs only the MCP check; see the audit-mode rules at the top.)
 
 **First, create the temp directory** with a unique random name:
 ```bash
@@ -438,6 +450,10 @@ If the user did specify a preference, honor it:
 >
 > *Want something narrower next time? Just say so when you invoke — e.g.* "jetredline, citations only" *or* "light copy edit, don't touch my reasoning" *— and I'll limit the passes accordingly.*
 
+**When the Step 0 source preflight warned,** add one line per warning after the deliverables, before the "narrower next time" line — what is out of reach, what that costs this run, and the fix — e.g.:
+
+> ⚠ **`ndlaw.org` is blocked by this session's network policy.** ND opinion text for the citation review will be scribed through the model instead (slower, and it costs tokens). To fix: add `ndlaw.org` and `*.ndlaw.org` to the egress allowlist and start a new session.
+
 **Scope-keyword map (only when the user *volunteered* a narrower scope in their invocation).** Do not prompt for this; apply it only when the user's own words signal a narrower intent. Map their words to passes and run only those, plus the always-on jurisdictional check (Pass 1):
 
 | If the user says… | Run |
@@ -495,14 +511,14 @@ The markdown stays the source of truth. If you edit the report afterward, re-run
 
 11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification.
 
-    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost).** Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance over Streamable HTTP (`NDLAW_URL` + `NDLAW_AUTH` env, or `--url`/`--auth`; for Claude Code users the URL and Basic-Auth header may be in their MCP config — `claude mcp get ndlaw` reads it, but only for a server configured in `.mcp.json`/`~/.claude.json` under that exact name. ndlaw often arrives instead as a connector, whose tools appear in-session under an opaque server id (`mcp__claude_ai_ndlaw__*`); `claude mcp get` then answers "No MCP server named ndlaw" while the tools are plainly available. Do not read that as absence — check whether ndlaw tools are in your own tool list, and if they are, take the scribe-subagent path below rather than hunting for a URL that does not exist on disk). The script speaks to the server directly, so no opinion text passes through model context.
+    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost).** Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance named by `NDLAW_URL` + `NDLAW_AUTH` env (or `--url`/`--auth`), else **the public server at `https://ndlaw.org/mcp`**, which needs no credentials. The public default is what makes this step work in Cowork and on any machine without a local corpus; do not go looking for a URL or auth header in MCP config. The script speaks to the server directly, so no opinion text passes through model context.
 ```bash
 $VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" \
   --opinion <opinion_md_path> \
   --refs-dir ~/refs \
   --meta-out <TMPDIR>/sources.json
 ```
-    Exit 2 means no backend was reachable (typical in Cowork, where neither the corpus DB nor `NDLAW_URL` exists). **Fall back to a scribe subagent riding the in-context MCP connection** — if ndlaw tools are available:
+    Exit 2 means no backend was reachable — almost always an egress allowlist that omits `ndlaw.org` (stderr classifies the failure and names the fix, and the Step 0 preflight should already have warned). **Fall back to a scribe subagent riding the in-context MCP connection** — if ndlaw tools are available:
 
     1. From the cite JSON, list the corpus-eligible authorities that still lack refs text: case entries (not `pin_cite`, not `is_repeat`) whose `normalized` is an ND neutral cite (`YYYY ND N`) or N.W.-family reporter cite, with `local_exists` false.
     2. Launch **one** subagent (Task tool, `model: haiku`, subagent_type `general-purpose`) with that list and these instructions: for each citation, call `lookup_opinion(<cite>)` and record `case_name`, `url`, `url_source`, `date_filed`, and `citations`; then page through `get_opinion_text(<cite>, offset=..., limit=50000)` until `has_more` is false and **Write the concatenated text verbatim** (do not summarize, reformat, or strip the frontmatter block) to the refs path: `~/refs/opin/ND/<year>/<year>ND<n>.md` for `YYYY ND N`; `~/refs/opin/NW2d/<vol>/<page>.md` for `V N.W.2d P` (analogously `NW3d`, `NW`). Write `<TMPDIR>/sources.json` **incrementally**: after each `lookup_opinion` call and *before* paging that opinion's text, re-read the file, add entries mapping **every** citation form from `citations` to `{"case_name", "url", "url_source", "date_filed", "via": "ndlaw"}`, and write it back — paging text is the context-expensive step, and metadata held only in memory has been lost to context exhaustion on long lists. Finish by counting the refs files actually on disk (not from memory) and return only that tally ("N exported, M not in corpus") — never opinion text.
@@ -967,6 +983,16 @@ The ndlaw corpus was not reachable for this run, so cited authorities were check
 This review ran on **[model id]**, which is outside the Opus-class set jetredline's reliability testing is based on. Citation, quotation, and record-fact findings below carry a higher miss rate than the same review on an Opus-class model — a clean section is weaker evidence than usual. Re-running on Opus is the way to raise confidence.
 ```
 
+**Sources-out-of-reach warning (conditional — render only when the Step 0 source preflight warned).** Place it after the reduced-reliability warning, or where that section would go. One bullet per warning, carried over from the preflight — host or MCP server, what the run lost, the fix. Omit the section entirely when both checks were clean:
+
+```
+## ⚠ Sources Out of Reach
+
+This run could not reach the sources below, so the checks that depend on them fell back to weaker ones. Findings in those areas are not confirmations; treat "no problem found" there as "not checked against the primary source."
+
+- **[host or MCP server]** — [what was lost]. Fix: [allowlist entry or connection step].
+```
+
 **Both document types continue with:**
 
 ```
@@ -1163,6 +1189,8 @@ After all outputs are generated, present a clear summary to the user:
 > **JetRedline Complete** — or, when Step 11 found N < M: **⚠ JetRedline Complete — Incomplete Coverage**
 >
 > **Inputs ingested: N of M.** *(when N < M, list each miss and the passes affected — Pass 4 fact-check, Pass 6 brief-matching)*
+>
+> **Sources out of reach:** *(only when the Step 0 preflight warned — one line per host or MCP server, with the fix)*
 >
 > **Documents generated:**
 > - Tracked-changes .docx: `<filename>` *(if generated)*

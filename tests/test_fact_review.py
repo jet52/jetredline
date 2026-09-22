@@ -243,6 +243,8 @@ class TestViewerGeneration:
         b = _viewer_name(tmp_path / "R243 - Order (Denying).pdf", taken)
         assert a != b
         assert " " not in a and "(" not in a
+        # Cowork's commit path refuses "~" in a filename.
+        assert "~" not in b and b.endswith("_2")
 
     def test_link_pdfs_mode_is_zero_copy(self, tmp_path):
         pdf = tmp_path / "case" / "R1 - Thing.pdf"

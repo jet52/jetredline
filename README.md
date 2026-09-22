@@ -234,6 +234,7 @@ jetredline/
 │       │   └── jetcite/            # Vendored jetcite (run `make vendor-jetcite` to update)
 │       ├── check_model.py          # Opus-class model gate (Step 0.0)
 │       ├── check_update.py         # Version check on session start
+│       ├── preflight.py            # Egress probe: names blocked hosts before any pass (Step 0)
 │       ├── provenance.py           # Model/version/date stamp for analysis documents
 │       ├── readability_metrics.py  # FK grade, passive voice, etc.
 │       ├── textquality.py          # PDF text-layer triage: ok / image-only / corrupt (vendored)
@@ -278,7 +279,7 @@ jetredline/
 
 ### Network access in sandboxed environments
 
-jetcite resolves and verifies citations against official-source domains (ndcourts.gov, courtlistener.com, etc.). Sandboxed Claude environments (Cowork, Claude Code) block outbound traffic to non-allowlisted hosts, which silently degrades ND opinion links to a search URL rather than the direct PDF. Add the domains listed in [`skills/jetredline/lib/jetcite/NETWORK.md`](skills/jetredline/lib/jetcite/NETWORK.md) to the egress allowlist (Cowork: sandbox settings → **Allow network egress** → **Additional allowed domains**; Claude Code: `sandbox.network.allowedDomains`), then start a new session.
+jetcite resolves and verifies citations against official-source domains (ndcourts.gov, courtlistener.com, etc.). Sandboxed Claude environments (Cowork, Claude Code) block outbound traffic to non-allowlisted hosts, which silently degrades ND opinion links to a search URL rather than the direct PDF. Add the domains listed in [`skills/jetredline/lib/jetcite/NETWORK.md`](skills/jetredline/lib/jetcite/NETWORK.md) to the egress allowlist (Cowork: sandbox settings → **Allow network egress** → **Additional allowed domains**; Claude Code: `sandbox.network.allowedDomains`), then start a new session. Also add **`ndlaw.org` and `*.ndlaw.org`** — two entries, since the wildcard does not cover the apex. The citation-review step pulls ND opinion text from the public ndlaw server at `https://ndlaw.org/mcp`; without it, that text has to be scribed through the model. Each run starts with `preflight.py`, which names any blocked host and the entry to add.
 
 ## Contributing
 

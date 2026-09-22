@@ -320,10 +320,18 @@ _KNOWN_HEADINGS = {
 # and `IV` then fell through to the ALL-CAPS branch below, which requires three
 # characters -- so on a four-section opinion exactly one heading resolved, and
 # it was `III`. Longest-first so `XIV` is not read as `X`.
+#
+# The numeral or letter may stand alone (`II`, `B.`) or carry a title, but a
+# title needs the period (`I. STANDARD OF REVIEW`). Without that, any short
+# line opening on a one-letter word -- `A person who ...`, `I conclude ...`,
+# typically a wrapped line of a block quote -- was read as a heading and split
+# the section there. A title ending in `,` or `;` is a wrapped clause, not a
+# heading (`A. the court may,`).
 _ROMAN_NUMERALS = ("XX XIX XVIII XVII XVI XV XIV XIII XII XI X "
                    "IX VIII VII VI V IV III II I").split()
 _ROMAN_PATTERN = re.compile(
-    r'^(?:' + '|'.join(_ROMAN_NUMERALS) + r'|[A-Z])\.?(?:\s+.*)?$'
+    r'^(?:' + '|'.join(_ROMAN_NUMERALS) + r'|[A-Z])'
+    r'(?:\.?|\.\s+\S(?:.*[^,;\s])?)$'
 )
 
 
@@ -376,8 +384,11 @@ def detect_sections(text: str) -> list[dict]:
             section_starts.append((i, stripped.rstrip(':')))
             continue
 
-        # Line ending with colon preceded by blank line
+        # Line ending with colon preceded by blank line -- but not a numbered
+        # paragraph. `[¶5] The statute provides:` introduces a block quote;
+        # it is short and follows a blank line, and it split sections there.
         if (stripped.endswith(':')
+                and i not in marker_lines
                 and i > 0
                 and not lines[i - 1].strip()
                 and len(stripped.split()) <= 8):

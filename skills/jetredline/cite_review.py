@@ -1495,13 +1495,17 @@ def _is_record_ref(src: dict) -> bool:
 
 
 def _viewer_name(pdf_path: Path, taken: set[str]) -> str:
-    """Stable, filesystem-safe sidecar name for a source PDF's viewer."""
+    """Stable, filesystem-safe sidecar name for a source PDF's viewer.
+
+    The collision suffix is ``_N``, not ``~N``: Cowork's commit path refuses
+    names containing ``~``, which left a viewer undeliverable.
+    """
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", pdf_path.stem).strip("_") or "doc"
     name = stem[:60]
     n = 1
     while name in taken:
         n += 1
-        name = f"{stem[:56]}~{n}"
+        name = f"{stem[:56]}_{n}"
     taken.add(name)
     return name
 

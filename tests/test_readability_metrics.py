@@ -52,6 +52,31 @@ def test_prose_is_not_mistaken_for_a_heading(line):
     assert not R._ROMAN_PATTERN.match(line), line
 
 
+@pytest.mark.parametrize("line", [
+    "A person who knowingly violates this section",
+    "I conclude the statute is unambiguous.",
+    "V the State",
+    "A. the court may, upon motion,",
+    "B. an order entered under subsection A;",
+])
+def test_a_one_letter_opening_word_is_not_a_heading(line):
+    """Wrapped block-quote lines split a fixture opinion mid-quote: a title
+    after the numeral or letter needs the period, and a wrapped clause ends
+    in a comma or semicolon."""
+    assert not R._ROMAN_PATTERN.match(line), line
+
+
+def test_block_quote_does_not_split_a_section():
+    text = "\n".join([
+        "I", "", "[¶1] The statute provides:", "",
+        "A person who knowingly violates this section", "is guilty of a class B misdemeanor.", "",
+        "[¶2] We apply it here.", "",
+        "II", "", "[¶3] Next issue.", "",
+    ])
+    names = [s["name"] for s in R.detect_sections(text)]
+    assert names == ["I", "II"], names
+
+
 def test_bare_numeral_headings_all_resolve():
     """The regression: four headings, one section detected."""
     sections = R.detect_sections(opinion())
