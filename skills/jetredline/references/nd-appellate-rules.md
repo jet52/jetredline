@@ -15,7 +15,7 @@ whenever the court amends a rule; `nd_rules_export.py --check` reports drift.
 
 <!-- BEGIN GENERATED: ndlaw rules export — do not hand-edit below this line -->
 
-*Rule text below is verbatim from the ndlaw corpus, regenerated 2026-08-26 by `nd_rules_export.py`. Each rule carries the effective date of the version in force and the court's own URL. Nested `>` levels encode subdivision depth. Do not edit this block by hand — rerun the script.*
+*Rule text below is verbatim from the ndlaw corpus, regenerated 2026-09-22 by `nd_rules_export.py`. Each rule carries the effective date of the version in force and the court's own URL. Nested `>` levels encode subdivision depth. Do not edit this block by hand — rerun the script.*
 
 ## N.D.R.App.P. 2 — Suspension of Rules
 
@@ -115,7 +115,7 @@ RULE 2.1 MENTAL HEALTH APPEALS UNDER CHAPTER 25-03.1, NORTH DAKOTA CENTURY CODE
 
 ## N.D.R.App.P. 4 — Appeal—When Taken
 
-*Effective 2020-11-01. [ndcourts.gov](https://www.ndcourts.gov/legal-resources/rules/ndrappp/4).*
+*Effective 2026-09-01. [ndcourts.gov](https://www.ndcourts.gov/legal-resources/rules/ndrappp/4).*
 
 (a) Appeal in Civil Case.
 
@@ -163,11 +163,11 @@ RULE 2.1 MENTAL HEALTH APPEALS UNDER CHAPTER 25-03.1, NORTH DAKOTA CENTURY CODE
 
 > (1) Time for Filing Notice of Appeal.
 
-> > (A) In a criminal case, a defendant's notice of appeal must be filed with the clerk of the supreme court within 30 days after the entry of the judgment or order being appealed.
+> > (A) In a criminal case, a defendant's notice of appeal must be filed with the clerk of the supreme court within 30 days after the entry of the judgment, order, or verdict being appealed, whichever occurs last.
 
 > > (B) If an appeal by the state is authorized by statute, the notice of appeal must be filed with the clerk of the supreme court within 30 days after the entry of the judgment or order being appealed.
 
-> (2) Filing Before Entry of Judgment. A notice of appeal filed after the district court announces a decision, sentence, or order, but before the entry of the judgment or order, is treated as filed on the date of and after the entry.
+> (2) Filing Before Entry of Judgment. A notice of appeal filed after the district court announces a decision, sentence, or order, but before the entry of the judgment, order, or verdict, is treated as filed on the date of and after the entry.
 
 > (3) Effect of Motion on Notice of Appeal.
 
@@ -191,13 +191,13 @@ RULE 2.1 MENTAL HEALTH APPEALS UNDER CHAPTER 25-03.1, NORTH DAKOTA CENTURY CODE
 
 > (5) Jurisdiction. The filing of a notice of appeal under this subdivision does not divest a district court of jurisdiction to correct a sentence under N.D.R.Crim.P. 35(a) , nor does the filing of a motion under Rule 35(a) affect the validity of a notice of appeal filed before entry of the order disposing of the motion. The filing of a motion under N.D.R.Crim.P. 35(a) does not suspend the time for filing a notice of appeal from a judgment of conviction.
 
-> (6) Entry Defined. A judgment or order is entered for purposes of this subdivision when it is entered on the criminal docket.
+> (6) Entry Defined. A judgment, order, or verdict is entered for purposes of this subdivision when it is entered on the criminal docket.
 
 (c) Appeal in Contempt Case. A notice of appeal must be filed with the clerk of the supreme court within 60 days after entry of the judgment or order being appealed. Upon a finding of excusable neglect or for good cause, the district court may, before or after the time has expired, with or without motion and notice, extend the time for filing a notice of appeal for a period not to exceed 30 days from the expiration of the time otherwise prescribed by this subdivision.
 
 (d) Appeal in Post-Conviction Proceeding. A notice of appeal must be filed with the clerk of the supreme court within 60 days of service of notice of entry of the judgment or order being appealed. Upon a finding of excusable neglect or good cause, the supreme court may, before or after the time has expired, with or without motion and notice, extend the time for filing a notice of appeal for a period not to exceed 30 days from the expiration of the time otherwise prescribed by this subdivision.
 
-(e) Appeal in Proceeding Under Uniform Juvenile Court Act or Under N.D.C.C. 27-20.1. Except for an appeal in a termination of parental rights proceeding, a notice of appeal in a proceeding under the Uniform Juvenile Court Act or under N.D.C.C. Chapter 27-20.1 must be filed with the clerk of the supreme court within 30 days of service of notice of entry of the judgment, order or decree being appealed. Upon a finding of excusable neglect or good cause, the supreme court may, before or after the time has expired, with or without motion and notice, extend the time for filing a notice of appeal for a period not to exceed 30 days from the expiration of the time otherwise prescribed by this subdivision.
+(e) Appeal in Juvenile Court Proceeding. Except for an appeal in a termination of parental rights proceeding, a notice of appeal in a juvenile court proceeding under N.D.C.C. chs. 27-20.1, 27-20.2, 27-20.3, 27-20.4, or 27-20.6 must be filed with the clerk of the supreme court within 30 days of service of notice of entry of the judgment, order or decree being appealed. Upon a finding of excusable neglect or good cause, the supreme court may, before or after the time has expired, with or without motion and notice, extend the time for filing a notice of appeal for a period not to exceed 30 days from the expiration of the time otherwise prescribed by this subdivision.
 
 (f) Mistaken Filing in District Court. If a notice of appeal in either a civil or a criminal case is mistakenly filed in the district court, the clerk of district court must note on the notice the date when it was received and send it to the clerk of the supreme court. The notice is then considered filed in the supreme court on the date so noted.
 
