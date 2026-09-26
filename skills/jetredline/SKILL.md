@@ -1,7 +1,7 @@
 ---
 name: jetredline
-version: 4.23.0
-description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas."
+version: 4.24.0
+description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas. Defers to the author's own my-writing-voice.md file when one is present."
 ---
 
 # JetRedline
@@ -465,8 +465,30 @@ If the user did specify a preference, honor it:
 
 When you narrow the scope, say which passes you skipped and why, and adjust the announcement above to describe only the passes you will actually run. (Note: "analysis only" as a *scope* keyword means substantive passes; it is distinct from the *output* preference in Step 0.5, which governs which documents are produced. If the user's intent is ambiguous between the two, briefly confirm.)
 
+### Step 0.7: Author Voice File (optional)
+
+A user may keep a personal description of their own writing voice in a file named `my-writing-voice.md` (see the README for what it contains). When one is present, it tells Pass 2 how *this author* writes, so the redline polishes toward the author's voice instead of toward a generic one.
+
+**Locate it** (first match wins; set `VOICE_FILE` to the path, or leave it unset):
+1. `my-writing-voice.md` in the working directory (a per-project override).
+2. `$HOME/.claude/my-writing-voice.md` (the user's standing file).
+3. **Web mode:** a file of that name in project knowledge or uploaded in the conversation.
+
+```bash
+for f in "$PWD/my-writing-voice.md" "$HOME/.claude/my-writing-voice.md"; do [ -f "$f" ] && echo "$f" && break; done
+```
+
+**If `VOICE_FILE` is unset,** say nothing about it and run the standard workflow unchanged.
+
+**If `VOICE_FILE` is set:**
+- **Scope.** Apply it only to writing the file covers. The file itself says which kinds of documents it governs (e.g., "text I will sign"). If the draft is someone else's (a colleague's opinion, a clerk's memo written for another judge) or the user says not to use it, leave it unset for this run. When the draft's authorship is unclear, apply it and say so in the announcement; do not ask.
+- **Announce it.** Add one line to the Step 0.6 announcement after the deliverables: "Using your writing-voice file (`<VOICE_FILE>`) for style; say so if this draft isn't yours."
+- **Precedence in Pass 2.** Pass 2's **hard rules** and the citation rules (Pass 3A, `references/nd-citation-style.md`) still apply. Where the voice file conflicts with a **style preference** in this skill or `references/style-guide.md` (sentence length, paragraph length, transitions, word choices, register), **the voice file governs**. Where the voice file lists patterns to avoid, treat each occurrence in the draft as a candidate edit, or a comment when the fix needs the author's judgment.
+- **Minimal edits still rule.** The voice file is a standard for judging proposed changes, not license to rewrite clear passages that already match it.
+- **Audit mode:** skip the voice file. The caller's memo is not the user's signed writing.
+
 ### Steps 1–10: Core Workflow
-1. Read `references/style-guide.md`
+1. Read `references/style-guide.md`. If `VOICE_FILE` is set (Step 0.7), also Read it.
 2. **Docx skill (conditional — usually skip).** Only when the draft is *not* a .docx **and** a tracked-changes .docx will be produced (Step 9 must create one from scratch): run the docx-plugin discovery above, then Read `SKILL.md` from `$DOCX_SKILL` (and `ooxml.md` if it exists as a separate file; **do not** read `docx-js.md`, `document.py`, or other files). When the draft **is** a .docx, skip all of this — `extract_text.py` and `apply_edits.py` are self-contained.
 3. Read the draft opinion. **If the draft is a .docx**, first extract its text deterministically (zero model tokens — never transcribe a .docx by hand and never read raw OOXML into context):
 ```bash
@@ -622,7 +644,7 @@ Hyperlinks are a **non-tracked formatting overlay** — they wrap existing text 
 The agent's job is: collect edits into JSON (1 Write call), run one command (1 Bash call).
 
 **Web mode workflow:**
-1. Read `references/style-guide.md` from project knowledge. If not found, tell the user to upload it.
+1. Read `references/style-guide.md` from project knowledge. If not found, tell the user to upload it. If a `my-writing-voice.md` is in project knowledge or was uploaded, read it too and apply Step 0.7.
 2. Skip docx skill files (not needed without .docx output).
 3. Read the draft from the conversation (pasted text or uploaded file).
 4. Perform Pass 1 inline.
@@ -674,7 +696,7 @@ Adopt the persona of an experienced appellate attorney working for a state supre
 **Web mode:** Perform inline. Read `references/pass-instructions/pass1-jurisdiction.md` and `references/nd-appellate-rules.md` from project knowledge and apply the matching variant. If the rules file is unavailable, use web search to find the relevant N.D.R.App.P. rules at ndcourts.gov. Report findings in the same format.
 
 ### Pass 2: Style and Grammar
-Apply in priority order. Full details in `references/style-guide.md`.
+Apply in priority order. Full details in `references/style-guide.md`. If `VOICE_FILE` is set, it governs over the style preferences below where they conflict (Step 0.7); the hard rules still apply.
 
 **Hard rules (always apply):**
 - Active voice unless passive genuinely improves readability
@@ -701,7 +723,7 @@ Apply in priority order. Full details in `references/style-guide.md`.
 
 When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft opinion is at `[path]`. Return only the structured entry list those instructions specify.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft opinion is at `[path]`. [If `VOICE_FILE` is set:] The author's voice file is at `[VOICE_FILE]`. Return only the structured entry list those instructions specify.
 
 **Returns:** a structured list of `¶ / OLD / NEW / REASON` edit entries and `¶ / COMMENT / ANCHOR` comment entries, in paragraph order.
 
@@ -1207,7 +1229,7 @@ Always include this summary. Adapt the list to reflect which outputs were actual
 - Minimal edits: change only what improves the text. Do not rewrite clear passages.
 - Minimal spans: an edit's `old` covers only the words that change, not the sentence around them.
 - Comment only when a reader might question the change; a self-evident diff needs no note.
-- Preserve the court's voice. Polish, do not impose a different style.
+- Preserve the court's voice, or the author's voice when a `my-writing-voice.md` file is loaded (Step 0.7). Polish, do not impose a different style.
 - When uncertain, use a comment rather than a tracked change.
 - For complex restructuring, describe the proposal in a comment.
 - Bold changed words in the analysis to distinguish from unchanged text.

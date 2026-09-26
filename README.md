@@ -148,6 +148,40 @@ Trigger phrases:
 
 Provide a `.docx` draft opinion in the working directory. Optionally include `.pdf` briefs or record materials for fact-checking.
 
+## Your writing voice (optional)
+
+By default, jetredline edits toward the style guide's general preferences (Redbook, Guberman, recent North Dakota Supreme Court opinions). If you keep a file describing **your own** writing voice, jetredline defers to it when editing your drafts, so the redline polishes your prose instead of nudging it toward someone else's.
+
+**Where jetredline looks** (first match wins):
+
+1. `my-writing-voice.md` in the working directory (a per-case or per-project override)
+2. `~/.claude/my-writing-voice.md` (your standing file)
+3. Claude Projects (web): a file named `my-writing-voice.md` in Project Knowledge
+
+If none is found, nothing changes.
+
+**How it is applied.** The voice file governs over jetredline's *style preferences* (sentence and paragraph length, transitions, word choices, register) wherever they conflict. It does **not** override the hard grammar rules or the citation rules. Patterns the file says to avoid are flagged as edits or comments. jetredline announces when it is using the file, applies it only to writing the file says it covers, and skips it when you say the draft is someone else's.
+
+**What the file may contain.** Plain markdown; every section is optional. Useful sections:
+
+- **Scope:** what the file covers ("opinions and separate writings I sign; internal memos; articles"). jetredline respects this.
+- **Calibration examples:** citations or file paths for a few of your own pieces that best show your voice, with a note on what each illustrates. Real examples teach more than rules do.
+- **Structure:** how you open and close each kind of document (e.g., a one-line position at the start of a dissent; restating the disposition at the end).
+- **Order of reasoning:** the sequence you usually argue in (text, then history, then precedent, …), plus any method rules, such as how you choose dictionaries.
+- **Voice:** tone, how you express uncertainty, typical paragraph and sentence length, transitions you favor, preferred word choices ("here" not "in this case").
+- **Register by genre:** how opinions differ from memos, articles, or speeches.
+- **Avoid:** words, constructions, and habits that are not yours, stated concretely enough to find in a draft ("no sentence-initial *However,*"; "at most one or two em-dashes").
+
+Keep it to one or two pages. Every rule competes for attention during an edit, and a short file of distinctive traits beats a long restatement of general style advice.
+
+**Suggestions for building one:**
+
+1. **Start from your own published writing, not your impressions of it.** Gather 20 or more pieces you wrote yourself. Separate writings, articles, and speeches carry more of your voice than institutional documents shaped by house style and staff.
+2. **Compare against a baseline.** Your traits are what differs from peers writing in the same genre and period. A phrase you use often may just be house style. If you have a corpus, ask Claude to compare word and phrase frequencies between your writing and colleagues' writing, then read your pieces for structure and tone.
+3. **Watch for drift.** If recent drafts were produced with AI help, calibrate from earlier work and list any habits that crept in (em-dash density, "not X, but Y" reversals, punchy fragment pairs) under **Avoid**.
+4. **Test it.** Have Claude redline one of your older pieces with the file loaded. If the edits push your own prose away from how you wrote it, a rule is wrong or too broad.
+5. **Keep it under version control** and revise it as your preferences change.
+
 ## Reviewing citations
 
 The last step produces `cite-review.html` — a page that lists every citation in
