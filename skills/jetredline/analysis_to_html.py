@@ -828,7 +828,7 @@ def _toc(sections: list[dict]) -> str:
 
 
 def title_from_stem(stem: str) -> str:
-    """Turn ``20260004_Burleigh-County-v-Venture_Opinion-ANALYSIS`` into a
+    """Turn ``20990001_Example-County-v-Doe-Construction_Opinion-ANALYSIS`` into a
     human title.  The tab and the masthead have to name the case."""
     t = re.sub(r"[-_]ANALYSIS$", "", stem, flags=re.IGNORECASE)
     t = t.replace("_", " · ").replace("-", " ")

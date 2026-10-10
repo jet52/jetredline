@@ -59,8 +59,8 @@ class TestKeys:
         assert content_key("fact", "x", 1, 0) != content_key("cite", "x", 1, 0)
 
     def test_safe_case_id_strips_path_characters(self):
-        assert safe_case_id("20990001 State v. Baker/OP1") == \
-               "20990001-State-v.-Baker-OP1"
+        assert safe_case_id("20990001 State v. Doe/OP1") == \
+               "20990001-State-v.-Doe-OP1"
         assert safe_case_id("") == "review"
 
 

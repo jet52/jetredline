@@ -66,8 +66,8 @@ jetredline reads that file. Verification marks, flags, and notes live in
 `localStorage` on one browser profile and never rejoin the run. The entire review is
 unrecoverable work, and nothing downstream knows a cite was cleared.
 
-**2. The queue counts occurrences, not authorities.** The tracked Baker fixture
-(`test-data/20250258_State-v-Baker-CITE-REVIEW.html`) lists 69 rows; a single case
+**2. The queue counts occurrences, not authorities.** A cite-review report in the local, untracked test-data/
+(e.g. `test-data/20990001_State-v-Doe-CITE-REVIEW.html`) lists 69 rows; a single case
 occupies three of them because parallel cites are separate textual occurrences.
 Roughly a third of the queue is re-verification of a book already checked.
 (`_dedup_parallel_citations` exists but the review unit is still the occurrence.)

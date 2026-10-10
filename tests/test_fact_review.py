@@ -462,8 +462,8 @@ class TestFactsPageJavaScriptParses:
 class TestFragmentMatching:
     @pytest.mark.parametrize("item,filename", [
         ("Brief - Appellee", "Brief - Appellee.pdf"),
-        ("Brief of Appellants Burleigh County & Morton County",
-         "Brief of Appellants Burleigh County & Morton County.pdf"),
+        ("Brief of Appellants Example County & Sample County",
+         "Brief of Appellants Example County & Sample County.pdf"),
     ])
     def test_space_hyphen_and_ampersand_names_match(self, tmp_path, item,
                                                     filename):
