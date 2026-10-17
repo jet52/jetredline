@@ -22,6 +22,12 @@
 - Prefer concrete nouns over nominalizations (e.g., "the court decided" not "the court's determination was").
 - Avoid throat-clearing phrases: "It is well settled that," "It is important to note that," "It should be noted that."
 
+### Postconviction
+- **Court preference.** Write "postconviction," closed, as the statute does (Uniform Postconviction Procedure Act, N.D.C.C. ch. 29-32.1). Many earlier opinions hyphenate "post-conviction"; do not carry that spelling into the Court's own prose.
+- When a draft quotes an opinion that uses "post-conviction," prefer quoting an opinion that says "postconviction" if one states the same point with similar weight of authority. Suggest the substitute as a comment, not a silent swap, because the author chooses the authority.
+- If no comparable "postconviction" authority exists and the hyphenated word cannot be dropped through ellipsis or a shorter excerpt, paraphrase the point and cite the case instead of quoting it.
+- Never silently respell "post-conviction" inside a quotation.
+
 ### Pronouns and Gender-Neutral Writing
 - Prefer invisible gender-neutrality: rephrase to avoid gendered pronouns when the referent's gender is unknown or irrelevant.
 - Techniques: use a plural noun as the antecedent (allowing plural pronouns naturally), repeat the noun, restructure the sentence, replace a pronoun with an article, or use "a person who" or "one."
