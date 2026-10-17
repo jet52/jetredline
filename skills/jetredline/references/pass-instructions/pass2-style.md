@@ -6,6 +6,10 @@ Read the style guide at `<SKILL_ROOT>/references/style-guide.md` and the draft o
 
 **Author voice file.** If the caller's prompt supplies a voice file path (the author's `my-writing-voice.md`), read it too. It describes how this author writes. Where it conflicts with a style preference in the style guide (sentence length, paragraph length, transitions, word choices, register), the voice file governs; the hard rules still apply. Treat each occurrence of a pattern the voice file says to avoid as a candidate edit, or a COMMENT when the fix needs the author's judgment. Do not rewrite clear passages that already match the voice file.
 
+- **Flags-only mode.** If the caller says flags-only, the draft is not this author's. Apply only the voice file's `## Flag in any draft I review` section and ignore the rest of the file. Raise every finding as a COMMENT addressed to the drafter, with the suggested wording in the comment, never as an edit.
+- **Search candidates.** If the caller supplies `voice_hits.json`, judge every hit in it against the rule it names. Each hit gives `rule`, `para`, `match`, and `context`. Raise each hit that the rule actually covers, and skip any it excludes. A match is only a candidate. Also apply the rules to occurrences the patterns missed.
+- **Quotations.** Never change words inside quotation marks or a block quote. For a flagged phrase inside one, raise a COMMENT suggesting a paraphrase, or quoting only the part that avoids the problem.
+
 One additional hard rule not in the style guide:
 
 - Use "less" for uncountable nouns and "fewer" for countable nouns.

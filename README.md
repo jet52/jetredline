@@ -171,6 +171,8 @@ If none is found, nothing changes.
 - **Voice:** tone, how you express uncertainty, typical paragraph and sentence length, transitions you favor, preferred word choices ("here" not "in this case").
 - **Register by genre:** how opinions differ from memos, articles, or speeches.
 - **Avoid:** words, constructions, and habits that are not yours, stated concretely enough to find in a draft ("no sentence-initial *However,*"; "at most one or two em-dashes").
+- **Flag in any draft I review:** a section with this heading applies even to drafts you didn't write, such as a colleague's opinion you may join. jetredline raises these as comments to the drafter, never as edits. Use it for positions you would raise before joining (a formulation you think misstates the law), not for matters of taste.
+- **Search patterns:** under any rule, a line `` Search: `REGEX` `` (case-insensitive; `.` spans lines) lets jetredline find candidates deterministically with `voice_search.py` before the style pass judges them. Keep patterns narrow, and stop them at paragraph breaks with `(?:(?!\n\s*\n).){0,300}?` in place of `.*?`.
 
 Keep it to one or two pages. Every rule competes for attention during an edit, and a short file of distinctive traits beats a long restatement of general style advice.
 
@@ -275,6 +277,7 @@ jetredline/
 │       ├── pdfsource.py           # Supplied-source PDFs: probe/locate/extract/compact
 │       ├── authorities.py         # Pass 3D: inventory / candidates / match
 │       ├── pdf_page_grep.py        # Find a string in a PDF, report its page
+│       ├── voice_search.py         # Run a voice file's Search: patterns on a draft
 │       ├── splitmarks.py           # PDF bookmark splitter (bundled)
 │       ├── ooxml_fixup.py          # OOXML debugging tool (not in main pipeline)
 │       ├── ooxml_validate.py       # OOXML debugging tool (not in main pipeline)

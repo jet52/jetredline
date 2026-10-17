@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.24.1
+version: 4.25.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas. Defers to the author's own my-writing-voice.md file when one is present."
 ---
 
@@ -199,6 +199,7 @@ Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, an
 | Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
 | PDF page grep | `$SKILL_DIR/pdf_page_grep.py` |
+| Voice-file search | `$SKILL_DIR/voice_search.py` |
 | Text-layer quality | `$SKILL_DIR/textquality.py` |
 | Supplied-source PDFs | `$SKILL_DIR/pdfsource.py` |
 | Authority matching | `$SKILL_DIR/authorities.py` |
@@ -485,7 +486,15 @@ for f in "$PWD/my-writing-voice.md" "$HOME/.claude/my-writing-voice.md"; do [ -f
 - **Announce it.** Add one line to the Step 0.6 announcement after the deliverables: "Using your writing-voice file (`<VOICE_FILE>`) for style; say so if this draft isn't yours."
 - **Precedence in Pass 2.** Pass 2's **hard rules** and the citation rules (Pass 3A, `references/nd-citation-style.md`) still apply. Where the voice file conflicts with a **style preference** in this skill or `references/style-guide.md` (sentence length, paragraph length, transitions, word choices, register), **the voice file governs**. Where the voice file lists patterns to avoid, treat each occurrence in the draft as a candidate edit, or a comment when the fix needs the author's judgment.
 - **Minimal edits still rule.** The voice file is a standard for judging proposed changes, not license to rewrite clear passages that already match it.
-- **Audit mode:** skip the voice file. The caller's memo is not the user's signed writing.
+- **Audit mode:** skip the voice file. The caller's memo is not the user's signed writing. (Its "Flag in any draft I review" section, below, still applies.)
+
+**Flags for any draft (`VOICE_FLAGS_ONLY`).** A voice file may contain a section headed `## Flag in any draft I review` (match the heading's start; the rest may vary). Those rules apply whoever wrote the draft: they cover opinions the user may join, not just ones the user signs. So when the scope check above, an explicit "this draft isn't mine," or audit mode would otherwise leave `VOICE_FILE` unset, keep the path and set `VOICE_FLAGS_ONLY=1` instead. Pass 2 then applies **only** that section and raises each finding as a COMMENT, never an edit. When the whole file applies, the section's rules are ordinary candidate edits (or comments where the fix needs the author's judgment). In the announcement, `VOICE_FLAGS_ONLY` gets its own line: "Applying the 'Flag in any draft' rules from your voice file (`<VOICE_FILE>`) as comments."
+
+**Search patterns.** A rule may carry a `Search:` line with a regex. After Step 3 produces the draft text, run them deterministically whenever `VOICE_FILE` is set (full or flags-only), and pass the output to Pass 2:
+```bash
+$VENV_PYTHON $SKILL_DIR/voice_search.py --json <VOICE_FILE> <opinion_md_path> > <TMPDIR>/voice_hits.json
+```
+Exit 1 means no hits (pass nothing); exit 2 means a bad pattern or unreadable file. Report that to the user and continue without hits. Each hit is a candidate for Pass 2 to judge, not a finding.
 
 ### Steps 1–10: Core Workflow
 1. Read `references/style-guide.md`. If `VOICE_FILE` is set (Step 0.7), also Read it.
@@ -723,7 +732,7 @@ Apply in priority order. Full details in `references/style-guide.md`. If `VOICE_
 
 When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft opinion is at `[path]`. [If `VOICE_FILE` is set:] The author's voice file is at `[VOICE_FILE]`. Return only the structured entry list those instructions specify.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft opinion is at `[path]`. [If `VOICE_FILE` is set:] The author's voice file is at `[VOICE_FILE]`. [If `VOICE_FLAGS_ONLY`:] Flags-only mode: apply only its "Flag in any draft I review" section, as COMMENTs. [If `voice_hits.json` has hits:] Search-pattern candidates are at `[TMPDIR]/voice_hits.json`. Return only the structured entry list those instructions specify.
 
 **Returns:** a structured list of `¶ / OLD / NEW / REASON` edit entries and `¶ / COMMENT / ANCHOR` comment entries, in paragraph order.
 
