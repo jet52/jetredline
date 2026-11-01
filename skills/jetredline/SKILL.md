@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.25.0
+version: 4.26.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas. Defers to the author's own my-writing-voice.md file when one is present."
 ---
 
@@ -915,7 +915,11 @@ Parse the JSON output and incorporate the results into the analysis document (se
 - Flag unnecessary alternative rationales
 - Identify logical fallacies
 - Identify ambiguities — especially passages easily quoted out of context
-- Read from the losing party's perspective: what would a critic seize on?
+- **Two hostile readers.** Read the opinion twice, each time as a specific adversary:
+  1. *The losing party's lawyer*, who will quote the opinion in the next brief to stretch or shrink the holding.
+  2. *The motivated misreader*: anyone who wants the opinion to look bad and reads it to that end. Cycle through several: a judge who rejects the author's interpretive method and would enjoy seeing the author look foolish; a reporter hunting a headline quote; an ideological opponent from either direction; an advocacy group drafting a fundraising letter; a conspiracy-minded reader who finds hidden intent in every word. Which sentences would those readers willfully misread, lift out of context, or hold up as inconsistent with the author's stated method, a relied-on precedent, or the author's past opinions? Watch for a sentence that works as a headline on its own, a clause that says something else when cut at the comma, policy-sounding reasoning, overstatement that would fit in a dissent or a law-review footnote, a word with a loaded meaning outside the law, and anything that sounds like a swipe at precedent, the lower court, counsel, or a party.
+
+  For each finding, quote the passage, state the misreading in one sentence, say whether a fair reader could also reach it, and propose a fix or say the passage should stand. Report only misreadings plausible enough to survive a reply; skip mere snark. Findings go in the analysis document under "Hostile Readers," never into tracked edits — the fix is the author's call.
 - Flag holdings broader than necessary
 - Flag vague standards lacking guidance for future application
 - **Draft case highlight:** Generate a 50–200 word case summary for the analysis document. Extract: case name and citation (from the caption/header), nature of the dispute (one sentence), disposition (affirmed/reversed/remanded/modified with brief outcome), and 1–3 core holdings. This is a synthesis task — perform it in main context, not delegated.
@@ -1109,8 +1113,8 @@ This run could not reach the sources below, so the checks that depend on them fe
 ### Alternative Rationales
 [Whether each ground is fully developed]
 
-### Ambiguity and Vulnerability
-[Passages quotable out of context; vague standards; overly broad holdings]
+### Hostile Readers
+[Passages quotable out of context or open to willful misreading, each with the misreading, whether a fair reader could reach it, and the fix; vague standards; overly broad holdings]
 
 ### Logical Issues
 [Logical fallacies or unstated assumptions]

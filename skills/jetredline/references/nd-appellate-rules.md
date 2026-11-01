@@ -15,7 +15,7 @@ whenever the court amends a rule; `nd_rules_export.py --check` reports drift.
 
 <!-- BEGIN GENERATED: ndlaw rules export — do not hand-edit below this line -->
 
-*Rule text below is verbatim from the ndlaw corpus, regenerated 2026-09-22 by `nd_rules_export.py`. Each rule carries the effective date of the version in force and the court's own URL. Nested `>` levels encode subdivision depth. Do not edit this block by hand — rerun the script.*
+*Rule text below is verbatim from the ndlaw corpus, regenerated 2026-10-31 by `nd_rules_export.py`. Each rule carries the effective date of the version in force and the court's own URL. Nested `>` levels encode subdivision depth. Do not edit this block by hand — rerun the script.*
 
 ## N.D.R.App.P. 2 — Suspension of Rules
 
@@ -177,15 +177,15 @@ RULE 2.1 MENTAL HEALTH APPEALS UNDER CHAPTER 25-03.1, NORTH DAKOTA CENTURY CODE
 
 > > > (ii) for arrest of judgment under Rule 34.
 
-> > (B) If the defendant files with the clerk of district court any motion listed in subparagraph (b) (3) (A) after a notice of appeal is filed, the defendant must notify the clerk of the supreme court in writing, and the court may remand the case to the district court for disposition of the motion.
+> > (B) If the defendant files with the clerk of district court any motion listed in subparagraph (b)(3)(A) after a notice of appeal is filed, the defendant must notify the clerk of the supreme court in writing, and the court may remand the case to the district court for disposition of the motion.
 
-> > (C) A notice of appeal filed after the district court announces a decision, sentence, or order, but before it disposes of any of the motions referred to in subparagraph (b) (3) (A) , becomes effective upon the later of the following:
+> > (C) A notice of appeal filed after the district court announces a decision, sentence, or order, but before it disposes of any of the motions referred to in subparagraph (b)(3)(A) , becomes effective upon the later of the following:
 
 > > > (i) the entry of the order disposing of the last such remaining motion;
 
 > > > (ii) the entry of the judgment of conviction.
 
-> > (D) A valid notice of appeal is effective, without amendment, to appeal from an order disposing of any of the motions referred to in subparagraph (b) (3) (A).
+> > (D) A valid notice of appeal is effective, without amendment, to appeal from an order disposing of any of the motions referred to in subparagraph (b)(3)(A).
 
 > (4) Motion for Extension of Time. Upon a finding of excusable neglect or good cause, the supreme court may—before or after the time has expired, with or without motion and notice—extend the time to file a notice of appeal for a period not to exceed 30 days from the expiration of the time otherwise prescribed by this subdivision.
 

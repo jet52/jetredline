@@ -110,8 +110,10 @@ Still checked here (not in the supplement):
 - Check for: begging the question, straw man, false dichotomy, slippery slope, appeal to authority (beyond precedent), post hoc reasoning, equivocation, hasty generalization.
 - Check for unstated assumptions that reasonable minds might not share.
 
-### Ambiguity and Vulnerability
-- Read the opinion from the perspective of the losing party. Identify passages that could be quoted out of context to distort the holding.
+### Hostile Readers
+- Read the opinion as the losing party's lawyer. Identify passages that could be quoted in the next brief to stretch or shrink the holding.
+- Read it again as the motivated misreader: anyone who wants the opinion to look bad and reads it to that end. Cycle through several: a judge who rejects the author's interpretive method and would enjoy seeing the author look foolish; a reporter hunting a headline quote; an ideological opponent from either direction; an advocacy group drafting a fundraising letter; a conspiracy-minded reader who finds hidden intent in every word. Identify sentences those readers would willfully misread, lift out of context, or hold up as inconsistent with the author's stated method, a relied-on precedent, or the author's past opinions. Watch for a sentence that works as a headline on its own, a clause that says something else when cut at the comma, policy-sounding reasoning, overstatement quotable in a dissent or law review, a word with a loaded meaning outside the law, and swipes at precedent, the lower court, counsel, or a party.
+- For each finding: quote the passage, state the misreading in one sentence, say whether a fair reader could also reach it, and propose a fix or say the passage should stand. Report only misreadings plausible enough to survive a reply. Comments only, never tracked edits.
 - Identify vague standards ("reasonable," "appropriate," "under the circumstances") that lack sufficient guidance for future application.
 - Flag any sentence that could be read two ways and suggest clarification.
 - Consider whether the holding is broader than necessary and might apply to unintended situations.
