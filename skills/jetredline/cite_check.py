@@ -74,12 +74,15 @@ def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = Fals
     skips them); verification reads the parent's cached opinion via
     parent_local_path / parent_local_exists.
 
-    Repeat full-form case cites — second and later appearances, e.g. a short
-    cite written out as "Olson, 2024 ND 156, ¶ 12" — appear as entries with
-    is_repeat=True linked to the first occurrence via parent_normalized, so
-    each proposition and pinpoint is individually verifiable. Like pins,
-    repeats carry no local file of their own and are skipped by the cache
-    loop; they get parent_local_path / parent_local_exists instead.
+    Repeat full-form cites of every type — second and later appearances,
+    e.g. a short cite written out as "Olson, 2024 ND 156, ¶ 12", or
+    "N.D.R.Ev. 702(b)" after an earlier "N.D.R.Ev. 702" — appear as entries
+    with is_repeat=True linked to the first occurrence via parent_normalized,
+    so each proposition and pinpoint is individually verifiable. A rule or
+    statute subdivision ("(b)", "(1)(a)") travels in ``pinpoint``; the bare
+    provision is the authority. Like pins, repeats carry no local file of
+    their own and are skipped by the cache loop; they get
+    parent_local_path / parent_local_exists instead.
     """
     refs = Path(refs_dir).expanduser()
     citations = scan_text(text, refs_dir=refs, include_pin_cites=include_pin_cites,

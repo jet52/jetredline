@@ -335,10 +335,29 @@ def _render_body(body: str, body_start: int,
     return "".join(parts)
 
 
-# A section heading ("I", "II", ...) sits between two ¶ markers, so
-# _split_paragraphs absorbs it into the tail of the preceding paragraph.
-# Detected at render time and emitted as its own heading div instead.
-_ROMAN_HEADING_RE = re.compile(r"\n\s*([IVXLCDM]{1,7})\s*$")
+# A section heading ("I", "A", "1", "a", "(a)") sits between two ¶ markers,
+# so _split_paragraphs absorbs it into the tail of the preceding paragraph.
+# Detected at render time and emitted as its own heading div instead. A
+# Roman numeral may follow a single newline (the original rule); every other
+# token must stand alone after a blank line, so prose ending in "Plan A" or
+# a transcript's "A. Yes." line is never taken for a heading.
+_ROMAN_HEADING_RE = re.compile(r"\n\s*([IVXLCDM]{1,7}\.?)\s*$")
+_SUB_HEADING_RE = re.compile(
+    r"\n[ \t]*\n[ \t]*((?:[A-Z]|\d{1,2}|[a-z]|\([a-z0-9]{1,3}\))\.?)[ \t]*$")
+
+
+def _heading_level(token: str) -> int:
+    """1 = Roman numeral, 2 = capital letter, 3 = digit / lowercase / (x).
+
+    Single letters I, V and X are read as Roman; C, D, L and M as the
+    second-level letters they almost always are in an opinion outline.
+    """
+    t = token.rstrip(".")
+    if re.fullmatch(r"[IVXLCDM]{2,7}", t) or t in ("I", "V", "X"):
+        return 1
+    if re.fullmatch(r"[A-Z]", t):
+        return 2
+    return 3
 
 
 def _opinion_to_html(text: str, paragraphs: list[dict],
@@ -367,7 +386,7 @@ def _opinion_to_html(text: str, paragraphs: list[dict],
         body = p["text"]
         headings = []
         while True:
-            m = _ROMAN_HEADING_RE.search(body)
+            m = _ROMAN_HEADING_RE.search(body) or _SUB_HEADING_RE.search(body)
             if not m:
                 break
             headings.insert(0, m.group(1))
@@ -382,7 +401,8 @@ def _opinion_to_html(text: str, paragraphs: list[dict],
             f'{escaped}</div>'
         )
         for h in headings:
-            parts.append(f'<div class="opinion-heading">{html.escape(h)}</div>')
+            parts.append(f'<div class="opinion-heading level-{_heading_level(h)}">'
+                         f'{html.escape(h)}</div>')
     return "\n".join(parts)
 
 
@@ -1856,6 +1876,8 @@ main { display:flex; flex:1; overflow:hidden; }
   text-align:center; font-weight:600;
   margin:14px 0 4px; padding:0 16px;
 }
+.opinion-heading.level-2 { margin-top:10px; }
+.opinion-heading.level-3 { margin-top:8px; font-weight:500; font-style:italic; }
 .opinion-quote {
   margin:10px 32px; padding:0;
   font-size:14px;

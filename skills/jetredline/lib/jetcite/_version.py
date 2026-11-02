@@ -1,3 +1,3 @@
 """Single source of truth for the jetcite version."""
 
-__version__ = "2.14.0"
+__version__ = "2.16.0"

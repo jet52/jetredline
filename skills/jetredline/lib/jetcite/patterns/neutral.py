@@ -23,9 +23,14 @@ _WS = r'(?:[^\S\n]*\n[^\S\n]*|[^\S\n]+)'
 # year/number space — 2005 ND 7 and 2005 ND App 7 are different cases — so the
 # court token is carried in components and normalized, and keyed separately in
 # the local refs cache.
+# Also accept period-spelled forms common in older prose / mixed punctuation:
+# `1997 N.D. 24`, `2024 N. D. 156`, `2005 N.D. App. 8` — normalize to compact
+# `ND` / `ND App` (N.D. Reports volumes top out at 79, so a 4-digit year + N.D.
+# is always a neutral cite, not Reports).
 # Pinpoint tail accepts both ", ¶ 12" and the Bluebook short form "at ¶ 12".
+_ND_COURT = r'(?:ND|N\.\s?D\.)'  # ND or N.D. / N. D.
 _ND_NEUTRAL = re.compile(
-    r'([12]\d{3})' + _WS + r'ND(' + _WS + r'App)?' + _WS + r'(\d{1,3})'
+    r'([12]\d{3})' + _WS + _ND_COURT + r'(' + _WS + r'App\.?)?' + _WS + r'(\d{1,3})'
     r'(?:(?:,?\s*|\s+at\s+)(?:¶¶?\s*(\d+(?:\s*[-–]\s*\d+)?)))?'  # optional pinpoint
 )
 

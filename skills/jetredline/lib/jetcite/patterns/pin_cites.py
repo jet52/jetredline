@@ -59,9 +59,11 @@ _NAME_AT_PIN = re.compile(rf"\b({_NAME}),?\s+at\s+" + _PAGE + r"(?=[\s.,;:)\]]|$
 _NAME_PARA_PIN = re.compile(rf"\b({_NAME}),\s*" + _PARA)
 # ND special short form (Redbook supplement): where "id." is unavailable but the
 # full form appeared earlier in the same paragraph, the cite collapses to the
-# first party's name + "at" + pinpoint — "Kuntz, at ¶ 11" for a public-domain
-# cite, "Falcon, at 836" for a reporter cite (the latter is _NAME_AT_PIN, whose
-# _PAGE requires digits and so never matches a ¶ pinpoint).
+# first party's name plus the pinpoint. A PAGE pin takes "at" — "Falcon, at 836"
+# (_NAME_AT_PIN, whose _PAGE requires digits and so never matches a ¶ pinpoint).
+# A PARAGRAPH pin does not: "Kuntz, ¶ 11" (_NAME_PARA_PIN). _NAME_AT_PARA_PIN
+# keeps reading the older "Kuntz, at ¶ 11" so drafts written before the
+# supplement dropped the "at" still resolve.
 _NAME_AT_PARA_PIN = re.compile(rf"\b({_NAME}),?\s+at\s+" + _PARA)
 
 # Id. forms. The backreferenced (?P=mk) tolerates markdown italics (*Id.*)

@@ -313,10 +313,14 @@ def _inherit_pinpoint(pin: Citation, antecedent: Citation) -> None:
         return
     if antecedent.is_pin_cite:
         para, page = antecedent.pin_paragraph, antecedent.pin_page
+        if not (para or page):
+            _inherit_subdivision(pin, antecedent)
+            return
     elif antecedent.cite_type != CitationType.CASE:
         # Rule/statute/constitution pinpoints are subdivisions ("(b)"),
-        # not pages or paragraphs — nothing to inherit under Id.'s
-        # page/¶ semantics.
+        # not pages or paragraphs. A bare Id. after "N.D.R.Ev. 702(c)"
+        # still means 702(c), so the subdivision carries over verbatim.
+        _inherit_subdivision(pin, antecedent)
         return
     else:
         para = page = None
@@ -336,6 +340,18 @@ def _inherit_pinpoint(pin: Citation, antecedent: Citation) -> None:
         pin.pinpoint = f"at {page}"
     if para or page:
         pin.components["pinpoint_inherited"] = True
+
+
+def _inherit_subdivision(pin: Citation, antecedent: Citation) -> None:
+    """A bare Id. after a provision cite adopts its subdivision ("(b)")."""
+    sub = antecedent.components.get("subdivision") or (
+        antecedent.pinpoint if antecedent.cite_type != CitationType.CASE
+        else None)
+    if not sub or pin.pinpoint:
+        return
+    pin.pinpoint = sub
+    pin.components["subdivision"] = sub
+    pin.components["pinpoint_inherited"] = True
 
 
 # Curly double quotes. Straight quotes are deliberately not paired: without
@@ -722,13 +738,16 @@ def scan_text(
     sources. Pin cites never enter dedup and never affect the full-citation
     entries; the default output is unchanged.
 
-    If include_occurrences is True, repeat full-form CASE citations — the
-    second and later appearances of a normalized form, e.g. a short cite
-    written out as "Olson, 2024 ND 156, ¶ 12" — are returned as additional
+    If include_occurrences is True, repeat full-form citations of every
+    type — the second and later appearances of a normalized form, e.g. a
+    short cite written out as "Olson, 2024 ND 156, ¶ 12", or "N.D.R.Ev.
+    702(b)" after an earlier "N.D.R.Ev. 702" — are returned as additional
     entries with ``is_repeat=True`` and ``parent_normalized`` linking back
-    to the first occurrence. Repeats inherit the parent's sources, never
-    resolve URLs or map to refs-cache files of their own, and never affect
-    the deduplicated entries; the default output is unchanged.
+    to the first occurrence. A different subdivision of the same provision
+    is a repeat of that provision: subdivisions live in ``pinpoint``, not
+    ``normalized``. Repeats inherit the parent's sources, never resolve
+    URLs or map to refs-cache files of their own, and never affect the
+    deduplicated entries; the default output is unchanged.
 
     Citation positions index into ``preprocess_document_text(text)``, not
     the raw input — consumers mapping positions back to the document must
@@ -742,8 +761,8 @@ def scan_text(
 
     all_citations: list[Citation] = []
     repeats: list[Citation] = []
-    # Re-citations that are NOT emitted (non-case types, or any repeat when
-    # include_occurrences is off) still mark real positions in the text.
+    # Re-citations that are NOT emitted (include_occurrences off) still
+    # mark real positions in the text.
     # Pin resolution must see them: an "Id." following a re-citation of
     # N.D.C.C. § X refers to the statute at that position, not to whatever
     # emitted citation happens to sit nearer to the first occurrence.
@@ -761,7 +780,7 @@ def scan_text(
             if cite.normalized not in seen:
                 seen.add(cite.normalized)
                 all_citations.append(cite)
-            elif include_occurrences and cite.cite_type == CitationType.CASE:
+            elif include_occurrences:
                 cite.is_repeat = True
                 repeats.append(cite)
             elif include_pin_cites:

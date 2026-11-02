@@ -55,12 +55,23 @@ _FEDERAL_RULE_DIRS = {
 }
 
 
+# Reporters whose stripped abbreviation would collide with another directory.
+# North Dakota Reports ("N.D.") strips to "ND", which is the neutral-citation
+# directory (opin/ND/<year>/<year>ND<n>.md) — so 61 N.D. 359 was cached as
+# opin/ND/61/359.md, inside the tree of the court's own neutral-cite opinions.
+_REPORTER_DIR_OVERRIDES = {
+    "N.D.": "NDReports",
+}
+
+
 def _reporter_dir(reporter: str) -> str:
     """Normalize a reporter abbreviation to a directory name.
 
     U.S. Reports maps to 'US' (not 'scotus') so all opinions live under
     opin/{reporter_dir}/ in a consistent pattern.
     """
+    if reporter in _REPORTER_DIR_OVERRIDES:
+        return _REPORTER_DIR_OVERRIDES[reporter]
     return reporter.replace(".", "").replace(" ", "").replace("\u2019", "").replace("'", "")
 
 

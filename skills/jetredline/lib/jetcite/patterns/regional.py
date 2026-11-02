@@ -84,11 +84,21 @@ _add(r'(\d+)\s+Ill\.\s?Dec\.\s+(\d+)', "Ill. Dec.", False)
 _add(r'(\d+)\s+Wash\.\s?(2d)\s+(\d+)', "Wash. {ed}", True)
 _add(r'(\d+)\s+Wash\.\s?App\.\s?(2d)\s+(\d+)', "Wash. App. {ed}", True)
 
-# North Dakota Reports: 50 N.D. 123 (volumes 1-79, published 1890-1953)
+# North Dakota Reports: 50 N.D. 123 (volumes 1-79, published 1890-1953).
+# Volume capped at 1–79 so e.g. "224 N.D. 898" is never a Reports cite.
 # Use a negative lookahead to avoid matching "N.D.C." (NDCC) or "N.D.A." (NDAC)
 # ("N. D." spaced form per West house style; the lookahead still blocks the
-# spaced "N. D. C. C." statute form because the page must be a digit run)
-_add(r'(\d{1,3})\s+N\.\s?D\.' + _REP + r'\s+(?!C|A)(\d+)', "N.D.", False)
+# spaced "N. D. C. C." statute form because the page must be a digit run).
+# `(?<!\d)` stops a 4-digit year from being truncated into a volume
+# ("2024 N.D. 156" must NOT become "024 N.D. 156"; neutral wins that form).
+# There is no separate N.D. App. *print* reporter — Court of Appeals cites
+# are medium-neutral (`YYYY ND App N` / period-spelled variants in neutral.py).
+_ND_REPORTS_VOL = r'(?:[1-9]|[1-7]\d)'  # 1–79
+_add(r'(?<!\d)(' + _ND_REPORTS_VOL + r')\s+N\.\s?D\.' + _REP + r'\s+(?!C|A)(\d+)', "N.D.", False)
+
+# Archaic "N. Dak." / "N.Dak." spelling of the N.D. Reports reporter
+# (early opinions; normalize to compact N.D.). Same 1–79 volume cap + year guard.
+_add(r'(?<!\d)(' + _ND_REPORTS_VOL + r')\s+N\.\s*Dak\.' + _REP + r'\s+(\d+)', "N.D.", False)
 
 # Malformed NW2d fallback (case-insensitive)
 _add(r'(\d+)\s+(?:NW\.?\s?2d|N\.W2d)\s+(\d+)', "N.W.2d", False)
@@ -123,7 +133,7 @@ class RegionalReporterMatcher(BaseMatcher):
                 sources = [Source("courtlistener",
                                   courtlistener_url(reporter, volume, page))]
 
-                jur = "nd" if reporter in ("N.D.",) else "us"
+                jur = "nd" if reporter == "N.D." else "us"
 
                 results.append(Citation(
                     raw_text=m.group(0),

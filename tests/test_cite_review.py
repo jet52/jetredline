@@ -1071,3 +1071,72 @@ def _load_authorities_inline(payload):
         return _load_authorities(path)
     finally:
         path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Opinion pane headings: Roman numerals, letters, digits between ¶ markers
+# ---------------------------------------------------------------------------
+
+_HEADING_DIV_RE = re.compile(r'<div class="opinion-heading( level-\d)?">([^<]*)</div>')
+_PARA_DIV_RE = re.compile(r'<div class="opinion-para"[^>]*>(.*?)</div>', re.S)
+
+_OUTLINE = (
+    "Smith v. Jones\n\n[¶1] Intro text.\n\nI\n\n[¶2] Facts here.\n\nII\n\n"
+    "[¶3] Issue framing.\n\nA\n\n[¶4] Standard of review.\n\nB\n\n"
+    "[¶5] Analysis.\n\n1\n\n[¶6] Sub-point.\n\nIII\n\n[¶7] Conclusion."
+)
+
+
+class TestOpinionHeadings:
+    def _render(self, text, **kw):
+        return _opinion_to_html(text, _split_paragraphs(text), **kw)
+
+    def test_sub_headings_render_as_headings(self):
+        html = self._render(_OUTLINE)
+        heads = [m.group(2) for m in _HEADING_DIV_RE.finditer(html)]
+        assert heads == ["I", "II", "A", "B", "1", "III"]
+        for body in _PARA_DIV_RE.findall(html):
+            assert not re.search(r"\n\s*(?:[IVX]+|[A-Z]|\d)\s*$", body), body
+
+    def test_heading_levels(self):
+        html = self._render(_OUTLINE)
+        levels = {m.group(2): m.group(1) for m in _HEADING_DIV_RE.finditer(html)}
+        assert levels["II"] == " level-1"
+        assert levels["A"] == " level-2"
+        assert levels["1"] == " level-3"
+
+    def test_stacked_headings_in_order(self):
+        text = "[¶1] End of part one.\n\nII\n\nA\n\n[¶2] Start of part two."
+        html = self._render(text)
+        heads = [m.group(2) for m in _HEADING_DIV_RE.finditer(html)]
+        assert heads == ["II", "A"]
+        assert html.index("II</div>") < html.index("A</div>") < html.index('id="para-2"')
+
+    def test_trailing_capital_in_prose_not_split(self):
+        text = "[¶1] Coverage falls under Plan A\n\n[¶2] Next paragraph."
+        html = self._render(text)
+        assert "opinion-heading" not in html
+        assert "under Plan A" in html
+
+    def test_transcript_answer_line_not_split(self):
+        text = "[¶1] The exchange was:\n\nQ. Did you go?\n\nA. Yes.\n\n[¶2] Next."
+        html = self._render(text)
+        assert "opinion-heading" not in html
+        assert "A. Yes." in html
+
+    def test_lettered_heading_with_period(self):
+        text = "[¶1] Text.\n\nA.\n\n[¶2] More."
+        html = self._render(text)
+        assert [m.group(2) for m in _HEADING_DIV_RE.finditer(html)] == ["A."]
+
+    def test_italics_aligned_after_heading_strip(self):
+        text = "[¶1] See Smith for the rule.\n\nA\n\n[¶2] Next."
+        s = text.index("Smith")
+        html = self._render(text, italic_spans=[(s, s + len("Smith"))])
+        assert "<em>Smith</em>" in html
+        assert [m.group(2) for m in _HEADING_DIV_RE.finditer(html)] == ["A"]
+
+    def test_roman_after_single_newline_still_detected(self):
+        text = "[¶1] Text.\nII\n[¶2] More."
+        html = self._render(text)
+        assert [m.group(2) for m in _HEADING_DIV_RE.finditer(html)] == ["II"]
