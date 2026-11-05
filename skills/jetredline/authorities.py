@@ -150,7 +150,8 @@ def inventory(root: Path, manifest: list[dict] | None = None,
     record items, and the conventional brief/notice filename patterns.
     """
     root = Path(root)
-    owned = {e.get("filename") for e in (manifest or []) if e.get("filename")}
+    owned = {e.get("filename") for e in (manifest or [])
+             if isinstance(e, dict) and e.get("filename")}
     skip = (skip or set()) | _SKIP_DIRS
     found = []
     for p in sorted(root.rglob("*.pdf")):
@@ -392,6 +393,33 @@ def match(references: list[dict], files: list[dict],
 # CLI
 # ---------------------------------------------------------------------------
 
+def load_manifest(p) -> list[dict] | None:
+    """Read a case manifest and return its document entries, or None.
+
+    Two shapes are accepted: a bare list of entries, and the record-fetch /
+    jetmemo manifest — a dict whose entries sit under ``"documents"`` (the
+    4.28.0 test run crashed here with ``'str' object has no attribute 'get'``
+    because the dict's top-level keys were iterated as entries). Anything
+    else, or an unreadable file, yields None; non-dict entries are dropped.
+    """
+    if not p:
+        return None
+    try:
+        data = json.loads(Path(p).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict):
+        for key in ("documents", "entries", "files"):
+            if isinstance(data.get(key), list):
+                data = data[key]
+                break
+        else:
+            return None
+    if not isinstance(data, list):
+        return None
+    return [e for e in data if isinstance(e, dict)]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(prog="authorities",
                                  description=__doc__.split("\n")[0])
@@ -417,14 +445,6 @@ def main() -> int:
     p_m.add_argument("--json", action="store_true")
 
     a = ap.parse_args()
-
-    def load_manifest(p):
-        if not p:
-            return None
-        try:
-            return json.loads(Path(p).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return None
 
     if a.cmd == "inventory":
         res = inventory(a.dir, manifest=load_manifest(a.manifest))

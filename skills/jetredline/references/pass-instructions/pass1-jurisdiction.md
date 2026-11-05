@@ -27,6 +27,17 @@ approved. Keep every Bash call matchable:
 substring search misses it silently and reads as "the record does not say
 this" — the wrong conclusion, reached invisibly.
 
+## ndlaw / CourtListener tools (optional, any prefix)
+
+If the caller says an ndlaw MCP server is connected (its tools may sit under `mcp__ndlaw__`, `mcp__claude_ai_ndlaw__`, or another prefix), prefer it to the web for ND rule text, statute text, and opinion pinpoints. **Load each tool's schema with `ToolSearch` (`select:<full tool name>`) before its first call**, and call with keyword arguments, exactly:
+
+- `lookup_authority(citation=<rule, statute, or constitution cite>, as_of_date=<YYYY-MM-DD, optional>)` — current or as-of text of N.D.R.App.P., N.D.R.Civ.P., N.D.C.C., and the constitution
+- `get_pinpoint(citation=<ND cite>, paragraph=<integer>)` — read a cited ¶
+- `verify_quotation(citation=<ND cite>, quote=<exact quoted text>)` — the text argument is **`quote`**, not `quotation`; a `verbatim: false` with `similarity` ≥ 0.95 usually means a bracketed alteration or OCR spacing, so read `differences` before calling it a discrepancy
+- `verify_citation(query=<cite>, expected_case_name=<name as written>)`
+
+A call made without the schema loaded is rejected on a wrong argument name; do not retry the same call, load the schema. If no ndlaw tools are available, use the rule text in `nd-appellate-rules.md` and ndcourts.gov as the variants below say.
+
 ## If DOC_TYPE is `opinion`
 
 - Read `<SKILL_ROOT>/references/nd-appellate-rules.md`. **Cite the subdivision from the verbatim rule text in its generated block, not from the quick-reference tables below it** — those are derived commentary. When you name a rule in a finding, name the subdivision the words actually come from (`N.D.R.App.P. 4(b)(3)(A)`, not `Rule 4`).

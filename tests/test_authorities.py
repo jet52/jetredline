@@ -14,6 +14,8 @@ import pytest
 from authorities import (
     _looks_like_prose,
     candidates_from_draft,
+    inventory,
+    load_manifest,
     match,
     score_reference,
 )
@@ -112,3 +114,43 @@ class TestCandidates:
     ])
     def test_prose_rejection(self, s, prose):
         assert _looks_like_prose(s) is prose
+
+
+class TestLoadManifest:
+    """The manifest reader must accept the record-fetch shape (a dict with the
+    entries under "documents"), not only a bare list — the 4.28.0 test run
+    crashed in inventory() when the dict's keys were iterated as entries."""
+
+    def test_record_fetch_dict_shape(self, tmp_path):
+        m = tmp_path / "manifest.json"
+        m.write_text(json.dumps({
+            "caseNumber": "20990001",
+            "documents": [{"filename": "a.pdf"}, "junk", {"filename": "b.pdf"}],
+        }), encoding="utf-8")
+        assert load_manifest(m) == [{"filename": "a.pdf"}, {"filename": "b.pdf"}]
+
+    def test_bare_list(self, tmp_path):
+        m = tmp_path / "manifest.json"
+        m.write_text(json.dumps([{"filename": "a.pdf"}]), encoding="utf-8")
+        assert load_manifest(m) == [{"filename": "a.pdf"}]
+
+    def test_unknown_dict_shape_is_none(self, tmp_path):
+        m = tmp_path / "manifest.json"
+        m.write_text(json.dumps({"caseNumber": "1", "tool": "x"}), encoding="utf-8")
+        assert load_manifest(m) is None
+
+    def test_missing_or_unreadable_is_none(self, tmp_path):
+        assert load_manifest(None) is None
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        assert load_manifest(bad) is None
+
+    def test_inventory_excludes_manifest_owned_files(self, tmp_path):
+        (tmp_path / "20990001_025_Apt-Br.pdf").write_bytes(b"%PDF-1.4\n")
+        (tmp_path / "treatise.pdf").write_bytes(b"%PDF-1.4\n")
+        m = tmp_path / "manifest.json"
+        m.write_text(json.dumps({"documents": [
+            {"filename": "20990001_025_Apt-Br.pdf"}, "junk"]}), encoding="utf-8")
+        names = {r["name"] for r in inventory(tmp_path, manifest=load_manifest(m))}
+        assert "20990001_025_Apt-Br.pdf" not in names
+        assert "treatise.pdf" in names
