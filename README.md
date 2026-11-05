@@ -281,15 +281,23 @@ jetredline/
 │       ├── splitmarks.py           # PDF bookmark splitter (bundled)
 │       ├── ooxml_fixup.py          # OOXML debugging tool (not in main pipeline)
 │       ├── ooxml_validate.py       # OOXML debugging tool (not in main pipeline)
-│       └── references/
+│       └── references/             # Read on demand; SKILL.md holds only the workflow
+│           ├── analysis-template.md    # Analysis-document sections, ⚠ warnings, provenance, HTML render
+│           ├── audit-mode.md           # Caller integration (jetmemo audits a memo through jetredline)
+│           ├── batch-edit-workflow.md  # Step 9: edits.json schema, nbsp policy, hyperlinks
+│           ├── cite-review-workflow.md # Step 11: ndlaw export, cite_review.py flags, sidecar/bundle
+│           ├── environment-setup.md    # venv ladder, permission-matchable commands, docx plugin, Node
+│           ├── pdf-ingestion.md        # Splitting, text-layer triage, OCR recovery ladder
 │           ├── nd-appellate-rules.md
 │           ├── nd-citation-style.md
 │           ├── style-guide.md
-│           └── pass-instructions/  # Delegated-pass instructions read by subagents
+│           └── pass-instructions/  # Per-pass instructions (subagents read 1–4, 6, 7; Pass 5 runs in main context)
 │               ├── pass1-jurisdiction.md
 │               ├── pass2-style.md
 │               ├── pass3b-citations.md
+│               ├── pass3d-authorities.md
 │               ├── pass4-factcheck.md
+│               ├── pass5-rigor.md
 │               ├── pass6-brief-matching.md
 │               └── pass7-dissent-crosscheck.md
 ├── install.sh

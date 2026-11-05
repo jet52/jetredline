@@ -320,19 +320,15 @@ Verified end to end 2026-08-24: *Whalen* + *Payton*'s `100 S. Ct. 1371` →
 `100 S. Ct. 999999` → `mismatch` naming `100 S. Ct. 1432`; *Fiebiger* + its
 N.W.3d → `unverified`, no false alarm; correct pairs → `consistent`.
 
-**Known limitation — a pin page breaks the group.** jetcite links parallels by
-adjacency, so `445 U.S. 684, 691, 100 S. Ct. 1371, 63 L. Ed. 2d 715` leaves the
-*lead* cite unlinked: the group becomes `{100 S. Ct. 1371, 63 L. Ed. 2d 715}` and
-`445 U.S. 684` carries no badge. The mismatch is still caught and still shown —
-the badge just sits on the S. Ct./L. Ed. rows rather than on the U.S. row above
-them. Fixing it properly belongs in jetcite's parallel linker (spanning a pin
-page); bridging it here by text position would be a heuristic over a heuristic.
-**Logged upstream 2026-08-24** as an open jetcite issue with root cause, a
-one-line fix and its dry-run verification ("Bug: a bare page pin between
-parallel cites breaks the parallel link"). When it lands, re-vendor and this
-limitation disappears with no change to `parallel_check.py` — `build_groups`
-already takes the transitive closure and will simply see the complete group.
-jetredline's `TODO.md` carries the re-vendor checklist.
+**Former limitation — a pin page broke the group (resolved).** Through jetcite
+2.12.x the linker worked by adjacency, so `445 U.S. 684, 691, 100 S. Ct. 1371,
+63 L. Ed. 2d 715` left the *lead* cite unlinked and the mismatch badge landed on
+the S. Ct./L. Ed. rows instead of the U.S. row. Fixed upstream in jetcite's
+parallel linker (not bridged here by text position, which would have been a
+heuristic over a heuristic). Verified against the vendored copy 2026-11-04
+(jetcite 2.16.0): the lead now links to the S. Ct. cite and `build_groups`'
+transitive closure yields the full three-member group with no change to
+`parallel_check.py`.
 
 **Bug found and fixed while building: an infinite loop in the existing
 collapse.** `_dedup_parallel_citations` walked alias chains with an unguarded

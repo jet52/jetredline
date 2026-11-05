@@ -1,6 +1,6 @@
 ---
 name: jetredline
-version: 4.27.0
+version: 4.28.0
 description: "Appellate judicial opinion and bench memo editor and proofreader. Produces a Word document (.docx) with tracked changes showing proposed edits, plus a separate analysis document with explanations. Use when the user provides a draft judicial opinion, court order, bench memo, or legal memorandum for editing, proofreading, or style review. Triggers: edit opinion, proofread opinion, review draft opinion, judicial writing review, court opinion edit, redline opinion, edit draft order, appellate opinion editing, edit memo, edit bench memo, proofread memo, review bench memo, jetredline, redline this draft, redline this opinion, redline this memo, redline this order. Applies Garner's Redbook, Bluebook citation format, and style preferences drawn from opinions issued by the North Dakota Supreme Court within the last ten years, Guberman's Point Taken, and Justices Gorsuch, Kagan, and Thomas. Defers to the author's own my-writing-voice.md file when one is present."
 ---
 
@@ -8,256 +8,47 @@ description: "Appellate judicial opinion and bench memo editor and proofreader. 
 
 Edit draft judicial opinions and bench memos to improve grammar, clarity, conciseness, professional tone, citation accuracy, and analytical rigor. Produce a Word document with tracked changes and a companion analysis document.
 
+This file is the workflow. Detailed procedures live in `references/` and are Read when a step calls for them: `environment-setup.md`, `pdf-ingestion.md`, `batch-edit-workflow.md`, `cite-review-workflow.md`, `analysis-template.md`, `audit-mode.md`, and the per-pass files in `references/pass-instructions/`.
+
 ## Audit Mode (Caller Integration)
 
-Another skill (e.g., jetmemo) may invoke jetredline programmatically to audit a memo it just generated and feed the findings back into its own draft. When the caller's prompt says it is invoking jetredline in **audit mode**, this section *overrides* parts of the standard workflow below. Everything not overridden here is unchanged.
-
-**Detect audit mode** from the caller's prompt: it will say "audit mode" and supply a draft path, a pass list, and a request to return results rather than write files. When in audit mode:
-
-1. **Fixed settings** — do not ask, do not auto-detect:
-   - `DOC_TYPE = memo` (the caller only audits bench memos in this mode).
-   - Output = **analysis-only**. **Write no files** — no .docx, no `-ANALYSIS.md`, no `cite-review.html`. Return everything inline to the caller.
-   - The draft arrives as a **markdown file path** (or pasted text), not a .docx. Read it directly; skip Step 0's `.docx`/`.pdf` scan, the temp-dir setup, and the docx-plugin discovery.
-   - **Preserve markdown link syntax.** The memo arrives with record-citation hyperlinks (`[R45](url)`) and possibly authority links already in it. Never edit a URL, and when an edit touches linked text, keep the `[text](url)` wrapper intact.
-   - **Model gate: report, never block.** Run Step 0.0's `check_model.py`. On `warn` or `unknown`, do not ask the caller anything and do not stop — add one line under `### Coverage` in Part 2 naming the model and continue the audit.
-   - **Source preflight: MCP check only.** Skip `preflight.py` (no Step 11 export runs here), but do Step 0's MCP-tool check — Pass 3C needs ndlaw's `detect_overruled_in_draft`. A missing server is one line under `### Coverage`, never a stop.
-
-2. **Run inline.** Execute all selected passes inline in this context (as in Web mode) — do **not** delegate to Task subagents. The caller has already spawned you as a subagent. For passes whose detailed instructions live in `references/pass-instructions/` (Pass 1, Pass 4, Pass 6), Read the matching file and apply it inline.
-
-3. **Pass selection** — the caller supplies the list. The standard audit-mode selection is **passes 1, 2, 3C, 4, 5, 6**, with these adjustments:
-   - **Skip Pass 3A and Pass 3B** (Bluebook format + substantive citation verification). The caller owns citation verification separately; running it here duplicates work and can produce divergent tallies.
-   - **Keep Pass 3C** (negative-treatment / overruling scan via `detect_overruled_in_draft`). It is additive and cheap.
-   - **Pass 4** (fact-check) and **Pass 6** (brief-matching): run both. **Reuse the caller's existing `<file>.txt` extractions** — the caller will pass their paths; do **not** re-run `pdftotext` on PDFs that already have a `.txt`.
-   - **Pass 5** (analytical rigor): run all checks **except Readability Metrics** — skip `readability_metrics.py` entirely (not needed for the caller's internal audience).
-   - **Pass 1** (jurisdictional, memo variant) and **Pass 2** (style/grammar): run normally, inline.
-   - Pass 7 is N/A (memo).
-
-4. **Return contract** — return exactly two parts, in this order, and nothing else:
-
-   **Part 1 — Mechanical edits (JSON).** A fenced ` ```json ` block containing an array of *style/grammar* edits only — the direct `replace` edits from Pass 2. Each entry:
-   ```json
-   { "type": "replace", "para": 7, "old": "<shortest span unique within its paragraph>", "new": "<replacement>", "comment": "<optional — rule, e.g. Redbook §11.3; omit when the diff is self-evident>", "source_pass": "style" }
-   ```
-   Keep `old` as short as it can be while remaining unique in its paragraph — the redline deletes and reinserts exactly that span. Omit `comment` for edits whose rationale the diff already shows.
-   Include here **only** safe, mechanical Pass 2 replacements. Do **not** put analytical rewrites, restructuring proposals, or anything from Passes 1/3C/4/5/6 in this block. If a Pass 2 item is better expressed as a note than a direct substitution, route it to Part 2 instead.
-
-   **Part 2 — Substantive Concerns (markdown).** Everything that needs human (caller) judgment, grouped under these headings (omit a heading if it has no findings):
-   - `### Jurisdiction` — Pass 1 findings/warnings.
-   - `### Fact-Check` — Pass 4 discrepancy table (`¶ | Claim | Source | Result | Notes`).
-   - `### Brief Coverage` — Pass 6 table (`¶ | Argument | Party | Brief Source | Addressed | Notes`). This is the table the caller mines for omitted-argument remediation, so keep the `Party`, `Brief Source` (page range), and `Addressed` (Yes/Partial/No) columns precise.
-   - `### Analytical Rigor` — Pass 5 findings (internal consistency, standard-of-review application, memo checks: issue completeness, balance/steelman, recommendation support, analytical gaps). No readability section.
-   - `### Negative Treatment` — Pass 3C flagged cases (advisory; "verify").
-   - `### Style Notes` — any Pass 2 `comment`-type items not suitable as direct edits.
-   - `### Coverage` — any source PDF not fully ingested (`not-ingested` or `OCR-low-confidence`): file, reason, and affected passes (4/6). Omit the heading if all inputs were fully ingested.
-
-   End Part 2 with a one-line summary: `Audit: N mechanical edits | brief gaps: A not-addressed, B partial | F fact discrepancies | T treatment flags | coverage: K of M inputs ingested`.
-
-The standard CLI/Web workflow, output documents, and Step 12 summary do not apply in audit mode — Parts 1 and 2 above are the entire deliverable.
+Another skill (e.g., jetmemo) may invoke jetredline to audit a memo it generated and return findings inline. When the caller's prompt says **audit mode**, Read `references/audit-mode.md` (in this skill's directory) before anything else. It fixes `DOC_TYPE = memo`, writes no files, runs the selected passes inline, and replaces the output documents and Step 12 with a two-part return contract. Everything it does not override is unchanged.
 
 ## Environment Detection
 
 Determine your runtime environment from available capabilities:
 
-- **CLI mode**: You have access to the Bash, Task, TaskOutput, and AskUserQuestion tools, and can read/write the local file system. Follow the full workflow as written.
-- **Web mode**: You are running in Claude Projects or a similar web environment without access to Bash, Task, or file system tools. Follow the **Web mode** fallbacks noted throughout this document.
+- **CLI mode**: You have the Bash, Agent, and AskUserQuestion tools and can read/write the local file system. Follow the full workflow as written.
+- **Web mode**: You are running in Claude Projects or a similar web environment without Bash, subagents, or file system tools. Follow the **Web mode** fallbacks noted throughout this document.
 
 Do not ask the user which mode to use — sense it from your available tools.
 
-## Python Environment (Bootstrap)
+## Environment Setup (CLI mode only)
 
-**Web mode:** skip — CLI only.
+**Web mode:** skip to Workflow.
 
-At the start of each CLI session, run the bootstrap script once with any
-system Python (`python3`, or `python` on Windows/PowerShell):
+`${CLAUDE_SKILL_DIR}` here and throughout is replaced by the harness with this skill's absolute directory before you read this file (the "Base directory for this skill:" line at the top carries the same value); the commands you see contain a literal path. Keep paths double-quoted — on Windows the directory may contain spaces. Full detail — the venv tiers, docx-plugin discovery, Node, the resource table — is in `references/environment-setup.md`; Read it when a step below fails or when the new-.docx creation path (Step 9 alternative) applies.
 
-```bash
-python3 "${CLAUDE_SKILL_DIR}/bootstrap_env.py"
-```
+1. **Python.** Run the bootstrap once, on any system Python (`python3`, or `python` on Windows):
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/bootstrap_env.py"
+   ```
+   It prints `VENV_PYTHON=<absolute path>`. **Capture that path as a literal string** and use it wherever `$VENV_PYTHON` appears below (no command substitution). It finds or builds the venv in every install layout and is idempotent. If it exits 1, fall back to `python3 -m venv /tmp/jetredline-venv` plus `pip install -r "${CLAUDE_SKILL_DIR}/requirements.txt"` and use that python the same way.
 
-(`${CLAUDE_SKILL_DIR}` here and throughout is replaced by the harness with
-this skill's absolute directory before you read this file; the commands you
-see contain a literal path. Keep paths double-quoted — on Windows the
-substituted path may contain spaces.)
+2. **Skill directory.** `SKILL_DIR="${CLAUDE_SKILL_DIR}"`. If that directory does not exist (substitution failed), probe `$HOME/.claude/skills/jetredline`, then `/mnt/.skills/skills/jetredline`. Where a reference file writes `$SKILL_DIR`, substitute this literal.
 
-The script finds or builds the skill's virtual environment and prints one line:
+3. **Temp directory** (Step 0): create one uniquely named directory and capture its absolute path as the literal `<TMPDIR>` for every later command — never `$(pwd)`:
+   ```bash
+   if [[ "$(pwd)" == /mnt/* ]]; then TMPBASE="/tmp"; else TMPBASE="$(pwd)"; fi
+   python3 -c "import uuid,os,sys; d=os.path.join(sys.argv[1],'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)" "$TMPBASE"
+   ```
 
-```
-VENV_PYTHON=<absolute path>
-```
-
-**Capture that path as a literal string** and use it in place of
-`$VENV_PYTHON` in every Python command below (same pattern as `TMPDIR`; no
-command substitution). It works in every install layout: a prebuilt `.venv`
-inside the skill directory (used and, if a package is missing, repaired in
-place), else a cached venv at `~/.cache/jet-skills/jetredline/<version>/`
-(built on first use), else a temp-dir venv (read-only home, e.g. Cowork).
-Packages provided: `defusedxml`, `httpx[socks]`, `pdfplumber`, `pypdf`,
-`textstat`. Never create a venv in the working directory.
-
-The script is idempotent and cheap after the first run. If it fails outright
-(exit 1 — no writable location or no network for the first build), fall back
-to manual creation and use its python the same way:
-
-```bash
-python3 -m venv /tmp/jetredline-venv
-/tmp/jetredline-venv/bin/pip install -r "${CLAUDE_SKILL_DIR}/requirements.txt" -q
-```
-
-**Environment variable syntax** differs by shell:
-- Bash (macOS/Linux/Git Bash): `VAR=val command`
-- PowerShell (Windows): `$env:VAR='val'; command`
-
-## Keep Commands Permission-Matchable
-
-**CLI mode only** (no Bash in Web mode). Permission allowlists match on a
-command's **first token**. A run that ignores this generates a permission
-prompt per call — dozens across a full pass suite, most of them for reading a
-file the user already told the skill to read. Every rule below applies to
-**delegated subagents too**; the pass-instruction files repeat it, and a
-paraphrased delegation prompt must carry it as well.
-
-- **Never `cd`.** `cd dir && cmd` makes the first token `cd`, so the rule
-  written for `cmd` never matches. Pass absolute paths to the command instead,
-  or use its own `-C` / `--directory` flag. This also removes the working-
-  directory coupling that breaks when a later call runs from somewhere else.
-- **Never prefix a command with variable assignments.** `TMPDIR=… $PY script.py`
-  and `SP="…"; …` both make the first token an assignment, which no rule can
-  match. Write the value into the argument directly. (The one exception is the
-  docx-plugin creation path, which genuinely needs `PYTHONPATH`; it is rare and
-  documented as such.)
-- **Invoke the venv python by the exact path `bootstrap_env.py` printed**, with
-  no `$VENV_PYTHON` indirection at the shell level — substitute the literal
-  string. The script deliberately prints the path spelling the caller invoked
-  it by (the skill directory as given, not its symlink target) so that one
-  allowlist entry covers every call.
-- **Prefer a shipped helper to an ad-hoc script.** Writing a one-off `.py` into
-  the scratchpad and running it produces a unique, unmatchable command every
-  time. `pdf_page_grep.py` covers the common "find this string and report its
-  page" need; reach for it before writing your own.
-- **Quote paths containing spaces**, and always write absolute paths in full —
-  `~` and `$HOME` are not expanded during matching, so they classify as
-  runtime-determined and prompt even when the equivalent absolute path is
-  allowlisted.
-
-Portability: none of this depends on the platform. In Cowork the skill sits at
-a real path under `/mnt/.skills` and the scratchpad is under `/tmp`; the same
-"absolute paths, no `cd`, no assignment prefixes" discipline produces matchable
-commands there and in Claude Code alike.
-
-## Skill and Docx Plugin Path Discovery
-
-**Web mode:** Skip this section and the Node.js Environment and Temporary Files sections (and the Python bootstrap above) — they apply only in CLI mode. Proceed to Workflow.
-
-The skill directory is `${CLAUDE_SKILL_DIR}` — the harness substitutes the
-absolute path (standalone install, plugin cache, or Cowork mount alike), and
-the "Base directory for this skill:" line at the top of this document carries
-the same value. Set it once, with probes as a fallback in case substitution
-ever fails (an unsubstituted placeholder expands to an empty string):
-
-```bash
-SKILL_DIR="${CLAUDE_SKILL_DIR}"
-if [ ! -d "$SKILL_DIR" ]; then
-  if [ -d "$HOME/.claude/skills/jetredline" ]; then
-    SKILL_DIR="$HOME/.claude/skills/jetredline"
-  elif [ -d "/mnt/.skills/skills/jetredline" ]; then
-    SKILL_DIR="/mnt/.skills/skills/jetredline"
-  fi
-fi
-```
-
-**Docx plugin (conditional — usually not needed).** Reading a .docx draft uses `extract_text.py` and applying edits uses `apply_edits.py`; both operate directly on the .docx ZIP and need no plugin. The docx plugin is required **only** when creating a new .docx from scratch (plain-text/markdown input plus tracked-changes .docx output — the Step 9 alternative path). Run this discovery (and Step 2's docx-skill read) only when that path applies. The plugin has different directory structures in Claude Code vs. Cowork:
-
-```bash
-# Detect docx plugin location and layout (new-.docx creation path only)
-if [ -d "/mnt/.skills/skills/docx" ]; then
-  DOCX_SKILL="/mnt/.skills/skills/docx"
-  UNPACK_SCRIPT="$DOCX_SKILL/scripts/office/unpack.py"
-  PACK_SCRIPT="$DOCX_SKILL/scripts/office/pack.py"
-elif [ -d "$HOME/.claude/plugins/marketplaces/anthropic-agent-skills/skills/docx" ]; then
-  DOCX_SKILL="$HOME/.claude/plugins/marketplaces/anthropic-agent-skills/skills/docx"
-  UNPACK_SCRIPT="$DOCX_SKILL/scripts/office/unpack.py"
-  PACK_SCRIPT="$DOCX_SKILL/scripts/office/pack.py"
-else
-  # Claude Code plugin cache (hash may vary)
-  DOCX_SKILL=$(ls -d "$HOME/.claude/plugins/cache/anthropic-agent-skills/document-skills"/*/skills/docx 2>/dev/null | head -1)
-  UNPACK_SCRIPT="$DOCX_SKILL/ooxml/scripts/unpack.py"
-  PACK_SCRIPT="$DOCX_SKILL/ooxml/scripts/pack.py"
-fi
-```
-
-Use `$SKILL_DIR` in all subsequent commands; `$DOCX_SKILL`, `$UNPACK_SCRIPT`, and `$PACK_SCRIPT` exist only when the creation-path discovery above was run.
-
-| Resource | Path |
-|----------|------|
-| This skill | `$SKILL_DIR` |
-| Docx skill | `$DOCX_SKILL` (conditional — new-.docx creation only) |
-| Venv python | `$VENV_PYTHON` (from `bootstrap_env.py` — see Python Environment above) |
-| Text extraction | `$SKILL_DIR/extract_text.py` |
-| splitmarks | `$SKILL_DIR/splitmarks.py` |
-| Node modules | `$NODE_PATH` (from `bootstrap_env.py --node` — new-.docx creation only) |
-| ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
-| Citation checker | `$SKILL_DIR/cite_check.py` |
-| Readability metrics | `$SKILL_DIR/readability_metrics.py` |
-| PDF page grep | `$SKILL_DIR/pdf_page_grep.py` |
-| Voice-file search | `$SKILL_DIR/voice_search.py` |
-| Text-layer quality | `$SKILL_DIR/textquality.py` |
-| Supplied-source PDFs | `$SKILL_DIR/pdfsource.py` |
-| Authority matching | `$SKILL_DIR/authorities.py` |
-| Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
-| OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
-| OOXML validate | `$SKILL_DIR/ooxml_validate.py <file.docx>` — run it on the tracked-changes .docx after Step 9; exit 1 with diagnostic JSON means Word would call the file unreadable |
-| Citation review | `$SKILL_DIR/cite_review.py` |
-| Analysis report HTML | `$SKILL_DIR/analysis_to_html.py` |
-| Batch edit helper | `$SKILL_DIR/apply_edits.py` |
-
-The opinions directory contains markdown copies of published ND Supreme Court opinions organized as `<year>/<year>ND<number>.md` (e.g., `2022/2022ND210.md` for *Feickert v. Feickert*, 2022 ND 210). Paragraphs are marked `[¶N]`. Use `$OPINIONS_MD` in commands; fall back to the hardcoded path if the variable is unset.
-
-The `~/refs/` directory contains a local repository of legal materials in markdown format: opinions (`opin/{reporter}/`), statutes (`statute/NDCC/`, `statute/USC/`), constitutions (`cnst/ND/`, `cnst/US/`), regulations (`reg/NDAC/`, `reg/CFR/`), and court rules (`rule/{set}/`). The citation checker resolves these paths automatically via jetcite.
-
-## Temporary Files
-
-**CRITICAL:** In Step 0, create a uniquely-named temp directory and capture its **absolute path** as a literal string. Use that literal path (no command substitution) in all subsequent `TMPDIR=` prefixes.
-
-**Step 0 temp-dir setup (run once):**
-```bash
-# Use /tmp if cwd is under a restricted mount (Cowork), otherwise use cwd
-if [[ "$(pwd)" == /mnt/* ]]; then
-  TMPBASE="/tmp"
-else
-  TMPBASE="$(pwd)"
-fi
-python3 -c "import uuid,os,sys; d=os.path.join(sys.argv[1],'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)" "$TMPBASE"
-```
-This generates a UUID-based unique directory name (e.g., `.tmp-a1b2c3d4e5f6`), preventing collisions between concurrent sessions. Uses `python3` directly — no shell command substitution needed. In Cowork, temp files go to `/tmp/` to avoid permission issues on mounted filesystems.
-
-**Capture the output** (the absolute path printed by `echo`) and use it as a literal string in all subsequent commands. For example, if the output is `/path/to/cases/smith/.tmp-a1b2c3d4e5f6`, then every later command uses:
-```
-TMPDIR=/path/to/cases/smith/.tmp-a1b2c3d4e5f6
-```
-**Never** use `TMPDIR="$(pwd)/.tmp"` — the command substitution triggers unnecessary permission prompts on every invocation.
-
-## Node.js Environment
-
-Needed **only** for the new-.docx creation path (Step 9 alternative). The `docx` npm package is either bundled in this skill's directory or installed once into the user cache by the bootstrap script:
-
-```bash
-python3 "${CLAUDE_SKILL_DIR}/bootstrap_env.py" --node
-```
-
-Capture the printed `NODE_PATH=<path>` value as a literal (alongside the `VENV_PYTHON=` line). `NODE_PATH=NONE` means npm is unavailable — the docx-creation path is then off the table; note it and continue with the direct-edit path. Never run `npm install` yourself; the script handles it.
-
-When running Node scripts that use `docx`, set `NODE_PATH` to the captured value:
-```bash
-NODE_PATH=<captured NODE_PATH> node script.js
-```
-
-When running docx skill scripts (new-.docx creation path only; always include TMPDIR — use the literal absolute path from Step 0):
-```bash
-TMPDIR=<TMPDIR> PYTHONPATH=$DOCX_SKILL $VENV_PYTHON script.py
-```
-where `<TMPDIR>` is the literal path captured in Step 0 (e.g., `/path/to/cases/smith/.tmp-apple-walrus-quilt`).
-
-Note: `apply_edits.py` operates directly on the .docx ZIP archive — pure Python (`zipfile` + `defusedxml`), no unpack/pack pipeline and no external converter.
+**Keep commands permission-matchable** (applies to delegated subagents too — the pass files repeat it). Allowlists match a command's **first token**:
+- Never `cd`; pass absolute paths or use the tool's own `-C` flag.
+- Never prefix a command with variable assignments (`TMPDIR=… cmd`); write the value into the argument. (Sole exception: the docx-plugin creation path's `PYTHONPATH`.)
+- Invoke the venv python by the exact literal path the bootstrap printed, not through `$VENV_PYTHON` at the shell level.
+- Prefer a shipped helper (`pdf_page_grep.py`) to an ad-hoc script.
+- Quote paths with spaces and write absolute paths in full — `~` and `$HOME` do not match allowlists.
 
 ## Workflow
 
@@ -308,14 +99,9 @@ If the user proceeds, carry it forward in exactly two places: one clause in the 
    It probes the public ndlaw server (the Step 11a export backend) and each official-source host jetcite fetches from, prints `PREFLIGHT ok <host>` or `PREFLIGHT warn <host> <kind> -- <what is lost>. <fix>` per host, and ends with `PREFLIGHT_SUMMARY warnings=<n>`. It always exits 0. `blocked` means the egress allowlist refused the host; the line names the entry to add.
 2. **MCP tools** (every mode — only you can see your tool list). Look for an ndlaw server's tools (`lookup_opinion`, `verify_citation`, under any server prefix — `mcp__ndlaw__`, `mcp__claude_ai_ndlaw__`, or another) and CourtListener's (`search`, `call_endpoint` under a `CourtListener` prefix). A server that exposes only `authenticate` / `complete_authentication` is **not** connected. Missing ndlaw → warn: "ndlaw MCP is not connected. ND citations and quotations will be verified through CourtListener and the web; treatment checks and pinpoint verification will be weaker." Missing CourtListener → warn: "CourtListener MCP is not connected. Federal and out-of-state citations will be web-verified only."
 
-**A warning never stops the run.** Carry each one forward in exactly three places: one line in the Step 0.6 announcement, the **⚠ Sources Out of Reach** section of the analysis document, and the Step 12 summary. When both checks come back clean, say nothing about them. (Audit mode runs only the MCP check; see the audit-mode rules at the top.)
+**A warning never stops the run.** Carry each one forward in exactly three places: one line in the Step 0.6 announcement, the **⚠ Sources Out of Reach** section of the analysis document, and the Step 12 summary. When both checks come back clean, say nothing about them. (Audit mode runs only the MCP check.)
 
-**First, create the temp directory** with a unique random name:
-```bash
-if [[ "$(pwd)" == /mnt/* ]]; then TMPBASE="/tmp"; else TMPBASE="$(pwd)"; fi
-python3 -c "import uuid,os,sys; d=os.path.join(sys.argv[1],'.tmp-'+str(uuid.uuid4())[:12]); os.makedirs(d,exist_ok=True); print(d)" "$TMPBASE"
-```
-**Capture the absolute path** printed by this command (e.g., `/path/to/cases/smith/.tmp-a1b2c3d4e5f6`). Use this literal path as `TMPDIR=<path>` in all subsequent commands — never use `$(pwd)` or other command substitution for TMPDIR.
+**Create the temp directory** (Environment Setup, item 3) and capture its literal path.
 
 Then scan the current working directory for:
 - **`.docx` files** — potential draft opinions, memos, or dissents
@@ -326,79 +112,21 @@ If **exactly one `.pdf`** is found, use it as the record/briefs packet for fact-
 If **more than one `.docx`** or **more than one `.pdf`** is found, ask the user which file(s) to use and their roles (e.g., majority opinion, dissent, bench memo, briefs packet, supporting reference).
 If **no `.docx`** is found, ask the user to provide the document text.
 
-**Preparing PDF packets (do not read into main context):** PDF source materials are used only by the Pass 4 fact-checking subagent. In Step 0, identify and prepare the files but **do not read their contents**.
+**Preparing PDF packets (do not read into main context).** PDFs are for the Pass 4 and Pass 6 subagents; identify and prepare them here, never read their contents. The full procedure — splitting, the poppler fallback for packets pypdf cannot open, text-layer triage, and the OCR recovery ladder — is `references/pdf-ingestion.md`; Read it whenever a PDF is over 10 MB, `textquality.py` reports anything but `text-ok`, or a tool below is missing. The short form:
 
-For PDF files **> 10 MB**, use `splitmarks` to split the PDF at its top-level bookmarks into individual documents:
-```bash
-# Preview what bookmarks exist
-$VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" packet.pdf --dry-run -vv
+- **Over 10 MB:** split at top-level bookmarks, then split any output still over 10 MB (record bundles) into a subdirectory:
+  ```bash
+  $VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" packet.pdf -o split_output -v --check-text
+  ```
+  `--check-text` warns on stderr about image-scanned outputs (needs `pdftotext`; its silence without poppler proves nothing). Record items must be named `R<N> - <Title>.pdf` — that is what `cite_review.py --record-dir` globs for, and page *N* of the extract must equal page *N* of the record item.
+- **Every PDF a subagent will read:** triage its text layer:
+  ```bash
+  $VENV_PYTHON "${CLAUDE_SKILL_DIR}/textquality.py" <file>.pdf [<file>.pdf ...]
+  ```
+  `text-ok` passes through. `no-text-layer` → `ocrmypdf --skip-text`; `text-layer-corrupt` → `ocrmypdf --force-ocr` (**never** `--skip-text` on a corrupt layer — it exits 0 and changes nothing). Persist `<file>.ocr.pdf` beside the original and re-run `textquality.py` on it; still corrupt = **OCR-low-confidence**. The reference has the full ladder (pdftoppm + tesseract, Read-as-images, not-ingested) and the fallback signals when `textquality.py` cannot run.
+- **An unreadable input is a coverage failure (Step 11), never a silent skip.** Pass each file's path and ingestion outcome (`ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method) to the Pass 4 and Pass 6 subagents, which report it back.
 
-# Split into individual files in an output directory, flagging image-scanned output
-$VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" packet.pdf -o split_output -v --check-text
-```
-
-`--check-text` runs `pdftotext` over each output file and prints a `WARNING: <file> … appears image-scanned` line to stderr for anything under ~50 chars/page, naming the file and suggesting `ocrmypdf`. **Read those warnings — they tell you which files need the OCR ladder below before any subagent touches them.** The flag needs `pdftotext` on `PATH`; without poppler it degrades to "can't check," so its silence is not proof of a text layer.
-
-**Recursive split:** After the initial split, check the resulting files. If any single file is still **> 10 MB** (typically a record bundle containing many individual record items), split it again into a subdirectory:
-```bash
-$VENV_PYTHON "${CLAUDE_SKILL_DIR}/splitmarks.py" split_output/Record-Bundle.pdf -o split_output/record_items -v --check-text
-```
-This produces individual record-item files (e.g., `R1-Application.pdf`, `R58-Amended-Petition.pdf`) that can be targeted efficiently during fact-checking.
-
-**If `splitmarks` (or any pypdf/qpdf step) refuses the file, fall back to poppler.** Record packets above 2 GB routinely carry a cross-reference offset that overflows a signed 32-bit integer. pypdf raises `ValueError: negative seek value`, and `qpdf` fails its reconstruction with `root of pages tree has no /Kids array` — but poppler reads the same file without complaint. Extract the page range you need and reassemble:
-
-```bash
-pdfseparate -f <first> -l <last> "<packet>.pdf" "<TMPDIR>/pg-%d.pdf"
-pdfunite $(ls -v "<TMPDIR>"/pg-*.pdf) "<outdir>/R<N> - <Title>.pdf"
-```
-
-Scanned record pages are large; compress the result before it is embedded anywhere, and confirm the text layer survived:
-
-```bash
-gs -sDEVICE=pdfwrite -dCompatibilityLevel=1.5 -dPDFSETTINGS=/ebook \
-   -dNOPAUSE -dQUIET -dBATCH -dDetectDuplicateImages=true \
-   -sOutputFile=<small>.pdf <big>.pdf
-pdftotext -f 1 -l 1 <small>.pdf -    # text still there?
-```
-
-An 85-page findings order went from 70 MB to 3.3 MB this way with its text layer intact. Note the naming: `R<N> - <Title>.pdf` is what `cite_review.py --record-dir` globs for, and page *N* of the extract should equal page *N* of the record item so pin cites land.
-
-**Image-scanned / image-only PDFs (detection + OCR recovery):** Court e-filing systems (e.g., C-Track) routinely produce raster-scanned briefs with no text layer at all. **Detect and recover such files — do not skip them.** A brief the court never read is not a footnote; treat an unreadable input as a coverage failure (Step 11), not a stall.
-
-`splitmarks --check-text` flags split *outputs* proactively (above). It does **not** cover PDFs that were never split — anything ≤ 10 MB that went straight to a subagent — so run the detection signals below on those, and use them as a backstop whenever `--check-text` was unavailable or silent.
-
-**Detection — run `textquality.py`, which decides all three cases at once:**
-
-```bash
-$VENV_PYTHON "/Users/jerod/.claude/skills/jetredline/textquality.py" <file>.pdf [<file>.pdf ...]
-```
-
-It classifies each file as **`text-ok`**, **`no-text-layer`**, or **`text-layer-corrupt`**, and prints the exact `ocrmypdf` command to run. Exit status is 1 if any file is corrupt. `--json` for machine use, `--quiet` to list only files needing work.
-
-> **Why a third state matters.** A missing text layer and a *corrupt* one need different flags, and telling them apart by character count is impossible. A scanned nineteenth-century source extracted at **5,390 characters per page** — a hundred times any density threshold — and every one of those pages read like `"the assessmellt thereof shall Le suberdmate to the gelleral plall"` Dense, confident, and wrong. Because a layer existed, `--skip-text` skipped all of it and reported success; the verification that relied on it looked clean. Density alone cannot see this. `textquality.py` scores letter-sequence plausibility instead (internal case flips, vowelless tokens, impossible consonant runs), which separated corrupt from clean by more than tenfold across a measured corpus of briefs, book scans, and law-review PDFs.
-
-Fallback signals if `textquality.py` cannot run (both tools optional — degrade, don't error):
-- `pdffonts <file>.pdf` reports **zero embedded fonts** (near-certain image-only).
-- After `pdftotext`, output stripped of form-feeds/whitespace has **< ~50 characters per page**. This catches image-only files **but never catches a corrupt layer** — do not treat a pass here as proof the text is usable. If `pdftotext` is absent entirely, go straight to the Read-as-images rung; if that is also unavailable, mark the file `not-ingested`.
-
-**OCR recovery ladder (CLI mode — escalate in order, stop at first success):**
-1. Probe tooling once and branch on what exists: `command -v pdffonts pdftotext ocrmypdf pdftoppm tesseract`. `pdffonts`/`pdftotext`/`pdftoppm` ship together in poppler (present or absent as a set); `ocrmypdf` and `tesseract` are separate. A missing tool just disables its rung — never a hard failure.
-2. **Preferred — ocrmypdf**, with the flag `textquality.py` selected:
-   - `no-text-layer` → `ocrmypdf --skip-text --quiet <file>.pdf <file>.ocr.pdf`
-   - `text-layer-corrupt` → `ocrmypdf --force-ocr --quiet <file>.pdf <file>.ocr.pdf`
-
-   Then `pdftotext <file>.ocr.pdf <file>.txt`. **Persist `<file>.ocr.pdf`** next to the original so re-runs need no re-OCR.
-
-   **Never use `--skip-text` on a corrupt layer.** It skips every page that already carries text, so it exits 0, writes an output file, and changes nothing. That failure is silent and it produces unverified text wearing a verified label. `--force-ocr` rasterizes and re-recognizes unconditionally, which is what a corrupt layer requires.
-3. **Fallback — pdftoppm + tesseract:** if `ocrmypdf` is unavailable, `pdftoppm -r 300 -png <file>.pdf <TMPDIR>/page` then `tesseract` each page, concatenating output to `<file>.txt`. Note the limit of this rung: the `.txt` feeds the subagents, but nothing downstream rewrites the PDF, so the Step 11b review page still embeds the original file with its corrupt text layer — quote highlighting will miss on those items even though the fact-check itself used the recovered text. Say so in the analysis document's coverage section when it happens.
-4. **Last resort — Read-as-images:** if no OCR binary is present, read the PDF directly with the Read tool (renders pages as images).
-5. **None available** (e.g., a Cowork/VM split with no OCR binaries and no Read access): record the file as **not ingested** — surface it, never silently skip.
-
-**OCR quality check:** after recovery, re-run `textquality.py` on the `.ocr.pdf`. If it still reports `text-layer-corrupt`, or the text does not read as coherent legal prose, mark the file **OCR-low-confidence**. For coverage purposes (Step 11) this counts as *not fully ingested*, the same as not-ingested. Re-scoring is the check — an OCR pass that ran without error is not evidence that it worked.
-
-Pass the resulting file paths — and each file's ingestion outcome (`ingested-text` / `OCR-recovered` / `OCR-low-confidence` / `image-read` / `not-ingested`, plus the method used) — to the fact-checking and brief-matching subagents, which must report it back (see Pass 4 / Pass 6) so the main context can reconcile coverage in Step 11.
-
-**Web mode (no Bash):** None of the shell tools above run. The Read tool renders a PDF's pages as images regardless of any text layer, so an image-only file is normally still readable — read it directly. The detection signals and OCR ladder do not apply. Only if the Read tool itself cannot render a file (corrupt, or too large to load) does it become `not-ingested`; track that outcome inline and feed it to Step 11 the same way (there are no subagents in web mode, so you hold the ingestion outcomes yourself).
+**Web mode (no Bash):** the Read tool renders PDF pages as images regardless of text layer, so read files directly. Only a file Read cannot render is `not-ingested`; you hold the outcomes yourself for Step 11.
 
 ### Step 0.1: Determine Document Type
 
@@ -492,17 +220,18 @@ for f in "$PWD/my-writing-voice.md" "$HOME/.claude/my-writing-voice.md"; do [ -f
 
 **Search patterns.** A rule may carry a `Search:` line with a regex. After Step 3 produces the draft text, run them deterministically whenever `VOICE_FILE` is set (full or flags-only), and pass the output to Pass 2:
 ```bash
-$VENV_PYTHON $SKILL_DIR/voice_search.py --json <VOICE_FILE> <opinion_md_path> > <TMPDIR>/voice_hits.json
+$VENV_PYTHON "${CLAUDE_SKILL_DIR}/voice_search.py" --json <VOICE_FILE> <opinion_md_path> > <TMPDIR>/voice_hits.json
 ```
 Exit 1 means no hits (pass nothing); exit 2 means a bad pattern or unreadable file. Report that to the user and continue without hits. Each hit is a candidate for Pass 2 to judge, not a finding.
 
-### Steps 1–10: Core Workflow
+### Steps 1–12: Core Workflow
+
 1. Read `references/style-guide.md`. If `VOICE_FILE` is set (Step 0.7), also Read it.
-2. **Docx skill (conditional — usually skip).** Only when the draft is *not* a .docx **and** a tracked-changes .docx will be produced (Step 9 must create one from scratch): run the docx-plugin discovery above, then Read `SKILL.md` from `$DOCX_SKILL` (and `ooxml.md` if it exists as a separate file; **do not** read `docx-js.md`, `document.py`, or other files). When the draft **is** a .docx, skip all of this — `extract_text.py` and `apply_edits.py` are self-contained.
+2. **Docx skill (conditional — usually skip).** Only when the draft is *not* a .docx **and** a tracked-changes .docx will be produced (Step 9 must create one from scratch): run the docx-plugin discovery in `references/environment-setup.md` and Read the docx skill as it directs. When the draft **is** a .docx, skip all of this — `extract_text.py` and `apply_edits.py` are self-contained.
 3. Read the draft opinion. **If the draft is a .docx**, first extract its text deterministically (zero model tokens — never transcribe a .docx by hand and never read raw OOXML into context):
-```bash
-$VENV_PYTHON $SKILL_DIR/extract_text.py --input <draft.docx> --output <TMPDIR>/<stem>.md
-```
+   ```bash
+   $VENV_PYTHON "${CLAUDE_SKILL_DIR}/extract_text.py" --input <draft.docx> --output <TMPDIR>/<stem>.md
+   ```
    Then Read the generated markdown — it is the `<opinion_md_path>` used by Pass 3 and Step 11. The script preserves literal ¶ markers, reconstructs Word automatic paragraph numbering (including style-based numbering like the chambers template's MainBody `[¶N]`), extracts footnotes as `[^N]` references, and resolves any existing tracked changes to the as-accepted view; its stderr summary reports those counts — if the input already carries tracked changes, mention that to the user. For pasted text or a markdown file, read it directly. **Count paragraphs** (¶ markers or logical paragraphs) to determine opinion length.
 4. **Delegate Pass 1** (jurisdictional check) to a subagent — see Pass 1 below
 5. **Delegate Pass 3** (citation verification) to a subagent — see Pass 3 below
@@ -511,146 +240,56 @@ $VENV_PYTHON $SKILL_DIR/extract_text.py --input <draft.docx> --output <TMPDIR>/<
 6a. **Delegate Pass 6** (brief matching) to a subagent if briefs were identified in Step 0 — see Pass 6 below
 6b. **Delegate Pass 7** (dissent/concurrence cross-check) to a subagent if a dissent or concurrence was identified in Step 0 and `DOC_TYPE == opinion` — see Pass 7 below
 7. **Pass 2 routing:** If the opinion has **more than 30 paragraphs**, delegate Pass 2 to a subagent — see "Delegated Pass 2" below. Otherwise, perform Pass 2 in main context. **Pass 5** (analytical rigor) is always performed in main context. Pass 2 (when not delegated) and Pass 5 can proceed in parallel with subagents.
-8. Collect subagent results from Passes 1, 3, 3D, 4, 6, 7, and (if delegated) Pass 2 — **use the `TaskOutput` tool**, not Bash `tail`
+8. Collect subagent results from Passes 1, 3, 3D, 4, 6, 7, and (if delegated) Pass 2 as each agent's completion is delivered to you — never by tailing files with Bash.
 8a. **Caption mismatches → edits (closed-loop rule).** Check the Pass 3B results table for Caption Check mismatches. Generate a correcting tracked-change edit **only** when the *same* citation resolved to an official caption and the draft's name is a near-match typo of it (high `name_similarity`) — e.g., a comment "Official caption per 2023 ND 219: 'Tracey v. Tracey'". **Never** harmonize names across two *different* citations (different cite = presumptively different case), and do not auto-correct low-similarity or unresolved names — add a comment for human review instead. Include qualifying edits in the edits JSON alongside Pass 2/3A/5 edits. Likewise apply the **parallel-cite corrections** flagged by Pass 3B's parallel-cite check — add a missing N.W.2d/N.W.3d parallel to a *full* cite, or fix a wrong one, using the `formatted` value from ndlaw.
 8b. **Treatment flags → comments.** If the Pass 3C overruling scan flagged any cited case for possible negative treatment, add a *comment* (not an edit) on each occurrence, quoting the citing context, for human review. Never auto-edit on a treatment signal.
-9. **If user requested tracked-changes .docx** (both or tracked-changes only): Produce tracked-changes .docx output using the batch edit workflow (see Step 9 details below)
-10. **If user requested analysis document** (both or analysis only): Produce the companion analysis document (incorporating all subagent results). If also producing .docx, create both outputs in the same response
-10a. **Stamp a provenance footer on the analysis document** (CLI mode, after it is written to `<stem>-ANALYSIS.md`). This records which Claude model and which jetredline version generated the analysis, and on what date, for later validation and comparison as the model and skill change:
-```bash
-python3 "${CLAUDE_SKILL_DIR}/provenance.py" --file <stem>-ANALYSIS.md --subagents
-```
-Footer, e.g.: *Report generated by Claude Opus 4.8 (claude-opus-4-8) using jetredline v4.4.0 on 2026-06-05. AI-generated first draft for internal use; verify all citations and findings before relying.* Model, version, and date are all sourced deterministically by the script — version from frontmatter/`VERSION`, date from the system clock, and the model from this session's transcript (the same place the per-pass rows below come from). **Do not pass `--model`**, and do not hand-type the model anywhere in the report: your own recollection of which model you are is exactly the self-report a validation record must not rest on. If the script exits 2 because no transcript is readable, then and only then re-run it with `--model "<friendly name> (<exact id>)"` using the id Step 0.0 resolved. The stamp is idempotent. **Stamp only the analysis document — never the tracked-changes `.docx`, which is the user's own opinion text and must not be altered with a footer.** In **audit mode** (no files written) and **web mode** (analysis returned inline, no filesystem), skip the script; in web mode you may append the same footer line manually as the report's last line.
+9. **If a tracked-changes .docx was requested** (both or tracked-changes only), collect every edit — Pass 2 style, Pass 3A format, Pass 5 rigor, Step 8a captions and parallels, Step 8b comments — into `<TMPDIR>/edits.json` and apply them in **one** run against the **original** .docx (never re-run on its own output; if retrying, start from the original again):
+   ```json
+   [{ "type": "replace", "para": 3, "old": "It is well settled that the court", "new": "The court", "comment": "Cut throat-clearing (Redbook § 11.3)" },
+    { "type": "comment", "para": 12, "anchor": "we find that", "comment": "Consider replacing 'we find' — implies independent factfinding under clear-error review" }]
+   ```
+   ```bash
+   $VENV_PYTHON "${CLAUDE_SKILL_DIR}/apply_edits.py" --input <input.docx> --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx>
+   ```
+   `old` is the shortest span unique within its paragraph (the tracked deletion covers exactly `old`); attach `comment` only when a reader might question the change. Parse the JSON summary: report failed edits and any `matches` above 1 (the edit landed on the first of several identical spans). Nonbreaking spaces after `¶`/`§` are **never** tracked edits: count and report them (default) or, only when the user asks, add `--normalize-nbsp` and disclose the `nbsp_normalized` count in Step 12. Then validate with `$VENV_PYTHON "${CLAUDE_SKILL_DIR}/ooxml_validate.py" <output.docx>` (exit 1 = Word would call the file unreadable). Hyperlink edits (on request), the nbsp counting command, and the plain-text-input path (new .docx via the docx skill) are in `references/batch-edit-workflow.md`.
+10. **If an analysis document was requested** (both or analysis only): Read `references/analysis-template.md` and produce the companion analysis document from all pass results, saved as `<original-filename>-ANALYSIS.md` in the working directory. If also producing .docx, create both outputs in the same response.
+10a. **Stamp a provenance footer** on the analysis document (CLI mode) — model, jetredline version, and date, sourced deterministically from the session transcript:
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/provenance.py" --file <stem>-ANALYSIS.md --subagents
+   ```
+   Do **not** pass `--model` and never hand-type the model anywhere in the report; only if the script exits 2 (no transcript readable) re-run with `--model "<friendly name> (<exact id>)"` using the id Step 0.0 resolved. Stamp only the analysis document, never the .docx. `--subagents` adds a per-pass model/token table read from the transcript — it identifies passes by the `references/pass-instructions/passN-*.md` path in each delegation prompt, so keep that path verbatim and give each agent a `description` naming its pass; if the script omits the table, it stays omitted. Skip in audit and web mode (web: append the footer line by hand). Detail in `references/analysis-template.md`.
+10b. **Render the analysis report as HTML** (CLI and Cowork, **always**), after the provenance stamp, never before:
+   ```bash
+   python3 "${CLAUDE_SKILL_DIR}/analysis_to_html.py" <stem>-ANALYSIS.md --check
+   ```
+   Writes `<stem>-ANALYSIS.html` beside the markdown — a single self-contained file, safe to email or hand over in Cowork as-is. Add `--cite-review <stem>-CITE-REVIEW.html` once Step 11b has produced that page. `--check` exits 3 if any source line failed to survive into the page; if so, say so and deliver the markdown alongside — never silently ship a page that dropped content. Re-run after any edit to the markdown (idempotent). Skip only in audit mode and web mode.
+11. **Generate the citation review page** (CLI and Cowork) after Pass 3 completes. Full procedure, fallbacks, and flag semantics: `references/cite-review-workflow.md` — Read it the first time this runs in a session and whenever a step below fails.
 
-`--subagents` adds a table of the delegated passes below that line — the model each subagent actually ran on and what it consumed:
+    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost):**
+    ```bash
+    $VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" --opinion <opinion_md_path> --refs-dir ~/refs --meta-out <TMPDIR>/sources.json
+    ```
+    It picks its own backend (local `opinions.db`, `NDLAW_URL`, else the public `https://ndlaw.org/mcp` — no credentials; do not hunt for MCP config). Exit 2 = no backend reachable (almost always an egress allowlist missing `ndlaw.org`): fall back to **one scribe subagent** (Agent tool, `model: haiku`) riding the in-context ndlaw MCP tools, as the reference specifies — opinion text never passes through main context. If that is impossible too, fall through, but render **⚠ Authority Text Not Refreshed** in the analysis document and say so in Step 12. Never stall here.
 
-| Pass | Model | Tokens | Tools | Time |
-|---|---|---|---|---|
-| 1 — Jurisdiction | claude-opus-5[1m] | 124.1k | 37 | 4m 48s |
-| 4 — Fact check | claude-opus-5[1m] | 111.4k | 29 | 9m 26s |
-
-The script reads those figures from this session's transcript (located via `$CLAUDE_CODE_SESSION_ID`), identifying each pass by the `references/pass-instructions/passN-*.md` path in its Task prompt — **so keep that path in the delegated prompts verbatim**, and give each agent a `description` naming its pass, which is the fallback label. Only numbers and the model ID cross into the report; no prompt or result text does.
-
-**Tokens is a single total per agent, by necessity.** Background subagents (the default) report completion through a `<task-notification>` carrying one `subagent_tokens` figure with no input/output/cache breakdown, so a wider schema cannot be filled. Synchronous agents still emit the older self-contained record, which the script also reads; those rows show `—` for Model, which that record omits. The table is omitted whenever nothing was delegated (Web mode, inline mode, short opinions run in main context) and whenever the transcript can't be read — the transcript is an undocumented internal format, so a missing table is expected behavior, never an error to chase. Do **not** hand-write this table from your own recollection of the passes; if the script omits it, it stays omitted.
-10b. **Render the analysis report as HTML** (CLI and Cowork, **always** — no need to ask). Run this **after** the provenance stamp, never before: Step 10a appends the footer and the subagent-token table to the markdown, and the HTML is a render of whatever the file holds at that moment.
-```bash
-python3 "${CLAUDE_SKILL_DIR}/analysis_to_html.py" <stem>-ANALYSIS.md --check
-```
-Writes `<stem>-ANALYSIS.html` beside the markdown — a single self-contained file (no sidecar, nothing fetched from the network), safe to email or hand over in Cowork as-is. Add `--cite-review <stem>-CITE-REVIEW.html` once Step 11b has produced that page, so the report links to it. `--check` verifies that every source line survived into the page and exits 3 if any did not; if it reports misses, say so and deliver the markdown alongside — never silently ship a page that dropped content.
-
-The markdown stays the source of truth. If you edit the report afterward, re-run this command — it is idempotent and takes about a second. Skip it only in **audit mode** (no files written) and **web mode** (no filesystem).
-
-11. **Generate citation review HTML** (CLI and Cowork): After Pass 3 completes, generate an interactive citation review page for human verification.
-
-    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost).** Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance named by `NDLAW_URL` + `NDLAW_AUTH` env (or `--url`/`--auth`), else **the public server at `https://ndlaw.org/mcp`**, which needs no credentials. The public default is what makes this step work in Cowork and on any machine without a local corpus; do not go looking for a URL or auth header in MCP config. The script speaks to the server directly, so no opinion text passes through model context.
-```bash
-$VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" \
-  --opinion <opinion_md_path> \
-  --refs-dir ~/refs \
-  --meta-out <TMPDIR>/sources.json
-```
-    Exit 2 means no backend was reachable — almost always an egress allowlist that omits `ndlaw.org` (stderr classifies the failure and names the fix, and the Step 0 preflight should already have warned). **Fall back to a scribe subagent riding the in-context MCP connection** — if ndlaw tools are available:
-
-    1. From the cite JSON, list the corpus-eligible authorities that still lack refs text: case entries (not `pin_cite`, not `is_repeat`) whose `normalized` is an ND neutral cite (`YYYY ND N`) or N.W.-family reporter cite, with `local_exists` false.
-    2. Launch **one** subagent (Task tool, `model: haiku`, subagent_type `general-purpose`) with that list and these instructions: for each citation, call `lookup_opinion(<cite>)` and record `case_name`, `url`, `url_source`, `date_filed`, and `citations`; then page through `get_opinion_text(<cite>, offset=..., limit=50000)` until `has_more` is false and **Write the concatenated text verbatim** (do not summarize, reformat, or strip the frontmatter block) to the refs path: `~/refs/opin/ND/<year>/<year>ND<n>.md` for `YYYY ND N`; `~/refs/opin/NW2d/<vol>/<page>.md` for `V N.W.2d P` (analogously `NW3d`, `NW`). Write `<TMPDIR>/sources.json` **incrementally**: after each `lookup_opinion` call and *before* paging that opinion's text, re-read the file, add entries mapping **every** citation form from `citations` to `{"case_name", "url", "url_source", "date_filed", "via": "ndlaw"}`, and write it back — paging text is the context-expensive step, and metadata held only in memory has been lost to context exhaustion on long lists. Finish by counting the refs files actually on disk (not from memory) and return only that tally ("N exported, M not in corpus") — never opinion text.
-    3. The token cost stays inside the subagent's isolated context (and within the subscription); main context must never page opinion text through its own tool results just to embed it.
-
-    If MCP tools are also unavailable, skip `--sources-meta` below and fall through (never stall on this step) — or, at most, build a minimal `sources.json` from one cheap `lookup_opinion` call per unique ND case (URL + case name only) if a stray connection allows it.
-
-    **Fall through, but never silently.** When neither the corpus nor the MCP connection was reachable, the citation text the review rests on is whatever `~/refs` already held — copies of unrecorded age, which the corpus has since corrected in ways they cannot know about (`opinions.db` carries Westlaw merges and quality-scan fixes that never reach a refs file). Record it: say so in the Step 12 summary, and render the **⚠ Authority Text Not Refreshed** section of the analysis document. A run that could not check its authorities against the corpus must not read as one that did.
-
-    **11b. Generate the page.** Write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndlaw", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "local"}`:
-```bash
-$VENV_PYTHON "${CLAUDE_SKILL_DIR}/cite_review.py" \
-  --opinion <opinion_md_path> \
-  --docx <original_draft.docx> \
-  --refs-dir ~/refs \
-  --title "<case caption>" \
-  --via-json <TMPDIR>/via.json \
-  --sources-meta <TMPDIR>/sources.json \
-  --passages-json <TMPDIR>/passages.json \
-  --facts-json <TMPDIR>/facts.json \
-  --authorities-json <TMPDIR>/authorities.json \
-  --case-dir <working_dir> \
-  --record-dir <record_item_dir> \
-  --resume-state auto \
-  --output <output_dir>/cite-review.html
-```
-Pass `--docx` whenever the draft arrived as a .docx (the same original file Step 3 extracted from) — it recovers italics (case names, *Id.*, signals, added emphasis) and block-quote indentation for the draft pane; omit it for pasted-text or markdown drafts, and rendering degrades gracefully to plain. Omit `--via-json` if Pass 3B did not run or produced no table; omit `--sources-meta` if step 11a exported nothing; omit `--passages-json` if Pass 3B wrote no passages ledger. Omit `--facts-json` if Pass 4 did not run or wrote no facts ledger. Omit `--authorities-json` if Pass 3D did not run or detected no supplied authorities — when present, its entries render in the citations sidebar with a `supplied` badge and lane filter chips (`All · Citations · Authorities · Facts`). `--case-dir` is the working directory holding the case PDFs (pass it because the opinion markdown lives in TMPDIR); a `manifest.json` there is picked up automatically for docket-number and brief-name resolution. **`--record-dir` is mandatory whenever Step 0 split a record** (Pass 4 then cites record items as `R<N>`, and those refs resolve only against that directory of `R<N> - <Type> <Title>.pdf` files) — record cites like "R243" then resolve to embedded PDF viewers opened at the cited page with the evidence quote highlighted. This is a dependency between Step 0's split output and Step 11b's inputs: keep the split directory until the page is generated. The script enforces it — a facts ledger with record-item refs and no `--record-dir` is an error (exit 1), as is a run where fewer than one in five fact refs resolve; between 20% and 80% it warns with the resolution rate. The only way to get a text-only Facts lane is to ask for it with `--no-fact-sources` (unresolved refs then show the ledger's quote, labeled as not re-verified). Brief names in the ledger (`Brief - Appellee`, `Brief of Appellants X & Y`) resolve against the case-dir filenames and the manifest. **`--resume-state auto` picks up a previous review.** It looks in `--case-dir` (else the opinion's directory) for the newest `cite-review-state__<case-id>__<stamp>.json` — the file a reviewer saved there with the page's **Save review** button — and restores their verify/flag/skip marks and notes into the new page, so a re-run continues a review instead of restarting it. Safe to pass always: with no such file it prints one line and builds a fresh page, and a malformed or foreign file warns and is skipped rather than failing the run. Marks are matched by citation text, paragraph, and occurrence — never by character offset, which moves whenever the draft is edited — so anything the draft no longer contains is reported as dropped on stderr rather than reattached to the wrong citation. Report the restore line to the user: it says how many marks came back, how many were re-matched after renumbering, and whether the draft changed since the review. `--link-pdfs` swaps the embedded viewers for zero-copy native iframes if sidecar size is a concern; `--asset-budget <bytes>` is the middle path — identical files already share one viewer, files embed smallest-first under the cap, and only the overflow degrades to links (reported on stderr, never silent).
-
-**The output is two objects, not one.** Unless `--link-pdfs` is used, embedded viewers live in a sibling directory `<stem>_pdfs/` (one PDF.js file per unique source, roughly 1.33× the source bytes), and the HTML's links are relative to it — the page is useless without the sidecar. The completion line reports the sidecar's path, file count, and size. In Cowork or any remote session, where a single file is what gets delivered, add `--bundle <output_dir>/<stem>.zip` and deliver the zip (unzip, open the HTML). If the bundle would exceed the delivery cap, shrink the record extracts first (the `gs` recipe in Step 0 — page counts must survive) and/or set `--asset-budget`; do not drop `--record-dir`.
-
-**Local-PDF authorities.** If a cited authority has no online or refs source but a PDF copy sits in the working directory (an obscure treatise, an out-of-state slip opinion, a session-law scan), add to the step 11a `sources.json` entry for that citation: `"pdf": "<path relative to the working dir>"`, plus optional `"page": N` and `"quote": "<verbatim passage>"`. The review page then offers a "Local PDF" source mode with the same embedded viewer, opened at the page/quote. This produces an HTML page (with its `_pdfs/` sidecar when anything is embedded) that lists **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — highlighting the exact occurrence in the draft pane and showing the cited authority (embedded text scrolled to the pinpoint ¶, or the Pass 3B verification passage) in the source pane. Tell the user the file is available and can be opened in a browser.
-
-**If the opinion is a .docx file:** its text was already extracted in step 3 via `extract_text.py`; apply edits directly to the **original** .docx with `apply_edits.py` (no unpack/pack, no docx plugin).
-
-**Single-session editing.** All tracked changes and comments must be applied in a single `apply_edits.py` execution against the original .docx. Do not run apply_edits.py → edit its output → run it again on that output. Multiple cycles cause ID collisions and orphaned artifacts. If retrying, start fresh from the original .docx.
-
-**If the opinion is plain text or another format:** create a new .docx using the docx skill, with tracked-change markup showing all edits.
-
-#### Step 9 Details: Batch Edit Workflow
-
-**9a. Collect all edits into a JSON file.** Gather Pass 2 edits (style/grammar), Pass 3A edits (citation format), and Pass 5 edits (analytical rigor) into a single JSON array:
-```json
-[
-    {
-        "type": "replace",
-        "para": 3,
-        "old": "It is well settled that the court",
-        "new": "The court",
-        "comment": "Cut throat-clearing (Redbook § 11.3)"
-    },
-    {
-        "type": "replace",
-        "para": 7,
-        "old": "and/or",
-        "new": "or"
-    },
-    {
-        "type": "comment",
-        "para": 12,
-        "anchor": "we find that",
-        "comment": "Consider replacing 'we find' — implies independent factfinding under clear-error review"
-    }
-]
-```
-Write this JSON to `<TMPDIR>/edits.json`.
-
-**Span width.** `old` and `new` are applied literally: the tracked deletion covers exactly `old` and the insertion covers exactly `new`. Use the **shortest span that is unique within its paragraph** — a phrase or clause, not the surrounding sentence — so the strikethrough covers only what actually changed. If `old` turns out to repeat within its paragraph, the first occurrence is edited and the result carries `"matches": N`; lengthen the span and re-run if that picked the wrong one.
-
-**Comments are optional.** Attach `comment` only when a reader might question the change. Omit it when the diff is self-evident (`and/or` → `or`, an added Oxford comma, a cut throat-clearer). Repeated boilerplate comments on mechanical edits make the redline slower to review, not faster.
-
-**9b. Run apply_edits.py** directly on the original .docx (no unpack step):
-```bash
-$VENV_PYTHON $SKILL_DIR/apply_edits.py --input <input.docx> --edits <TMPDIR>/edits.json --author "Claude" --output <output.docx>
-```
-
-**Nonbreaking spaces.** The space after `¶`/`§` should be a nonbreaking space (U+00A0), but this is **never** proposed as a tracked change — a change bar on every citation drowns out the substantive edits. Two dispositions, in order of preference:
-
-1. **Default — report it.** Count the offending spaces in the extracted markdown and note them in the analysis document (see the Analysis document template). The user fixes them in Word with one find/replace.
-2. **On request only — normalize deterministically.** If the user asks for the nonbreaking spaces to be applied, add `--normalize-nbsp` to the 9b command. It rewrites the space after each `¶`/`§` **without tracked changes** (no change bars), leaves struck text alone, and is idempotent. Report the `nbsp_normalized` count from the summary in your Step 12 message — an untracked change must always be disclosed. Never pass this flag unprompted.
-
-To count for disposition 1 (locale-proof — bracket expressions over multibyte characters are unreliable in BSD grep):
-```bash
-$VENV_PYTHON -c "import re,sys; print(len(re.findall(r'[¶§]{1,2} ', open(sys.argv[1]).read())))" <TMPDIR>/<draft>.md
-```
-
-The script operates directly on the .docx ZIP archive — no unpack/pack pipeline, no dependency on the docx plugin. It:
-- Reads document.xml from the original ZIP
-- Applies all tracked changes and comments via DOM manipulation
-- Serializes XML as UTF-8 with `standalone="yes"`
-- Builds the output ZIP preserving original entry metadata
-- Produces files Word opens cleanly (no encoding or ZIP metadata issues)
-
-**9c. Check the output.** Parse the JSON summary from apply_edits.py. If any edits failed, report them. Also check each result for a `matches` count above 1 — that edit landed on the first of several identical spans, so confirm it hit the intended one. If `--normalize-nbsp` was used, note `nbsp_normalized` for the Step 12 disclosure.
-
-**9d. Citation hyperlinks (optional).** When the user asks for clickable / linked citations, add `hyperlink` edits to the same `edits.json` — one per citation, anchored to the citation text, using the verified URL (prefer ndlaw `absolute_url`, else the CourtListener URL, else the `url` from `cite_check.py`):
-```json
-{ "type": "hyperlink", "para": 12, "anchor": "2024 ND 45", "url": "https://www.ndcourts.gov/..." }
-```
-Hyperlinks are a **non-tracked formatting overlay** — they wrap existing text (no tracked change) and are skipped automatically if the anchor is already inside a link or a tracked change. Only link citations that **passed** verification; never link an unverified or flagged cite. Requires .docx output (not available in web/analysis-only mode).
-
-The agent's job is: collect edits into JSON (1 Write call), run one command (1 Bash call).
+    **11b. Generate the page.** Write `<TMPDIR>/via.json` mapping each citation to its Pass 3B **Via** tier, then:
+    ```bash
+    $VENV_PYTHON "${CLAUDE_SKILL_DIR}/cite_review.py" \
+      --opinion <opinion_md_path> \
+      --docx <original_draft.docx> \
+      --refs-dir ~/refs \
+      --title "<case caption>" \
+      --via-json <TMPDIR>/via.json \
+      --sources-meta <TMPDIR>/sources.json \
+      --passages-json <TMPDIR>/passages.json \
+      --facts-json <TMPDIR>/facts.json \
+      --authorities-json <TMPDIR>/authorities.json \
+      --case-dir <working_dir> \
+      --record-dir <record_item_dir> \
+      --resume-state auto \
+      --output <output_dir>/cite-review.html
+    ```
+    Omit `--docx` for non-.docx drafts; omit `--via-json`, `--sources-meta`, `--passages-json`, `--facts-json`, and `--authorities-json` when the step that produces each did not run or wrote nothing. **`--record-dir` is mandatory whenever Step 0 split a record** (the facts ledger's `R<N>` refs resolve only there; the script exits 1 without it — keep the split directory until the page exists). `--resume-state auto` restores a reviewer's saved marks from the case directory; report its restore line. Unless `--link-pdfs` is used, the output is the HTML **plus** a `<stem>_pdfs/` sidecar that must travel with it — in Cowork or any remote session add `--bundle <output_dir>/<stem>.zip` and deliver the zip. A cited authority with only a local PDF copy gets `"pdf"` / `"page"` / `"quote"` keys on its `sources.json` entry.
+12. **End-of-workflow summary** — see Output Format below.
 
 **Web mode workflow:**
 1. Read `references/style-guide.md` from project knowledge. If not found, tell the user to upload it. If a `my-writing-voice.md` is in project knowledge or was uploaded, read it too and apply Step 0.7.
@@ -696,7 +335,7 @@ Adopt the persona of an experienced appellate attorney working for a state supre
 
 ### Pass 1: Jurisdictional Check (Delegated to Subagent)
 
-**Do not** read `references/nd-appellate-rules.md` or the pass-instruction file into the main context. Delegate to a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+**Do not** read `references/nd-appellate-rules.md` or the pass-instruction file into the main context. Delegate with the Agent tool (subagent_type: `general-purpose`, `description` naming the pass) and a prompt of this form:
 
 > Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass1-jurisdiction.md` and follow the **[opinion / memo]** variant. The skill root is `${CLAUDE_SKILL_DIR}`. The draft is at `[path]`. Return only the concise findings summary those instructions specify.
 
@@ -716,7 +355,7 @@ Apply in priority order. Full details in `references/style-guide.md`. If `VOICE_
 - Always use the Oxford comma
 - Constitutions protect, guarantee, or preserve rights — never "create" or "grant" (unless the text clearly declares a new right)
 
-**Do not propose nonbreaking-space edits.** The space after `¶`/`§` should be a nonbreaking space (U+00A0), but never raise it as a tracked change: a change bar on every citation buries the substantive edits. It is handled deterministically instead — see "Nonbreaking spaces" under Step 9.
+**Do not propose nonbreaking-space edits.** The space after `¶`/`§` should be a nonbreaking space (U+00A0), but never raise it as a tracked change: a change bar on every citation buries the substantive edits. It is handled deterministically instead — see Step 9.
 
 **Style preferences (apply with judgment):**
 - Lead with the point; conclusion before reasoning
@@ -730,13 +369,13 @@ Apply in priority order. Full details in `references/style-guide.md`. If `VOICE_
 
 #### Delegated Pass 2 (opinions over 30 paragraphs)
 
-When the opinion exceeds 30 paragraphs, delegate Pass 2 to a Task subagent (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
+When the opinion exceeds 30 paragraphs, delegate Pass 2 with the Agent tool (subagent_type: `general-purpose`) to keep main-context output tokens manageable, with a prompt of this form:
 
 > Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass2-style.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft opinion is at `[path]`. [If `VOICE_FILE` is set:] The author's voice file is at `[VOICE_FILE]`. [If `VOICE_FLAGS_ONLY`:] Flags-only mode: apply only its "Flag in any draft I review" section, as COMMENTs. [If `voice_hits.json` has hits:] Search-pattern candidates are at `[TMPDIR]/voice_hits.json`. Return only the structured entry list those instructions specify.
 
 **Returns:** a structured list of `¶ / OLD / NEW / REASON` edit entries and `¶ / COMMENT / ANCHOR` comment entries, in paragraph order.
 
-**In main context after collection:** Apply the returned edits mechanically when building the tracked-changes OOXML in step 9. Each `OLD`/`NEW` pair becomes a tracked deletion + tracked insertion. Each `COMMENT` entry becomes a document comment anchored to the specified text.
+**In main context after collection:** Apply the returned edits mechanically when building the tracked-changes edits in Step 9. Each `OLD`/`NEW` pair becomes a tracked deletion + tracked insertion. Each `COMMENT` entry becomes a document comment anchored to the specified text.
 
 **Web mode:** Always perform inline, regardless of document length. Apply the same rules. Use the structured entry format (¶, OLD, NEW, REASON) for internal tracking, then incorporate into the analysis document.
 
@@ -764,9 +403,9 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 - Whether the opinion quotes the source (and if so, the exact quoted text)
 - The signal used (none, *See*, *see also*, *cf.*, *but see*, *accord*, etc.)
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+**Delegation:** Launch a subagent with the Agent tool (subagent_type: `general-purpose`) and a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3b-citations.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`; the venv python is `[the $VENV_PYTHON value from Step 0]`. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3b-citations.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`; the venv python is `[the $VENV_PYTHON value from Environment Setup]`. The opinion file is at `[opinion_path]`; write the passages ledger to `<TMPDIR>/passages.json`. Here is the extracted citation list: [numbered list — ¶, citation text, proposition, quoted text if any, signal].
 
 **Returns:** the results table (`¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes`), a summary line with counts by type, the lookup-methods tally for case citations (`ndlaw / CourtListener / local / web / not found`), and an ND web-fallback note. The subagent also writes `<TMPDIR>/passages.json` (the passages ledger embedded in the citation-review HTML). Carry the tally and note into the analysis document alongside the results table. The instructions enforce the closed-loop case-name rule (correct same-cite typos only; never harmonize different citations) — Step 8a depends on the resulting Caption Check column and `name_similarity` values.
 
@@ -798,13 +437,15 @@ A draft may rely on sources the citation parser cannot recognize — a conventio
 
 **When to run:** the case directory holds PDFs beyond the briefs and record items identified in Step 0 — or the draft visibly relies on non-case sources (italicized titles, printed-page cites to works rather than reporters). When in doubt, run it: the subagent returns "No supplied authorities detected" cheaply. **Do not** read the candidate PDFs in main context.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+**Delegation:** Launch a subagent with the Agent tool (subagent_type: `general-purpose`) and a prompt of this form:
 
-> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3d-authorities.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`; the venv python is `[the $VENV_PYTHON value from Step 0]`. The draft opinion markdown is at `[opinion_md_path]`; the case directory is `[working_dir]`; TMPDIR is `<TMPDIR>`.
+> Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass3d-authorities.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`; the venv python is `[the $VENV_PYTHON value from Environment Setup]`. The draft opinion markdown is at `[opinion_md_path]`; the case directory is `[working_dir]`; TMPDIR is `<TMPDIR>`.
 
 **Returns:** the supplied-authorities table (`¶ | Authority | Kind | Cited page | Matched file | Page check | Quote check | Supports? | Notes`), a summary line, and two findings lists: **authorities relied on but not located** (the draft cites a work with no copy in the case directory — carry each into the analysis document; this is exactly what chambers wants flagged) and supplied-but-unreferenced PDFs (informational). The subagent also writes `<TMPDIR>/authorities.json` (the ledger Step 11b embeds via `--authorities-json`) and places page extracts in `<working_dir>/authorities/`.
 
 **Web mode:** No shell or filesystem — the deterministic pipeline does not apply. If the user uploaded copies of non-case sources, verify the draft's references against them inline (read the uploaded PDF at the cited page, check the passage and proposition) and report the same table; note that unuploaded works could not be checked.
+
+### Pass 4: Fact-Checking (Delegated to Subagent)
 
 When the user provides briefs, record documents, or other source materials alongside the draft opinion, **do not** read the PDF materials into the main context. Delegate fact-checking to a subagent to keep potentially large PDF content out of the main context window.
 
@@ -819,7 +460,7 @@ Do **not** include: legal standards and rules (checked in Passes 1 and 3), the c
 
 **Claim-to-record mapping:** For each claim, also extract any record citations from the opinion text (e.g., "R 58," "App. 42," "Doc. 12," "Tr. 145"). Include these as a `Cited Records` column in the claims list passed to the subagent. This lets the subagent check the cited record items first, but the subagent should also search other record items — record citations in draft opinions are not always complete or accurate.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+**Delegation:** Launch a subagent with the Agent tool (subagent_type: `general-purpose`) and a prompt of this form:
 
 > Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass4-factcheck.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. Write the structured facts ledger to `<TMPDIR>/facts.json`. The source PDFs are: [paths, each with its Step 0 ingestion outcome]. Here is the numbered claims list (¶ refs and Cited Records column included): [claims list].
 
@@ -835,7 +476,7 @@ When briefs are available (identified in Step 0), check whether the opinion or m
 
 **Do not** read the briefs into the main context. Delegate to a subagent to keep PDF content out of the main context window.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+**Delegation:** Launch a subagent with the Agent tool (subagent_type: `general-purpose`) and a prompt of this form:
 
 > Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass6-brief-matching.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The draft document is at `[path]`; the party briefs are: [brief paths, each with its Step 0 ingestion outcome].
 
@@ -851,7 +492,7 @@ When a dissent or concurrence is provided alongside the majority opinion, cross-
 
 **Do not** read the dissent/concurrence into the main context. Delegate to a subagent to keep the separate document out of the main context window.
 
-**Delegation:** Launch a Task subagent (subagent_type: `general-purpose`) with a prompt of this form:
+**Delegation:** Launch a subagent with the Agent tool (subagent_type: `general-purpose`) and a prompt of this form:
 
 > Read `${CLAUDE_SKILL_DIR}/references/pass-instructions/pass7-dissent-crosscheck.md` and follow it. The skill root is `${CLAUDE_SKILL_DIR}`. The majority opinion is at `[majority path]`; the dissent/concurrence is at `[dissent path]`.
 
@@ -861,81 +502,15 @@ When a dissent or concurrence is provided alongside the majority opinion, cross-
 
 **Web mode:** If the user uploaded a dissent/concurrence alongside the majority, perform inline — read both documents directly and follow the cross-check process in `references/pass-instructions/pass7-dissent-crosscheck.md` (from project knowledge). If no dissent was uploaded, note the limitation.
 
-### Pass 5: Analytical Rigor
+### Pass 5: Analytical Rigor (Main Context)
 
-Perform the following checks on **all documents** (both opinions and memos), then the DOC_TYPE-specific checks below. Full details for both document types are in `references/style-guide.md`.
+Always performed in main context, on every document type. Read `references/pass-instructions/pass5-rigor.md` and apply it. It covers, for all documents: the internal-consistency check (names, dates, amounts, terminology — case names excluded, Pass 3B owns them), the standard-of-review consistency check (does the analysis language match the stated standard?), the statutory-construction cross-check via ndlaw `find_opinions_construing` when available, and readability metrics. Then the `DOC_TYPE`-specific checks — for opinions: dicta, alternative rationales, logical issues, holdings broader than necessary, the **two hostile readers** reading, and the Case Highlight draft; for memos: issue completeness, balance, recommendation quality, analytical gaps, standard-of-review application, and the order-grounding check. Findings go in the analysis document; Hostile Readers findings never become tracked edits.
 
-#### Internal Consistency Check (all doc types)
-
-Read the entire document and build a mental index of: party names (including aliases and roles), dates, monetary amounts, numerical counts, procedural events, and terminology choices. Compare every reference to each entity, date, and event across the document. Flag any discrepancy with paragraph references for both the first usage and the inconsistent usage.
-
-Check for:
-- **Name/spelling inconsistencies** (e.g., "Johnson" vs "Johnsen", "Meier" vs "Meyer"). **Exclude case names** — party names in cited cases are verified in Pass 3B against official captions. Only flag non-case-name spelling inconsistencies here (party names in the case being decided, witness names, place names, ordinary words).
-- **Date inconsistencies** (same event assigned different dates in different paragraphs)
-- **Terminology drift** (switching between "defendant"/"respondent", "trial court"/"district court" without reason)
-- **Factual contradictions** (facts section says X, analysis section says Y)
-- **Numerical inconsistencies** (amounts, counts, timelines that don't add up)
-- **Caption/party inconsistencies** (parties named differently in caption vs body)
-
-Distinguish intentional variation from apparent errors. Referring to "Smith" in the facts and "the appellant" in the analysis is fine; "Smith" becoming "Smyth" is a flag.
-
-#### Standard of Review Consistency Check (all doc types)
-
-Identify every standard of review stated in the document and which issue(s) each applies to. For each analytical section, identify the language of deference (or lack thereof). Flag each instance where the analysis language is inconsistent with the stated standard, citing the paragraph.
-
-Standard-specific red flags:
-- **De novo:** Acceptable language includes "we conclude," "we hold," independent analysis. No deference language needed.
-- **Clear error:** Requires deference. Red flags: reweighing evidence, making independent credibility determinations, "we find" (implies independent factfinding), "we would have decided differently."
-- **Abuse of discretion:** Requires deference. Red flags: substituting the court's judgment, applying a legal standard de novo when the question is discretionary.
-- **Plain error:** Must show (1) error, (2) clear/obvious, (3) affecting substantial rights, (4) seriously affecting fairness/integrity/public reputation. Flag if any prong is skipped.
-- **Reasoning mind:** In administrative agency appeals, a deferential standard for "reasoning mind reasonably could conclude" applies.
-
-For opinions: Does the court *apply* the standard it *stated*?
-For memos: Does the memo correctly identify the standard *and* apply it consistently in the recommendation?
-
-In multi-issue documents where each issue has a different standard, verify each standard is applied to the correct issue.
-
-#### Statutory-Construction Cross-Check (when ndlaw is available)
-
-When the draft construes an N.D.C.C. section or a court rule as a point of decision, call `find_opinions_construing(<authority>)` and scan the returned `results[].opinions` for ND opinions construing the same provision. Use it as an advisory aid: if a recent or obviously on-point construction is missing from the draft's analysis, note it for the author's consideration (do not assert it is controlling). Skip silently if the tool is unavailable. For a key *cited* precedent whose holding the draft leans on, `case_summary(<cite>)` (disposition + `syllabus_points`) can confirm what the case actually held — this aids the substantive-support assessment; it does **not** feed the draft's own Case Highlight, since the draft is not in the corpus.
-
-#### Readability Metrics (all doc types)
-
-**CLI mode:** Run the readability metrics script on the document:
+Readability (CLI mode):
 ```bash
 $VENV_PYTHON "${CLAUDE_SKILL_DIR}/readability_metrics.py" --file <document_path>
 ```
-Parse the JSON output and incorporate the results into the analysis document (see Readability Metrics section in the output template). Flag any sentences over 40 words, sections with passive voice above 25%, and sections with FK grade above 16.
-
-**Web mode:** Skip the script (no Bash available). If feasible, estimate sentence length and passive voice inline for the longest/densest sections. Otherwise, note: "Readability metrics unavailable in web mode."
-
-#### If DOC_TYPE is `opinion` (default)
-
-- Flag potential dicta (statements unnecessary to the holding)
-- Flag unnecessary alternative rationales
-- Identify logical fallacies
-- Identify ambiguities — especially passages easily quoted out of context
-- **Two hostile readers.** Read the opinion twice, each time as a specific adversary:
-  1. *The losing party's lawyer*, who will quote the opinion in the next brief to stretch or shrink the holding.
-  2. *The motivated misreader*: anyone who wants the opinion to look bad and reads it to that end. Cycle through several: a judge who rejects the author's interpretive method and would enjoy seeing the author look foolish; a reporter hunting a headline quote; an ideological opponent from either direction; an advocacy group drafting a fundraising letter; a conspiracy-minded reader who finds hidden intent in every word. Which sentences would those readers willfully misread, lift out of context, or hold up as inconsistent with the author's stated method, a relied-on precedent, or the author's past opinions? Watch for a sentence that works as a headline on its own, a clause that says something else when cut at the comma, policy-sounding reasoning, overstatement that would fit in a dissent or a law-review footnote, a word with a loaded meaning outside the law, and anything that sounds like a swipe at precedent, the lower court, counsel, or a party.
-
-  For each finding, quote the passage, state the misreading in one sentence, say whether a fair reader could also reach it, and propose a fix or say the passage should stand. Report only misreadings plausible enough to survive a reply; skip mere snark. Findings go in the analysis document under "Hostile Readers," never into tracked edits — the fix is the author's call.
-- Flag holdings broader than necessary
-- Flag vague standards lacking guidance for future application
-- **Draft case highlight:** Generate a 50–200 word case summary for the analysis document. Extract: case name and citation (from the caption/header), nature of the dispute (one sentence), disposition (affirmed/reversed/remanded/modified with brief outcome), and 1–3 core holdings. This is a synthesis task — perform it in main context, not delegated.
-
-#### If DOC_TYPE is `memo`
-
-- **Issue completeness:** Did the memo identify all issues raised on appeal? Are there issues the parties didn't raise but the court should consider (e.g., plain error, jurisdictional defects)?
-- **Balanced presentation:** Does the memo fairly state each side's strongest arguments? Does it steelman the weaker position or dismiss it too quickly?
-- **Recommendation quality:** Are recommendations clearly stated? Is each recommendation supported by the analysis? Are alternative outcomes acknowledged?
-- **Analytical gaps:** Are there unstated assumptions? Logical fallacies? Missing steps in the reasoning chain?
-- **Standard of review:** Does the memo correctly identify and consistently apply the appropriate standard of review for each issue?
-- **Order-grounding check (did the memo read the order, or guess?):** Scan every statement about the **district court's ruling, findings, grounds of decision, or reasoning**. Flag two patterns:
-  1. **Uncited characterization** — a claim about what the district court held, found, or reasoned that carries **no pinpoint citation to the order/judgment** (e.g., "R38:2–9"). A bench memo's account of the ruling should be anchored to the order itself.
-  2. **Hedged reasoning** — phrases like "the district court *appears to* have," "*seems to* have," "*evidently*," or "*presumably*" applied to the lower court's reasoning. These usually mean the order was not read but inferred from the briefs.
-  
-  For each flag, note the ¶ and the suspect language. If source materials are available (Pass 4 ran on the order/record), check whether the order actually resolves the point and report the correct grounds with a pinpoint cite. Treat a cluster of these flags as a signal that the memo may have been drafted from the briefs without reading the order — say so explicitly in the analysis, since that is a serious bench-memo defect. (This is advisory: a properly preserved record gap is legitimate, but it should be stated as a gap, not hedged.)
+Parse the JSON; flag sentences over 40 words, sections with passive voice above 25%, and sections with FK grade above 16. Web mode: skip the script and estimate inline, or note it unavailable. Audit mode: skip readability entirely.
 
 ### Step 11: Coverage Reconciliation & Acknowledgment Gate
 
@@ -943,7 +518,7 @@ Before producing any final output, reconcile the **inputs identified in Step 0**
 
 > **Inputs ingested: N of M.** [If N < M, list each miss: `Reply-Brief.pdf` (image-only; OCR-low-confidence), …]
 
-**Acknowledgment gate — fires only when N < M.** If any identified input was not fully ingested, do **not** present the run as complete. Name the file(s), the reason (no text layer / image-only / garbled OCR), and the affected passes (Pass 4 fact-check, Pass 6 brief-matching), then ask the user to acknowledge that coverage is incomplete before final outputs are produced. Use `AskUserQuestion` (CLI) or a direct question (Web). When N < M you must also render the `## ⚠ Source Materials Not Reviewed` section (see below) and use the incomplete-coverage form of the Step 12 header.
+**Acknowledgment gate — fires only when N < M.** If any identified input was not fully ingested, do **not** present the run as complete. Name the file(s), the reason (no text layer / image-only / garbled OCR), and the affected passes (Pass 4 fact-check, Pass 6 brief-matching), then ask the user to acknowledge that coverage is incomplete before final outputs are produced. Use `AskUserQuestion` (CLI) or a direct question (Web). When N < M you must also render the `## ⚠ Source Materials Not Reviewed` section (see `references/analysis-template.md`) and use the incomplete-coverage form of the Step 12 header.
 
 > **This is an exceptional-condition gate, not a scope or depth question.** It is the *only* sanctioned interactive pause besides the Step 0.1 doc-type question. Do not generalize it, and never use it to offer pass selection. When N == M, skip it silently and proceed.
 
@@ -951,271 +526,17 @@ Before producing any final output, reconcile the **inputs identified in Step 0**
 
 ## Output Format
 
-**Web mode:** Produce only the analysis document as markdown in the conversation. The tracked-changes .docx section does not apply. The analysis document template and structure are the same.
+**Web mode:** Produce only the analysis document, as markdown in the conversation; the template is the same.
 
 Produce the outputs requested by the user in Step 0.5.
 
-### Tracked-changes .docx (if requested)
-Use `apply_edits.py` to produce a .docx with:
-- Deletions as tracked deletions (author: "Claude")
-- Insertions as tracked insertions (author: "Claude")
-- Comments for substantive notes — explaining a change or flagging an issue
+**Tracked-changes .docx** (Step 9, `apply_edits.py`): tracked deletions and insertions (author: "Claude") plus comments for substantive notes — explaining a change or flagging an issue. Direct on the .docx ZIP; no unpack/pack, no docx plugin.
 
-**Assembly workflow:** Use the batch edit workflow in Step 9 above. `apply_edits.py` operates directly on the .docx ZIP — no unpack/pack pipeline needed. The script is fully self-contained (no docx plugin dependency).
+**Analysis document** (Step 10): Read `references/analysis-template.md` when assembling it. It holds the full section template — Case Highlight (opinions), Jurisdictional Notes, Summary of Edits (with the nonbreaking-space line), Fact Check, Brief Matching, Internal Consistency, Standard of Review Consistency, Readability Metrics, Substantive Concerns (opinions: Potential Dicta, Alternative Rationales, Hostile Readers, Logical Issues, Dissent/Concurrence Cross-Check) or Memo Analysis, Citation Verification, Supplied Authorities, Citation Format Issues, Style Notes — plus the four conditional ⚠ warnings (Source Materials Not Reviewed when Step 11 found N < M; Authority Text Not Refreshed; Reduced-Reliability Model; Sources Out of Reach) and when each renders, and the provenance-footer detail. Save it as `<original-filename>-ANALYSIS.md` in the working directory, not the temp directory, so it survives context compression. Do not hand-write a version/date footer — `provenance.py` stamps it (web mode: append it manually).
 
-### Analysis document (if requested)
-Produce a document structured as below, then **save it to a markdown file** in the working directory (not the temp directory). Use the naming pattern `<original-filename>-ANALYSIS.md` (e.g., `Estate-of-Kish_Opinion-ANALYSIS.md`). This ensures the analysis survives context compression and can be opened after the session.
+**Analysis report HTML** (Step 10b; CLI and Cowork, always): `<stem>-ANALYSIS.html` beside the markdown — one self-contained page with a triage banner and sticky table of contents carrying flagged-row counts per section, status badges (glyph plus text, legible to red-green colorblind readers), a filter box and "problems only" toggle per table, a persisted checkbox worklist for unlocated authorities, and a print stylesheet. A count of zero flagged rows is **not** a clean bill of health — findings also live in tables without a status vocabulary and in the narrative sections; never report it as a clean run. Tell the user it opens in any browser and prints to PDF.
 
-The **Substantive Concerns** section varies by `DOC_TYPE`.
-
-**If DOC_TYPE is `opinion`**, place the Case Highlight first:
-
-```
-–Begin Analysis–
-
-## Case Highlight
-
-**[Case Name], [Citation]**
-**Nature:** [One-sentence description of the dispute type]
-**Disposition:** [Affirmed/Reversed/Remanded/Modified — with brief outcome]
-**Holdings:**
-- [Core holding 1]
-- [Core holding 2]
-- [Core holding 3, if applicable]
-
-[50–200 word summary synthesizing the case's significance, essential facts, and primary legal principles.]
-```
-
-**If DOC_TYPE is `memo`**, begin directly with Jurisdictional Notes.
-
-**Source-materials warning (conditional — render whenever Step 11 found N < M).** Immediately after the Case Highlight (opinion) or before Jurisdictional Notes (memo), insert the following. Omit the section entirely when every identified input was fully ingested:
-
-```
-## ⚠ Source Materials Not Reviewed
-
-One or more provided source files could not be fully read. Fact-check and brief-coverage findings below are **incomplete** for the listed material.
-
-| File | Reason | Passes affected | Remediation |
-|---|---|---|---|
-| [file.pdf] | image-only / no text layer (or OCR-low-confidence) | Pass 4, Pass 6 | OCR attempted (ocrmypdf) — failed / low-confidence; recommend manual review or re-OCR |
-
-**Inputs ingested: N of M.**
-```
-
-**Authority-text warning (conditional — render whenever Step 11a reached neither the ndlaw corpus nor the MCP connection).** Place it with the other warnings near the top. Omit it entirely when the refresh succeeded:
-
-```
-## ⚠ Authority Text Not Refreshed
-
-The ndlaw corpus was not reachable for this run, so cited authorities were checked against whatever local copies `~/refs` already held. Those copies carry no record of when they were fetched, and the corpus has since corrected opinion text in ways a cached copy cannot reflect. **Quotation and citation findings below are weaker than usual in both directions** — an unverified quotation may be accurate, and a verified one may rest on superseded text. Re-run with the corpus reachable to settle them.
-```
-
-**Reduced-reliability model warning (conditional — render only when Step 0.0 reported `warn` and the user chose to proceed).** Place it immediately after the source-materials warning, or in its place when every input was ingested. Omit the section entirely on an Opus-, Fable-, or Mythos-class model:
-
-```
-## ⚠ Reduced-Reliability Model
-
-This review ran on **[model id]**, which is outside the Opus-class set jetredline's reliability testing is based on. Citation, quotation, and record-fact findings below carry a higher miss rate than the same review on an Opus-class model — a clean section is weaker evidence than usual. Re-running on Opus is the way to raise confidence.
-```
-
-**Sources-out-of-reach warning (conditional — render only when the Step 0 source preflight warned).** Place it after the reduced-reliability warning, or where that section would go. One bullet per warning, carried over from the preflight — host or MCP server, what the run lost, the fix. Omit the section entirely when both checks were clean:
-
-```
-## ⚠ Sources Out of Reach
-
-This run could not reach the sources below, so the checks that depend on them fell back to weaker ones. Findings in those areas are not confirmations; treat "no problem found" there as "not checked against the primary source."
-
-- **[host or MCP server]** — [what was lost]. Fix: [allowlist entry or connection step].
-```
-
-**Both document types continue with:**
-
-```
-–Begin Analysis– [if memo, or continuation after Case Highlight if opinion]
-
-## Jurisdictional Notes
-[Issues with timeliness of appeal, procedural posture, or standard of review]
-[If DOC_TYPE is memo and jurisdiction was not addressed: include warning here]
-
-## Summary of Edits
-[Brief overview of the types and volume of changes]
-
-[Nonbreaking spaces — include this line only when the count is above zero, and only if --normalize-nbsp was NOT used:]
-**Nonbreaking spaces:** [N] ordinary spaces follow `¶`/`§`. Not redlined — a change bar on every citation would bury the substantive edits. Fix globally in Word: Find `¶ ` → Replace `¶^s`; Find `§ ` → Replace `§^s` (repeat for `¶¶ ` and `§§ `). `^s` is Word's nonbreaking-space code.
-
-[If --normalize-nbsp WAS used, replace the line above with:]
-**Nonbreaking spaces:** [N] ordinary spaces after `¶`/`§` were replaced with nonbreaking spaces (U+00A0) **without tracked changes** — typographic normalization, invisible in print, not shown as a revision.
-
-## Fact Check
-
-| ¶ | Claim | Source Document(s) | Result | Notes |
-|---|-------|-------------------|--------|-------|
-| [¶ ref] | [Factual assertion from document] | [Record doc, brief, or transcript with pinpoint cite] | Verified / Unverified / Discrepancy | [Explanation if discrepancy or unverified] |
-
-**Summary:** [X] facts checked. [Y] verified. [Z] discrepancies. [W] unverified. [If any source not fully ingested: "Coverage incomplete — [file] not reviewed; see ⚠ Source Materials Not Reviewed."]
-
-## Brief Matching
-
-| ¶ | Argument | Party | Brief Source | Addressed | Notes |
-|---|----------|-------|-------------|-----------|-------|
-| [¶ ref] | [Argument/contention] | [Appellant/Appellee] | [Brief, pp. X–Y] | Yes / Partial / No | [Explanation] |
-
-**Summary:** [X] arguments identified. [Y] directly addressed. [Z] partially addressed. [W] not addressed. [If any brief not fully ingested: "Coverage incomplete — [brief] not reviewed; that party's arguments are unverified. See ⚠ Source Materials Not Reviewed."]
-
-[Or: "No briefs provided — brief matching skipped."]
-```
-
-**Both document types include these sections after Brief Matching:**
-
-```
-## Internal Consistency
-
-| ¶ | Item | First Usage | Inconsistent Usage | Notes |
-|---|------|-------------|-------------------|-------|
-| [¶ refs] | [Name/date/term] | [First form, ¶ ref] | [Different form, ¶ ref] | [Explanation] |
-
-[Or: "No internal inconsistencies detected."]
-
-## Standard of Review Consistency
-
-**Standards identified:**
-- Issue 1: [standard] (¶ [ref])
-- Issue 2: [standard] (¶ [ref])
-
-| ¶ | Issue | Stated Standard | Language Used | Concern |
-|---|-------|----------------|---------------|---------|
-| [¶] | [Issue] | [Standard] | [Problematic phrase] | [Why this is inconsistent with the standard] |
-
-[Or: "Standards of review applied consistently throughout."]
-
-## Readability Metrics
-
-**Overall:** Flesch-Kincaid Grade [X] · Avg sentence length [X] words · Passive voice [X]% · Nominalization density [X]/100 words
-
-| Section | ¶¶ | FK Grade | Avg Sentence | Longest Sentence | Passive % | Nominalizations |
-|---------|-----|----------|-------------|-----------------|-----------|-----------------|
-| [section] | [range] | [grade] | [avg] | [max] | [pct] | [density] |
-
-**Flags:**
-- [List of flagged items with ¶ references]
-
-[Or: "All sections within normal ranges."]
-```
-
-**If DOC_TYPE is `opinion`:**
-
-```
-## Substantive Concerns
-
-### Potential Dicta
-[List with paragraph references]
-
-### Alternative Rationales
-[Whether each ground is fully developed]
-
-### Hostile Readers
-[Passages quotable out of context or open to willful misreading, each with the misreading, whether a fair reader could reach it, and the fix; vague standards; overly broad holdings]
-
-### Logical Issues
-[Logical fallacies or unstated assumptions]
-
-### Dissent/Concurrence Cross-Check
-
-| ¶ Majority | ¶ Dissent | Argument | Fair Characterization? | Addressed? | Notes |
-|-----------|-----------|----------|----------------------|------------|-------|
-| [¶] | [¶] | [Criticism or argument] | Yes / No / Partial | Yes / No / Partial | [Explanation] |
-
-**Summary:** [X] dissent arguments reviewed. [Y] fairly characterized. [Z] potential straw-manning. [W] unaddressed criticisms.
-
-[Or: "No dissent/concurrence provided."]
-```
-
-**If DOC_TYPE is `memo`:**
-
-```
-## Memo Analysis
-
-### Issue Completeness
-[Issues raised on appeal; issues not raised but potentially relevant (plain error, jurisdictional defects)]
-
-### Balance of Presentation
-[Whether each side's strongest arguments are fairly stated; steelmanning assessment]
-
-### Recommendation Assessment
-[Clarity and support for each recommendation; alternative outcomes acknowledged]
-
-### Analytical Gaps
-[Unstated assumptions, logical fallacies, missing reasoning steps]
-
-### Standard of Review Application
-[Whether the memo correctly identifies and consistently applies the standard of review for each issue]
-```
-
-**Both document types continue with:**
-
-```
-## Citation Verification
-
-| ¶ | Citation | Type | Quote Check | Supports? | Source Link | Notes |
-|---|----------|------|-------------|-----------|-------------|-------|
-| [¶] | [Citation text] | Opinion / Statute / Const. / Rule / Admin. | Verified / Discrepancy / No quote / Not found | Supports / Partially / Does not support | [Markdown hyperlink: `[normalized](url)` from lookup plan] | [Explanation] |
-
-**Summary:** [X] ND citations checked, by type: [opinions/statutes/const/rules/admin]. [Y] quotes verified. [Z] quote discrepancies. [W] not found. [V] unsupported propositions.
-
-## Supplied Authorities
-
-[Include this section only when Pass 3D ran and found references. Rows come from the Pass 3D table.]
-
-| ¶ | Authority | Kind | Cited page | Matched file | Page check | Quote check | Supports? | Notes |
-|---|-----------|------|------------|--------------|------------|-------------|-----------|-------|
-| [¶] | [short title] | [journal/treatise/…] | [printed page] | [filename or **none found**] | Verified / Unverified / N/A | Verified / Discrepancy / Not found / No quote | Supports / Partially / Does not support | [explanation] |
-
-**Summary:** [N] references to supplied authorities. [M] matched to PDFs in the case directory, [P] page-verified, [Q] passages verified.
-
-**Authorities relied on but not located** [omit when empty — but never omit silently when Pass 3D reported any]:
-- [ ] *[Title]* (¶ [ref]) — no copy in the case directory; obtain and verify before publication.
-
-## Citation Format Issues
-[Citation-format corrections with explanations]
-
-## Style Notes
-[Significant style changes by category]
-
----
-*Claude skills crafted by Claude and JET (github.com/jet52)*
-
-–End Analysis–
-```
-
-Do **not** hand-write a version/date line in the footer — the provenance stamp (Step 10a, `provenance.py`) appends the authoritative model/version/date line in CLI mode. In web mode, append it manually per Step 10a.
-
-### Analysis report HTML (CLI and Cowork, always generated)
-
-`analysis_to_html.py` (Step 10b) renders the finished `-ANALYSIS.md` as `<original-filename>-ANALYSIS.html`: a single self-contained page, light-only, no network fetches, no sidecar directory.
-
-The report is a triage document, and the page is built to be read that way:
-- a **triage banner** and a sticky **table of contents**, each carrying the count of flagged rows per section, so the reader sees where to look before reading a word;
-- **status badges** on the report's status columns (`Result`, `Addressed`, `Quote check`, `Page check`, `Supports?`, `Caption check`, `Matched file`) — each badge carries a glyph and its text label, so color is never load-bearing, and the palette is legible to red-green colorblind readers;
-- a **filter box and a "problems only" toggle** on each substantial table — the fastest way through a 60-row citation table;
-- **checkbox persistence** for the "Authorities relied on but not located" worklist;
-- a **print stylesheet**: printing or saving to PDF from the browser produces a clean chambers document, with wide tables shrunk to fit, header rows repeated across pages, and link URLs printed after their text.
-
-A count of zero flagged rows is **not** a clean bill of health, and the page says so: only columns with a recognized status vocabulary are counted, and findings also live in tables without one and in the narrative sections. Do not report it as a clean run.
-
-Tell the user the file is available and can be opened in any browser or printed to PDF. Name it alongside the markdown.
-
-### Citation review HTML (CLI and Cowork, always generated)
-
-After Pass 3 completes and the opinion markdown is available, generate the interactive citation review page by running **Step 11a** (ndlaw export, with its scribe-subagent fallback) and **Step 11b** (`cite_review.py`) exactly as specified in the Core Workflow above — the commands, flag-omission rules, and fallbacks are defined there and are not repeated here.
-
-The result is an HTML file — plus, whenever record, brief, or local-PDF sources are embedded, a `<stem>_pdfs/` sidecar directory that must travel with it (`--bundle` zips both; `--link-pdfs` embeds nothing) — with:
-- A sidebar listing **every citation occurrence** — first full cites, repeat full cites, short forms, and *id.* references each as a separate reviewable entry — with verification status and its **Via** provenance badge (the tier that verified it); supplied authorities (Pass 3D) appear alongside citations with a `supplied` badge, and lane filter chips (`All · Citations · Authorities · Facts`) narrow the list
-- A split main pane: draft paragraph (with the exact occurrence highlighted) on top; on the bottom, the cited authority — embedded source text scrolled to the pinpoint ¶, the Pass 3B verification passage when no full text is available, or a web fallback — with a link bar carrying the court's direct opinion URL
-- Keyboard navigation (`j`/`k` to move, `v`/`f`/`s` to verify/flag/skip, `Space`/`Enter` to verify and advance, `a` to toggle auto-advance, `h`/`l` to switch local/web view, `n` for notes, `?` for help)
-- LocalStorage persistence so review state survives browser restarts
-- An "Export JSON" button to save the review state
-
-Tell the user the citation review file is available and can be opened in any browser, and name the sidecar (or the bundle) alongside it. Name it `<original-filename>-CITE-REVIEW.html`.
+**Citation review HTML** (Steps 11a/11b; CLI and Cowork, always): `<original-filename>-CITE-REVIEW.html` plus its `<stem>_pdfs/` sidecar (or the `--bundle` zip). Every citation occurrence — first full cites, repeats, short forms, *id.* — is its own reviewable entry with a **Via** provenance badge; supplied authorities and Pass 4 facts share the list behind lane filter chips. The split pane shows the draft paragraph with the occurrence highlighted above the cited authority at the pinpoint ¶ (embedded text, the Pass 3B passage, or a web fallback). Keyboard: `j`/`k` move, `v`/`f`/`s` verify/flag/skip, `h`/`l` switch source, `n` notes, `?` help; marks persist in LocalStorage, save to a state file the next run resumes from, and export as JSON. Tell the user, and name the sidecar or bundle alongside the file.
 
 ### Step 12: End-of-Workflow Summary
 
@@ -1235,7 +556,7 @@ After all outputs are generated, present a clear summary to the user:
 > **Citation Verification (quality gate):**
 > Open `<cite-review-filename>` in your browser to verify each citation against its source. Keyboard: `j`/`k` to navigate, `v`/`f`/`s` to verify/flag/skip, `?` for all shortcuts.
 
-Always include this summary. Adapt the list to reflect which outputs were actually generated. When coverage is incomplete (Step 11, N < M), the ⚠ header and the **Inputs ingested** line are mandatory — do not report a clean completion over an unreviewed input. The citation verification prompt is the most important part — it's a quality gate, not an optional extra.
+Always include this summary. Adapt the list to reflect which outputs were actually generated. When coverage is incomplete (Step 11, N < M), the ⚠ header and the **Inputs ingested** line are mandatory — do not report a clean completion over an unreviewed input. If `--normalize-nbsp` was used, disclose the count here. The citation verification prompt is the most important part — it's a quality gate, not an optional extra.
 
 ## Key Reminders
 

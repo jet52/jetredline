@@ -96,6 +96,7 @@ PASS_LABELS = {
     "pass3b-citations": "3B — Citations",
     "pass3d-authorities": "3D — Supplied authorities",
     "pass4-factcheck": "4 — Fact check",
+    "pass5-rigor": "5 — Analytical rigor",
     "pass6-brief-matching": "6 — Brief matching",
     "pass7-dissent-crosscheck": "7 — Dissent cross-check",
 }
