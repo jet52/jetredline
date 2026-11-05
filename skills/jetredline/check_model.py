@@ -114,13 +114,23 @@ def _tail_lines(path, chunk_size=131072, max_bytes=8 * 1024 * 1024):
             yield tail.decode("utf-8", "replace")
 
 
-def model_from_transcript(path):
-    """The most recent assistant record's model id, or None.
+def detect_model(path):
+    """(model id, source) from the transcript, or (None, None).
+
+    Prefers the most recent assistant record's model — the id the API actually
+    served. Falls back to the most recent ``api-request`` record's requested
+    model (``params.model``): Claude Code writes that record before the
+    response streams and runs tool calls before it persists the assistant
+    record, so on the first turn of a fresh session — exactly when this gate
+    runs — the api-request is the only record that names the model. Without
+    the fallback the first run reports no-assistant-record and the second run
+    passes (observed on CLI 2.1.318).
 
     Records are parsed as JSON rather than regex-scanned: a transcript can
     quote the string `"model":"..."` inside ordinary conversation text, and a
     gate must not classify the session from something the user typed.
     """
+    requested = None
     try:
         for line in _tail_lines(path):
             if '"model"' not in line:
@@ -129,14 +139,31 @@ def model_from_transcript(path):
                 record = json.loads(line)
             except ValueError:
                 continue
-            if record.get("type") != "assistant":
-                continue
-            model = (record.get("message") or {}).get("model")
-            if isinstance(model, str) and model.strip():
-                return model.strip()
+            rtype = record.get("type")
+            if rtype == "assistant":
+                model = (record.get("message") or {}).get("model")
+                if _usable(model):
+                    return model.strip(), "transcript"
+            elif rtype == "api-request" and requested is None:
+                model = (record.get("params") or {}).get("model")
+                if _usable(model):
+                    requested = model.strip()
     except OSError:
-        return None
-    return None
+        return None, None
+    if requested:
+        return requested, "transcript-request"
+    return None, None
+
+
+def _usable(model) -> bool:
+    """A real model id — not blank and not the ``<synthetic>`` placeholder
+    Claude Code writes on assistant records that carry an API error."""
+    return isinstance(model, str) and bool(model.strip()) and not model.strip().startswith("<")
+
+
+def model_from_transcript(path):
+    """The session's model id, or None (see detect_model)."""
+    return detect_model(path)[0]
 
 
 def normalize(model_id: str) -> str:
@@ -180,9 +207,9 @@ def main() -> int:
             model, source = None, "none"
             reason = "no-session-id" if not args.session_id else "no-transcript"
         else:
-            model = model_from_transcript(path)
-            source = "transcript" if model else "none"
-            reason = None if model else "no-assistant-record"
+            model, source = detect_model(path)
+            source = source or "none"
+            reason = None if model else "no-model-record"
 
     if not model:
         print(f"MODEL_GATE: unknown model=? tier=? source=none reason={reason}")

@@ -27,6 +27,10 @@ def user(text):
     return json.dumps({"type": "user", "message": {"content": text}})
 
 
+def api_request(model):
+    return json.dumps({"type": "api-request", "params": {"model": model}})
+
+
 def transcript(tmp_path, *lines, name="session.jsonl"):
     path = tmp_path / name
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -119,9 +123,40 @@ def test_tail_read_spans_chunk_boundaries(tmp_path):
     assert check_model.model_from_transcript(path) == "claude-sonnet-5"
 
 
-def test_no_assistant_record_is_unknown_not_ok(tmp_path):
+def test_no_model_record_is_unknown_not_ok(tmp_path):
     path = transcript(tmp_path, user("hello"))
     assert check_model.model_from_transcript(path) is None
+    assert check_model.detect_model(path) == (None, None)
+
+
+def test_first_turn_falls_back_to_api_request(tmp_path):
+    """Claude Code runs a tool before it persists the assistant record that
+    holds the call, so on a fresh session's first turn only the api-request
+    names the model. The gate must not report unknown there (CLI 2.1.318)."""
+    path = transcript(tmp_path, user("review this draft"), api_request("claude-opus-5"))
+    assert check_model.detect_model(path) == ("claude-opus-5", "transcript-request")
+
+
+def test_assistant_record_beats_api_request(tmp_path):
+    """The served model wins over the requested one when both are present,
+    regardless of order."""
+    path = transcript(
+        tmp_path,
+        assistant("claude-opus-5"),
+        api_request("claude-sonnet-5"),
+    )
+    assert check_model.detect_model(path) == ("claude-opus-5", "transcript")
+
+
+def test_synthetic_assistant_record_is_skipped(tmp_path):
+    """An API-error assistant record carries model `<synthetic>`; it must not
+    classify the session as unrecognized."""
+    path = transcript(
+        tmp_path,
+        assistant("claude-opus-5"),
+        assistant("<synthetic>"),
+    )
+    assert check_model.detect_model(path) == ("claude-opus-5", "transcript")
 
 
 def test_malformed_lines_are_skipped(tmp_path):
@@ -184,7 +219,7 @@ def test_cli_unknown_exits_three_and_asks_for_self_report(tmp_path):
     res = run("--transcript", str(tmp_path / "missing.jsonl"))
     assert res.returncode == 3
     assert res.stdout.startswith("MODEL_GATE: unknown")
-    assert "reason=no-assistant-record" in res.stdout
+    assert "reason=no-model-record" in res.stdout
     assert "--model" in res.stdout
 
 
