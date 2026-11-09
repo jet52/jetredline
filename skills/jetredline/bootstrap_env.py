@@ -43,6 +43,7 @@ _IMPORT_OVERRIDES = {
     "beautifulsoup4": ["bs4"],
     "httpx[socks]": ["httpx", "socksio"],
     "PyMuPDF": ["fitz"],
+    "python-docx": ["docx"],
 }
 
 

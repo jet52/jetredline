@@ -22,6 +22,14 @@ def test_import_names_maps_extras_and_dashes(tmp_path):
     ]
 
 
+def test_import_names_python_docx(tmp_path):
+    # Import name differs from the distribution name; without the override
+    # the import check fails forever and the venv rebuilds on every call.
+    req = tmp_path / "requirements.txt"
+    req.write_text("python-docx>=1.1\nbeautifulsoup4\n")
+    assert bootstrap_env.import_names(req) == ["docx", "bs4"]
+
+
 def test_import_names_missing_file(tmp_path):
     assert bootstrap_env.import_names(tmp_path / "nope.txt") == []
 
