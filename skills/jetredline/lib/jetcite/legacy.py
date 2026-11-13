@@ -215,6 +215,12 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
             entry["pin_page"] = c.pin_page
         if c.pin_paragraph:
             entry["pin_paragraph"] = c.pin_paragraph
+        if c.components.get("unparsed_antecedent"):
+            # Id. that follows a brief, record, or transcript cite — a source
+            # jetcite does not parse. Unresolved on purpose (parent_normalized
+            # is None); this says why, so consumers need not report it as a
+            # short form with no antecedent.
+            entry["unparsed_antecedent"] = c.components["unparsed_antecedent"]
         if c.components.get("pinpoint_inherited"):
             # Bare Id. — pinpoint adopted from the antecedent cite, not
             # written by the drafter.

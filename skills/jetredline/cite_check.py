@@ -130,9 +130,18 @@ def annotate_short_forms(entries: list[dict]) -> None:
         parent_norm = e.get("parent_normalized")
         if parent_norm is None:
             if is_pin:
-                e["pin_warning"] = (
-                    "unresolved short form: no earlier full citation matches"
-                )
+                unparsed = e.get("unparsed_antecedent")
+                if unparsed:
+                    # Id. after a brief/record/transcript cite: correct usage,
+                    # just not an authority jetcite parses. A note, not a defect.
+                    e["pin_note"] = (
+                        f"Id. refers to the preceding {unparsed} citation; "
+                        "not a parsed authority, nothing to verify"
+                    )
+                else:
+                    e["pin_warning"] = (
+                        "unresolved short form: no earlier full citation matches"
+                    )
             continue
         parent = by_norm.get(parent_norm)
         if parent is not None:

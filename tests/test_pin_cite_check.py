@@ -84,3 +84,16 @@ class TestPinCiteEntries:
         for pin in _pins(entries):
             assert pin["local_path"] is None
             assert pin["local_exists"] is False
+
+
+def test_id_after_record_cite_is_a_note_not_a_warning(tmp_path):
+    """An Id. after a record cite is correct usage, not an unresolved short form."""
+    text = ("The rule is settled. Smith v. Jones, 2024 ND 1, ¶ 4, 1 N.W.3d 1. "
+            "The court found no change (R45:12). Id. at 13.")
+    pins = _pins(scan_opinion(text, refs_dir=str(tmp_path)))
+    pin = next(e for e in pins if e["cite_text"].startswith("Id."))
+    assert pin["parent_normalized"] is None
+    assert pin["unparsed_antecedent"] == "record"
+    assert "record" in pin["pin_note"]
+    assert "pin_warning" not in pin
+

@@ -398,6 +398,79 @@ def _quoted_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
+# Explanatory parentheticals whose contents Bluebook rule 4.1 tells the reader
+# to ignore when working out what an id. refers to: "Sources identified in
+# explanatory parentheticals, explanatory phrases, or prior/subsequent history
+# are ignored for purposes of id."
+_EXPLANATORY_PAREN_RE = re.compile(
+    r"\((?:quoting|citing|quoted in|cited in|discussing|construing|"
+    r"interpreting|applying|adopting|following|relying on|referencing|"
+    r"describing|explaining|noting|holding|stating|recognizing|overruling|"
+    r"abrogating|superseding|collecting|comparing|distinguishing|"
+    r"reaffirming|rejecting|reviewing|summarizing)\b"
+)
+_EXPLANATORY_PAREN_MAX = 1500
+
+
+def _explanatory_paren_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of explanatory parentheticals — "(quoting X v. Y, ...)".
+
+    Each span runs from the opening parenthesis to its balanced close, so a
+    nested court/date parenthetical ("(quoting A v. B, 1 N.W.2d 1 (N.D.
+    1941))") stays inside. An opener with no balanced close within
+    _EXPLANATORY_PAREN_MAX characters or before the paragraph ends is not a
+    span: guessing where it stops would hide real antecedents.
+    """
+    spans: list[tuple[int, int]] = []
+    for m in _EXPLANATORY_PAREN_RE.finditer(text):
+        if spans and m.start() < spans[-1][1]:
+            continue  # nested inside a span already recorded
+        depth = 0
+        limit = min(len(text), m.start() + _EXPLANATORY_PAREN_MAX)
+        for i in range(m.start(), limit):
+            ch = text[i]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    spans.append((m.start(), i + 1))
+                    break
+            elif ch == "\n" and text[i + 1:i + 2] == "\n":
+                break
+    return spans
+
+
+# Citations jetcite does not parse but that can still be what an id. points
+# at: briefs ("At. Br. 18, ¶ 28"), the record on appeal ("R45:12:¶3", a
+# docket entry), and transcripts ("Tr. 45"). Left invisible, they let an id. that follows one
+# jump back over it to the last authority — and the pin is then checked
+# against the wrong source.
+_UNPARSED_ANTECEDENT_RES: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("brief", re.compile(
+        r"\b[A-Z][A-Za-z'’.]*\s+(?:Reply\s+|Supp\.\s+)?Br\.\s*"
+        r"(?:\([^)\n]{1,40}\)\s*)?(?:at\s+)?\d")),
+    # "R45:12", "(R:49:3)", "Doc. 45", "Dkt. No. 45", "Doc ID # 147".
+    ("record", re.compile(
+        r"(?<![\w/.\-])R:?\d{1,4}(?=[:)\];,.\s])"
+        r"|\b(?:Doc\.?|Dkt\.|Docket)\s+(?:No\.\s*|ID\s*)?#?\s*\d")),
+    ("transcript", re.compile(r"\bTr\.\s+(?:at\s+)?\d")),
+)
+
+
+# What follows an id. that carries a section pinpoint: "Id. § 5", "*Id.* §§ 5".
+_ID_SECTION_PIN_RE = re.compile(r"[*_]{0,2}\s*§")
+
+
+def _unparsed_antecedents(text: str) -> list[tuple[int, str]]:
+    """(position, kind) of every brief/record/transcript cite, in order."""
+    found = [(m.start(), kind)
+             for kind, rx in _UNPARSED_ANTECEDENT_RES
+             for m in rx.finditer(text)]
+    found.sort()
+    return found
+
+
 def _resolve_pin_cites(
     pin_candidates: list[Citation],
     citations: list[Citation],
@@ -415,8 +488,11 @@ def _resolve_pin_cites(
         kills prose like "argued at 363".
       id — the nearest preceding citation (full or already-resolved pin),
         resolved transitively. Kept unresolved when the antecedent is an
-        ambiguous string cite; a bare "Id." with no antecedent at all is
-        dropped as noise.
+        ambiguous string cite, or when a brief/record/transcript cite sits
+        between that citation and the id. (components["unparsed_antecedent"]
+        names which); a bare "Id." with no antecedent at all is dropped as
+        noise. Authorities inside an explanatory parenthetical are not
+        antecedents, and a ¶ pin, like a page pin, takes a case.
       rule_pin — bare "Rule 60(b)" attributed to a rule set by the marker
         ladder (see _resolve_rule_pin); unattributable candidates are
         dropped, matching the bare-name doctrine.
@@ -446,6 +522,28 @@ def _resolve_pin_cites(
             if s > pos:
                 break
         return False
+
+    _pspans = _explanatory_paren_spans(text)
+
+    def _paren_span(pos: int) -> tuple[int, int] | None:
+        for s, e in _pspans:
+            if s <= pos < e:
+                return (s, e)
+            if s > pos:
+                break
+        return None
+
+    _unparsed = _unparsed_antecedents(text)
+
+    def unparsed_between(lo: int, hi: int) -> str | None:
+        """Kind of the last brief/record/transcript cite in [lo, hi)."""
+        kind = None
+        for pos, k in _unparsed:
+            if pos >= hi:
+                break
+            if pos >= lo:
+                kind = k
+        return kind
 
     norm_type = {c.normalized: c.cite_type for c in citations}
 
@@ -634,7 +732,7 @@ def _resolve_pin_cites(
                 resolved.append(pin)
 
         elif shape == "id":
-            # Two guards on the antecedent pools:
+            # Guards on the antecedent pools:
             #   1. Quoted-matter exclusion — a citation inside a quotation is
             #      the quoted author's, not this writer's, so it cannot
             #      capture an id. outside the quote. An id. that is itself
@@ -644,13 +742,29 @@ def _resolve_pin_cites(
             #      source; constitutions, statutes, and rules take
             #      subdivision pins, not page pins. Case antecedents only.
             #      Also catches quotes the span detector cannot see
-            #      (unmarked block quotes).
+            #      (unmarked block quotes). A ¶ pin gets the same guard:
+            #      only opinions carry numbered paragraphs, so "id. ¶ 16"
+            #      after a rule or statute cited in passing reaches back to
+            #      the case under discussion.
+            #   3. Explanatory-parenthetical exclusion (Bluebook 4.1) — an
+            #      authority inside "(quoting ...)" or "(citing ...)" is
+            #      ignored; the id. refers to the citing authority. An id.
+            #      inside such a parenthetical still sees the cites that
+            #      share it.
+            #   4. Unparsed antecedents — a brief, record, or transcript
+            #      cite nearer than every parsed one is what the id. points
+            #      at. Applied after the pools are settled, below.
             pin_in_quote = _in_quote(start)
             fulls = id_antecedents if pin_in_quote else [
                 c for c in id_antecedents if not _in_quote(c.position)]
             chain = resolved if pin_in_quote else [
                 p for p in resolved if not _in_quote(p.position)]
-            if pin.pin_page and not pin.pin_paragraph:
+            pin_span = _paren_span(start)
+            fulls = [c for c in fulls
+                     if _paren_span(c.position) in (None, pin_span)]
+            chain = [p for p in chain
+                     if _paren_span(p.position) in (None, pin_span)]
+            if pin.pin_page or pin.pin_paragraph:
                 fulls = [c for c in fulls if c.cite_type == CitationType.CASE]
                 chain = [p for p in chain
                          if p.parent_normalized is None
@@ -659,13 +773,30 @@ def _resolve_pin_cites(
                          == CitationType.CASE]
             nearest_full = nearest_preceding(fulls, start)
             nearest_pin = nearest_preceding(chain, start)
-            if nearest_pin is not None and (
+            last_parsed = max(
+                (c.position + len(c.raw_text)
+                 for c in (nearest_full, nearest_pin) if c is not None),
+                default=0)
+            unparsed = unparsed_between(last_parsed, start)
+            # "Id. § 59-16.1-15" names a code section: its antecedent is a
+            # codified provision, never a brief or the record.
+            section_pin = _ID_SECTION_PIN_RE.match(text, end) is not None
+            if unparsed is not None and not pin_in_quote and not section_pin:
+                # The id. follows a brief/record/transcript cite. Kept
+                # unresolved, like an ambiguous string cite, and labelled so
+                # consumers can say why.
+                pin.components["unparsed_antecedent"] = unparsed
+                resolved.append(pin)
+            elif nearest_pin is not None and (
                 nearest_full is None or nearest_pin.position > nearest_full.position
             ):
                 # Chained Id. — inherit the prior pin's parent transitively.
                 if nearest_pin.parent_normalized is not None:
                     _link_pin(pin, nearest_pin)
                     _inherit_pinpoint(pin, nearest_pin)
+                elif nearest_pin.components.get("unparsed_antecedent"):
+                    pin.components["unparsed_antecedent"] = (
+                        nearest_pin.components["unparsed_antecedent"])
                 resolved.append(pin)
             elif nearest_full is not None:
                 if ambiguous_string_cite(nearest_full, start, fulls):
