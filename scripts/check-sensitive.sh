@@ -21,15 +21,25 @@ allow_grep() {
   fi
 }
 
+# Arguments are git-log revision arguments, passed separately: a new ref is
+# scanned as `<sha> --not --remotes`, which git rejects if quoted as one word.
+# That is how every new branch and tag once went unscanned — git log failed,
+# its error was discarded, and an empty diff passed. A git failure now fails
+# the push instead.
 scan_range() {
-  local range="$1"
+  local log
+  if ! log=$(git log --format='' -p "$@" -- . ":(exclude)$ALLOW_FILE" 2>&1); then
+    echo "[pre-push] could not read the commits being pushed ($*):"
+    echo "$log" | sed 's/^/  /'
+    errors=$((errors+1))
+    return
+  fi
 
   # Added lines only (diff +...), excluding the allow file itself: it is the
   # rulebook, so every pattern it lists reads as a hit against its own rules
   # and a new exemption can never be pushed.
   local added
-  added=$(git log --format='' -p "$range" -- . ":(exclude)$ALLOW_FILE" \
-    2>/dev/null | grep -E '^\+' || true)
+  added=$(echo "$log" | grep -E '^\+' || true)
 
   # 1. ND Supreme Court docket 2000-2026 series
   local sc_hits
@@ -71,7 +81,7 @@ scan_range() {
 
   # 4. Binary documents being added
   local bins
-  bins=$(git diff --diff-filter=A --name-only "$range" 2>/dev/null \
+  bins=$(git log --format='' --diff-filter=A --name-only "$@" \
     | grep -iE '\.(pdf|docx|doc|rtf|xlsx|pptx)$' \
     | allow_grep || true)
   if [ -n "$bins" ]; then
@@ -84,9 +94,8 @@ scan_range() {
 while read -r local_ref local_sha remote_ref remote_sha; do
   [ "$local_sha" = "$ZERO" ] && continue  # branch deletion
   if [ "$remote_sha" = "$ZERO" ]; then
-    # New branch: scan local commits not reachable from any existing remote
-    range_args="$local_sha --not --remotes"
-    scan_range "$range_args"
+    # New branch or tag: scan local commits not reachable from any existing remote
+    scan_range "$local_sha" --not --remotes
   else
     scan_range "$remote_sha..$local_sha"
   fi
