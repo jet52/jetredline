@@ -148,6 +148,8 @@ Trigger phrases:
 
 Provide a `.docx` draft opinion in the working directory. Optionally include `.pdf` briefs or record materials for fact-checking.
 
+> **Tip: teach jetredline how you write.** Without a voice file, jetredline edits your drafts toward its general style preferences, and it will not prompt you to add one. A short `my-writing-voice.md` lets the redline polish your prose in your own voice. See [Your writing voice](#your-writing-voice-optional) for where to put the file and how to build it.
+
 ## Your writing voice (optional)
 
 By default, jetredline edits toward the style guide's general preferences (Redbook, Guberman, recent North Dakota Supreme Court opinions). If you keep a file describing **your own** writing voice, jetredline defers to it when editing your drafts, so the redline polishes your prose instead of nudging it toward someone else's.
