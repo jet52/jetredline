@@ -100,7 +100,7 @@ class FederalCaseMatcher(BaseMatcher):
 
         # U.S. Reports -> Justia (fetchable), plus a link-only official-print
         # PDF (LOC per-case scan, or the Court's bound volume). Appended last
-        # so fetch_and_cache never downloads it.
+        # so fetch_text never downloads it.
         for m in _US_REPORTS.finditer(text):
             volume, page = m.group(1), m.group(2)
             sources = [

@@ -6,15 +6,19 @@ JSON schema expected by Pass 3B
 
 Usage:
     python3 cite_check.py --file opinion.md
+    python3 cite_check.py --file opinion.md --sources-dir <TMPDIR>/sources --fetch
     echo "N.D.C.C. § 12.1-32-01" | python3 cite_check.py
     echo "42 U.S.C. § 1983" | python3 cite_check.py
 
-Output: JSON array of citation records with local paths and URLs.
+Output: JSON array of citation records with URLs and, when a sources
+directory is given, the path of each authority's text inside it.
 """
 
 import argparse
 import json
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -27,7 +31,7 @@ if _BUNDLED_LIB.is_dir():
 
 try:
     from jetcite import Citation, CitationType, scan_text
-    from jetcite.cache import fetch_and_cache
+    from jetcite.fetch import fetch_text
     from jetcite.legacy import (
         CASE_TYPES,
         add_parallel_info,
@@ -55,23 +59,97 @@ except ImportError as e:
 
 
 # ---------------------------------------------------------------------------
+# Per-run source text
+#
+# The text of a cited authority is kept only for the run that needs it, in a
+# sources directory the caller names (normally <TMPDIR>/sources). Nothing is
+# read from or written to a shared tree: through v2 this was ~/refs, which
+# most users do not have, and which on a machine that does have one may be
+# somebody's primary source files.
+# ---------------------------------------------------------------------------
+
+def source_path(normalized: str, sources_dir: str | Path) -> Path:
+    """Where one authority's text lives inside a run's sources directory."""
+    slug = re.sub(r"[^A-Za-z0-9.]+", "_", re.sub(r"\s+", "", normalized))
+    return Path(sources_dir).expanduser() / f"{slug}.md"
+
+
+def write_source(path: Path, text: str, meta: dict) -> None:
+    """Write one authority's text and its provenance sidecar."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    meta = {"fetched": datetime.now(timezone.utc).isoformat(), **meta}
+    path.with_suffix(path.suffix + ".meta.json").write_text(
+        json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def source_trust(path: str | Path) -> dict:
+    """What a file in the sources directory may be relied on for.
+
+      origin         "ndlaw-corpus", "web-fetch", or "unknown" (no sidecar).
+      fetched        ISO timestamp, or None.
+      pairing_basis  "asserted-by-source" when the fetch reached this opinion
+                     only through a parallel cite the draft itself paired.
+      confirms       False when the file must not stand as verification of
+                     its own citation.
+    """
+    try:
+        meta = json.loads(Path(str(path) + ".meta.json").expanduser()
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = {}
+    basis = (meta.get("pairing") or {}).get("basis")
+    origin = meta.get("origin") or "unknown"
+    return {
+        "origin": origin,
+        "fetched": meta.get("fetched"),
+        "pairing_basis": basis,
+        "confirms": origin in ("ndlaw-corpus", "web-fetch") and basis is None,
+    }
+
+
+def fetch_source(cite: Citation, sources_dir: str | Path,
+                 timeout: float = 15.0) -> Path | None:
+    """Fetch one authority's text from the web into the sources directory."""
+    got = fetch_text(cite, timeout=timeout)
+    if got is None:
+        return None
+    path = source_path(cite.normalized, sources_dir)
+    meta = {"citation": cite.normalized, "source_url": got.source_url,
+            "origin": "web-fetch"}
+    if got.via_parallel:
+        meta["pairing"] = {"resolved_from": got.via_parallel,
+                           "basis": "asserted-by-source"}
+    try:
+        write_source(path, got.text, meta)
+    except OSError:
+        return None
+    return path
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = False,
+def scan_opinion(text: str, sources_dir: str | Path | None = None,
+                 fetch_missing: bool = False,
                  include_pin_cites: bool = True,
                  include_occurrences: bool = True) -> list[dict]:
     """Scan opinion text for all citations. Returns legacy-format dicts.
 
-    If cache_missing is True, fetches and caches all case citations that
-    are not already in the local refs directory.
+    ``sources_dir`` is this run's sources directory. Each first-occurrence
+    entry gets ``local_path`` (where its text would sit there) and
+    ``local_exists`` (whether it does: ndlaw_export.py or an earlier step of
+    the same run put it there). With no sources_dir both are None / False.
+    If fetch_missing is True, case citations with no text there yet are
+    fetched from their web source into it.
 
     Pin-cite short forms ("491 F.3d at 363", "Goss at 365", "Id. ¶ 14")
     appear as entries with cite_type "pin_cite", linked to their parent full
     cite via parent_normalized (None = unresolved — e.g. a digit-transposed
-    volume; flagged with pin_warning for Pass 3B). Pin entries carry no local
-    file of their own ("pin_cite" is not in CASE_TYPES, so the cache loop
-    skips them); verification reads the parent's cached opinion via
+    volume; flagged with pin_warning for Pass 3B). Pin entries carry no text
+    of their own ("pin_cite" is not in CASE_TYPES, so the fetch loop skips
+    them); verification reads the parent's text via
     parent_local_path / parent_local_exists.
 
     Repeat full-form cites of every type — second and later appearances,
@@ -80,18 +158,26 @@ def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = Fals
     with is_repeat=True linked to the first occurrence via parent_normalized,
     so each proposition and pinpoint is individually verifiable. A rule or
     statute subdivision ("(b)", "(1)(a)") travels in ``pinpoint``; the bare
-    provision is the authority. Like pins, repeats carry no local file of
-    their own and are skipped by the cache loop; they get
+    provision is the authority. Like pins, repeats carry no text of their
+    own and are skipped by the fetch loop; they get
     parent_local_path / parent_local_exists instead.
     """
-    refs = Path(refs_dir).expanduser()
-    citations = scan_text(text, refs_dir=refs, include_pin_cites=include_pin_cites,
+    citations = scan_text(text, include_pin_cites=include_pin_cites,
                           include_occurrences=include_occurrences)
 
-    entries = [to_legacy_dict(c, refs) for c in citations]
+    entries = [to_legacy_dict(c) for c in citations]
     add_parallel_info(entries, citations)
 
-    if cache_missing:
+    for entry in entries:
+        entry["local_path"] = None
+        entry["local_exists"] = False
+        if (sources_dir is not None and entry["cite_type"] != "pin_cite"
+                and not entry.get("is_repeat")):
+            path = source_path(entry["normalized"], sources_dir)
+            entry["local_path"] = str(path)
+            entry["local_exists"] = path.is_file()
+
+    if fetch_missing and sources_dir is not None:
         norm_to_cite = {c.normalized: c for c in citations if not c.is_repeat}
         for entry in entries:
             if (entry.get("cite_type") in CASE_TYPES
@@ -101,9 +187,7 @@ def scan_opinion(text: str, refs_dir: str = "~/refs", cache_missing: bool = Fals
                 cite = norm_to_cite.get(entry["normalized"])
                 if cite is None:
                     continue
-                cached = fetch_and_cache(cite, refs_dir=refs, timeout=15.0)
-                if cached is not None:
-                    entry["local_path"] = str(cached)
+                if fetch_source(cite, sources_dir) is not None:
                     entry["local_exists"] = True
 
     annotate_short_forms(entries)
@@ -115,7 +199,7 @@ def annotate_short_forms(entries: list[dict]) -> None:
 
     Resolved pins and repeats get ``parent_local_path``/``parent_local_exists``
     copied from the first-occurrence entry so Pass 3B reads the parent's
-    cached opinion when verifying the page/paragraph. Unresolved pins get
+    text when verifying the page/paragraph. Unresolved pins get
     ``pin_warning`` — an explicit short form with no matching antecedent is
     a drafting defect worth surfacing in the redline.
     """
@@ -159,20 +243,26 @@ annotate_pin_cites = annotate_short_forms
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Parse legal citations, resolve local files, build URLs."
+        description="Parse legal citations and build URLs; optionally fetch "
+                    "case text into a per-run sources directory."
     )
     parser.add_argument("--file", "-f", help="Scan a file for all citations")
-    parser.add_argument("--refs-dir", default="~/refs",
-                        help="Override refs directory (default: ~/refs)")
+    parser.add_argument("--sources-dir",
+                        help="This run's sources directory (e.g. "
+                             "<TMPDIR>/sources): where ndlaw_export.py and "
+                             "--fetch put authority text. Omit for none.")
     parser.add_argument("--json", action="store_true", default=True,
                         help="Output as JSON (default)")
-    parser.add_argument("--cache", action="store_true",
-                        help="Auto-fetch and cache missing case citations")
+    parser.add_argument("--fetch", action="store_true",
+                        help="Fetch case text not already in --sources-dir "
+                             "from its web source into it")
     parser.add_argument("--pin-cites", action=argparse.BooleanOptionalAction,
                         default=True,
                         help="Include pin-cite short forms linked to their "
                              "parent cites (default: on; --no-pin-cites to disable)")
     args = parser.parse_args()
+    if args.fetch and not args.sources_dir:
+        parser.error("--fetch requires --sources-dir")
 
     if args.file:
         path = Path(args.file).expanduser()
@@ -180,7 +270,7 @@ def main():
             print(f"Error: file not found: {path}", file=sys.stderr)
             sys.exit(1)
         text = path.read_text(encoding="utf-8")
-        results = scan_opinion(text, refs_dir=args.refs_dir, cache_missing=args.cache,
+        results = scan_opinion(text, sources_dir=args.sources_dir, fetch_missing=args.fetch,
                                include_pin_cites=args.pin_cites)
     else:
         # stdin mode — one citation per line. Pin-cite linking needs document
@@ -190,7 +280,7 @@ def main():
             line = line.strip()
             if not line:
                 continue
-            found = scan_opinion(line, refs_dir=args.refs_dir, cache_missing=args.cache,
+            found = scan_opinion(line, sources_dir=args.sources_dir, fetch_missing=args.fetch,
                                  include_pin_cites=False)
             results.extend(found)
 

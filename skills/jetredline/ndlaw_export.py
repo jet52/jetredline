@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Export ND opinion text and direct URLs from the ndlaw corpus into ~/refs.
+"""Export ND opinion text and direct URLs from the ndlaw corpus.
 
-Refreshes the local refs cache from the authoritative ndlaw corpus
-(ndlaw) so the citation-review HTML embeds corpus text — and the
-court's direct opinion URL — instead of whatever an earlier web scrape
-left behind. Runs with zero model-context cost via one of two backends:
+Writes each cited ND opinion's corpus text into this run's sources
+directory (normally <TMPDIR>/sources) so the citation-review HTML embeds
+corpus text and the court's direct opinion URL. Nothing is written
+outside that directory. Runs with zero model-context cost via one of two backends:
 
   sqlite  — a local ndlaw opinions.db (--db, NDLAW_DB env, or the
             default development path), read-only.
@@ -15,14 +15,14 @@ left behind. Runs with zero model-context cost via one of two backends:
             https://ndlaw.org/mcp (no auth). --no-public disables it.
 
 Usage:
-    ndlaw_export.py --opinion draft.md --refs-dir ~/refs \
+    ndlaw_export.py --opinion draft.md --sources-dir <TMPDIR>/sources \
         --meta-out sources.json
-    ndlaw_export.py --cite-json cites.json --refs-dir ~/refs \
+    ndlaw_export.py --cite-json cites.json --sources-dir <TMPDIR>/sources \
         --meta-out sources.json
     ndlaw_export.py --cites "2024 ND 156" "2023 ND 44" ...
 
 Exit codes: 0 = exported (possibly with misses); 2 = no backend
-reachable (callers should fall through to cached refs / link-only). When the
+reachable (callers should fall through to the MCP tools / link-only). When the
 public server is the one that failed, stderr says why -- an egress allowlist
 refusal, a network failure, or an HTTP error -- and what to allowlist.
 """
@@ -37,7 +37,6 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).parent
@@ -79,12 +78,12 @@ def _collect_cites(args) -> list[str]:
     if args.opinion:
         from cite_check import scan_opinion
         text = Path(args.opinion).expanduser().read_text(encoding="utf-8")
-        # Offline scan: no URL resolution, no cache fetching
+        # Offline scan: no URL resolution, no fetching
         import jetcite.scanner as _scanner
         saved = _scanner.resolve_nd_opinion_urls
         _scanner.resolve_nd_opinion_urls = lambda cites: None
         try:
-            entries = scan_opinion(text, refs_dir=args.refs_dir, cache_missing=False)
+            entries = scan_opinion(text)
         finally:
             _scanner.resolve_nd_opinion_urls = saved
         for e in entries:
@@ -321,51 +320,35 @@ def _pick_backend(args):
 
 
 # ---------------------------------------------------------------------------
-# Refs writing
+# Writing into the run's sources directory
 # ---------------------------------------------------------------------------
 
-def _refs_path_for(citation_str: str, refs_dir: Path) -> Path | None:
-    """Map a citation string to its refs path via jetcite's layout."""
-    from jetcite.cache import citation_path
-    from jetcite.patterns import get_matchers
-    for matcher in get_matchers():
-        cite = matcher.find_first(citation_str)
-        if cite and " ".join(cite.normalized.split()) == citation_str:
-            rel = citation_path(cite)
-            if rel is not None:
-                return refs_dir / rel
-    return None
-
-
-def _write_refs(path: Path, record: dict, queried: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(record["text"], encoding="utf-8")
-    meta = {
+def _write_source(sources_dir: Path, record: dict, queried: str) -> Path:
+    from cite_check import source_path, write_source
+    path = source_path(queried, sources_dir)
+    write_source(path, record["text"], {
         "citation": queried,
         "case_name": record.get("case_name"),
         "source_url": record.get("url"),
-        "fetched": datetime.now(timezone.utc).isoformat(),
         "content_type": "text/markdown",
-        # `origin` is jetcite's field (cache.source_trust reads it); `via` is
-        # this script's older name for the same fact and stays for the files
-        # already on disk that carry only it.
         "origin": "ndlaw-corpus",
-        "via": "ndlaw",
-    }
-    path.with_suffix(path.suffix + ".meta.json").write_text(
-        json.dumps(meta, indent=2), encoding="utf-8")
+    })
+    return path
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Refresh ~/refs ND opinion text + direct URLs from the "
-                    "ndlaw corpus (local sqlite or deployed MCP).")
+        description="Write ND opinion text + direct URLs from the ndlaw "
+                    "corpus (local sqlite or deployed MCP) into this run's "
+                    "sources directory.")
     src = ap.add_argument_group("citation sources (any combination)")
     src.add_argument("--opinion", help="Draft to scan for ND case cites")
     src.add_argument("--cite-json", help="cite_check.py JSON output")
     src.add_argument("--cites", nargs="*", help="Explicit citation strings")
-    ap.add_argument("--refs-dir", default="~/refs",
-                    help="Refs directory to write into (default: ~/refs)")
+    ap.add_argument("--sources-dir",
+                    help="This run's sources directory to write opinion text "
+                         "into (e.g. <TMPDIR>/sources). Omit to write "
+                         "metadata only.")
     ap.add_argument("--meta-out",
                     help="Write sources metadata JSON (normalized cite → "
                          "case_name/url/url_source/via) to this path")
@@ -378,17 +361,11 @@ def main():
     ap.add_argument("--no-public", action="store_true",
                     help=f"Do not fall back to the public server "
                          f"({PUBLIC_URL}) when no --db or --url is available")
-    ap.add_argument("--no-refresh", action="store_true",
-                    help="Keep existing refs files instead of overwriting "
-                         "them with corpus text")
     args = ap.parse_args()
 
     if not (args.opinion or args.cite_json or args.cites):
         ap.error("provide --opinion, --cite-json, or --cites")
 
-    # Resolve to absolute: jetcite's local-source attach builds file:// URIs,
-    # which require absolute paths.
-    args.refs_dir = str(Path(args.refs_dir).expanduser().resolve())
     cites = _collect_cites(args)
     if not cites:
         print("No corpus-eligible ND citations found.", file=sys.stderr)
@@ -405,13 +382,14 @@ def main():
         print("No ndlaw backend: no opinions.db found, no server URL given, "
               "and --no-public set. Pass --url https://<server>/mcp "
               "(plus --auth user:pass if the server requires it), or set "
-              "NDLAW_URL/NDLAW_AUTH. Falling through to existing refs cache.",
+              "NDLAW_URL/NDLAW_AUTH.",
               file=sys.stderr)
         return 2
 
-    refs_dir = Path(args.refs_dir)
+    sources_dir = (Path(args.sources_dir).expanduser().resolve()
+                   if args.sources_dir else None)
     meta_map: dict[str, dict] = {}
-    exported = missed = kept = 0
+    exported = missed = 0
     try:
         for cite in cites:
             try:
@@ -436,15 +414,9 @@ def main():
             for alias in record.get("citations") or [cite]:
                 meta_map.setdefault(" ".join(alias.split()), entry)
 
-            path = _refs_path_for(cite, refs_dir)
-            if path is None:
-                print(f"  {cite}: no refs path mapping; metadata only",
-                      file=sys.stderr)
+            if sources_dir is None:
                 continue
-            if path.is_file() and args.no_refresh:
-                kept += 1
-                continue
-            _write_refs(path, record, cite)
+            path = _write_source(sources_dir, record, cite)
             exported += 1
             print(f"  {cite}: {path}", file=sys.stderr)
     finally:
@@ -455,7 +427,7 @@ def main():
             json.dumps(meta_map, indent=2, ensure_ascii=False),
             encoding="utf-8")
 
-    print(f"ndlaw export via {label}: {exported} written, {kept} kept, "
+    print(f"ndlaw export via {label}: {exported} written, "
           f"{missed} not in corpus, {len(meta_map)} cite keys in metadata.",
           file=sys.stderr)
     return 0

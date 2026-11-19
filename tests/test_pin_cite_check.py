@@ -25,7 +25,7 @@ def opinion_text():
 
 @pytest.fixture
 def entries(opinion_text, tmp_path):
-    return scan_opinion(opinion_text, refs_dir=str(tmp_path))
+    return scan_opinion(opinion_text, sources_dir=str(tmp_path))
 
 
 def _pins(entries):
@@ -38,11 +38,11 @@ class TestPinCiteEntries:
         assert len(_pins(entries)) == 5
 
     def test_opt_out_restores_legacy_output(self, opinion_text, tmp_path):
-        legacy = scan_opinion(opinion_text, refs_dir=str(tmp_path),
+        legacy = scan_opinion(opinion_text, sources_dir=str(tmp_path),
                               include_pin_cites=False)
         assert _pins(legacy) == []
         # Full-citation entries identical with and without pins
-        with_pins = scan_opinion(opinion_text, refs_dir=str(tmp_path))
+        with_pins = scan_opinion(opinion_text, sources_dir=str(tmp_path))
         fulls = [e for e in with_pins if e["cite_type"] != "pin_cite"]
         assert [e["normalized"] for e in fulls] == [e["normalized"] for e in legacy]
 
@@ -90,7 +90,7 @@ def test_id_after_record_cite_is_a_note_not_a_warning(tmp_path):
     """An Id. after a record cite is correct usage, not an unresolved short form."""
     text = ("The rule is settled. Smith v. Jones, 2024 ND 1, ¶ 4, 1 N.W.3d 1. "
             "The court found no change (R45:12). Id. at 13.")
-    pins = _pins(scan_opinion(text, refs_dir=str(tmp_path)))
+    pins = _pins(scan_opinion(text, sources_dir=str(tmp_path)))
     pin = next(e for e in pins if e["cite_text"].startswith("Id."))
     assert pin["parent_normalized"] is None
     assert pin["unparsed_antecedent"] == "record"

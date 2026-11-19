@@ -387,8 +387,7 @@ class TestOccurrenceReview:
     @pytest.fixture
     def entries(self, tmp_path):
         from cite_check import scan_opinion
-        return scan_opinion(self.OPINION, refs_dir=str(tmp_path),
-                            cache_missing=False)
+        return scan_opinion(self.OPINION, sources_dir=str(tmp_path))
 
     def test_every_occurrence_is_an_entry(self, entries):
         texts = [e["cite_text"] for e in entries]
@@ -427,12 +426,10 @@ class TestOccurrenceReview:
 
     def test_pin_inherits_parent_source(self, entries, tmp_path):
         from cite_review import _build_html, _split_paragraphs
-        opin = tmp_path / "opin" / "ND" / "2024"
-        opin.mkdir(parents=True)
-        (opin / "2024ND156.md").write_text("[¶ 23] Cited text.", encoding="utf-8")
-        from cite_check import scan_opinion
-        entries = scan_opinion(self.OPINION, refs_dir=str(tmp_path),
-                               cache_missing=False)
+        from cite_check import scan_opinion, source_path
+        source_path("2024 ND 156", tmp_path).write_text(
+            "[¶ 23] Cited text.", encoding="utf-8")
+        entries = scan_opinion(self.OPINION, sources_dir=str(tmp_path))
         paras = _split_paragraphs(self.OPINION)
         html_str = _build_html("t", entries, paras, "k", self.OPINION)
         data = _data(html_str)
@@ -636,8 +633,7 @@ class TestStarPageAnchors:
     @pytest.fixture
     def entries(self, tmp_path):
         from cite_check import scan_opinion
-        return scan_opinion(self.OPINION, refs_dir=str(tmp_path),
-                            cache_missing=False)
+        return scan_opinion(self.OPINION, sources_dir=str(tmp_path))
 
     def test_md_to_html_anchors_star_pages(self):
         from cite_review import _md_to_html
@@ -673,8 +669,7 @@ class TestStarPageAnchors:
                    "(N.D. 1977).\n")
         from cite_check import scan_opinion
         from cite_review import _via_key
-        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
-                            cache_missing=False)
+        ents = scan_opinion(opinion, sources_dir="/tmp/nonexistent-refs")
         meta = {_via_key("259 N.W.2d 621"): {
             "case_name": "State ex rel. Olson v. Maxwell", "via": "ndlaw"}}
         paras = _split_paragraphs(opinion)
@@ -690,8 +685,7 @@ class TestStarPageAnchors:
         pinned PDF page (pin − first page + 1)."""
         opinion = "[¶1] R.A.V. v. St. Paul, 505 U.S. 377, 391 (1992).\n"
         from cite_check import scan_opinion
-        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
-                            cache_missing=False)
+        ents = scan_opinion(opinion, sources_dir="/tmp/nonexistent-refs")
         paras = _split_paragraphs(opinion)
         data = _data(_build_html("t", ents, paras, "k", opinion))
         d = next(x for x in data if x["normalized"] == "505 U.S. 377")
@@ -700,8 +694,7 @@ class TestStarPageAnchors:
     def test_paragraph_pins_unaffected(self, entries):
         opinion = "[¶1] See Olson v. Olson, 2024 ND 156, ¶ 7.\n"
         from cite_check import scan_opinion
-        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
-                            cache_missing=False)
+        ents = scan_opinion(opinion, sources_dir="/tmp/nonexistent-refs")
         paras = _split_paragraphs(opinion)
         data = _data(_build_html("t", ents, paras, "k", opinion))
         d = next(x for x in data if x["normalized"] == "2024 ND 156")
@@ -744,8 +737,7 @@ class TestNdlawInHtml:
     @pytest.fixture
     def entries(self, tmp_path):
         from cite_check import scan_opinion
-        return scan_opinion(self.OPINION, refs_dir=str(tmp_path),
-                            cache_missing=False)
+        return scan_opinion(self.OPINION, sources_dir=str(tmp_path))
 
     def test_nd_entries_get_urls_foreign_do_not(self, entries):
         paras = _split_paragraphs(self.OPINION)
@@ -819,8 +811,7 @@ class TestNdlawInHtml:
         anchor in the fragment."""
         opinion = "[¶1] See U.S. Const. amend. XIV, § 1.\n"
         from cite_check import scan_opinion
-        ents = scan_opinion(opinion, refs_dir="/tmp/nonexistent-refs",
-                            cache_missing=False)
+        ents = scan_opinion(opinion, sources_dir="/tmp/nonexistent-refs")
         paras = _split_paragraphs(opinion)
         data = _data(_build_html("t", ents, paras, "k", opinion))
         d = next(x for x in data if x["cite_type"] == "constitution")

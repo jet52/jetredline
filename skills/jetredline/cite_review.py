@@ -13,7 +13,7 @@ anchors and scrolling), cited authority on bottom (iframe for ND sources,
 citations, v/f/s to mark verified/flagged/skipped, n to focus notes field.
 
 Usage:
-    python3 cite_review.py --opinion opinion.md --refs-dir ~/refs \\
+    python3 cite_review.py --opinion opinion.md --sources-dir <TMPDIR>/sources \\
         --output cite-review.html --title "2026 ND 42, State v. Henderson"
 
     # Or pipe cite_check.py JSON directly:
@@ -438,12 +438,13 @@ def _restore_url_resolution(saved: dict):
 
 
 def _load_citations(opinion_path: Path, cite_json_path: Path | None,
-                    refs_dir: str, local_only: bool = False) -> list[dict]:
+                    sources_dir: str | None, local_only: bool = False) -> list[dict]:
     """Load citation JSON — from file or by running cite_check.
 
-    Default mode runs with cache_missing=True so citations are fetched
-    and cached in refs_dir for future offline use.  --local-only skips
-    all HTTP calls and uses whatever is already cached.
+    ``sources_dir`` is this run's sources directory (see cite_check): the
+    text ndlaw_export.py wrote there is embedded, and case text still missing
+    is fetched into it. --local-only skips all HTTP calls and embeds only
+    what the directory already holds.
     """
     if cite_json_path and cite_json_path.exists():
         return json.loads(cite_json_path.read_text(encoding="utf-8"))
@@ -451,7 +452,7 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
     # Import and run cite_check directly.
     # Always disable per-citation URL resolution during scanning — it's
     # slow and we derive direct URLs from local paths instead.  Only the
-    # explicit caching step below needs web access.
+    # explicit fetch step below needs web access.
     skill_dir = Path(__file__).parent
     sys.path.insert(0, str(skill_dir))
     # The vendored jetcite must be importable before _disable_url_resolution
@@ -462,43 +463,37 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
     try:
         saved = _disable_url_resolution()
 
-        from cite_check import scan_opinion
+        from cite_check import fetch_source, scan_opinion
         text = opinion_path.read_text(encoding="utf-8")
-        result = scan_opinion(text, refs_dir=refs_dir, cache_missing=False)
+        result = scan_opinion(text, sources_dir=sources_dir)
 
         _restore_url_resolution(saved)
 
-        # Cache missing citations (unless local_only)
-        if not local_only:
-            from jetcite.cache import fetch_and_cache
-            from jetcite import Citation
-
-            _CACHEABLE = {
+        # Fetch missing case text (unless local_only)
+        if not local_only and sources_dir:
+            _FETCHABLE = {
                 "neutral_cite", "us_supreme_court",
                 "federal_reporter", "regional_reporter",
             }
-            to_cache = [
+            to_fetch = [
                 e for e in result
                 if not e.get("local_exists") and e.get("url")
-                and e.get("cite_type") in _CACHEABLE
+                and e.get("cite_type") in _FETCHABLE
                 and not e.get("is_repeat")
             ]
-            if to_cache:
-                # Build Citation objects for fetch_and_cache by re-scanning
-                # with resolution disabled.  Only needed when something is
-                # actually missing — on a warm refs dir this scan is skipped.
+            if to_fetch:
+                # Build Citation objects for the fetch by re-scanning with
+                # resolution disabled.  Only needed when something is
+                # actually missing.
                 saved2 = _disable_url_resolution()
                 from jetcite import scan_text as _st
-                cite_objs = {
-                    c.normalized: c
-                    for c in _st(text, refs_dir=Path(refs_dir).expanduser())
-                }
+                cite_objs = {c.normalized: c for c in _st(text)}
                 _restore_url_resolution(saved2)
 
-                total = len(to_cache)
-                print(f"  Caching {total} citation(s) to {refs_dir} ...",
+                total = len(to_fetch)
+                print(f"  Fetching {total} citation(s) into {sources_dir} ...",
                       file=sys.stderr)
-                for i, entry in enumerate(to_cache, 1):
+                for i, entry in enumerate(to_fetch, 1):
                     cite = cite_objs.get(entry["normalized"])
                     if cite is None:
                         continue
@@ -506,18 +501,17 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
                     print(f"  [{i}/{total}] {norm} ...",
                           file=sys.stderr, end="", flush=True)
                     try:
-                        cached = fetch_and_cache(
-                            cite, refs_dir=Path(refs_dir).expanduser(),
-                            timeout=15.0,
-                        )
-                        if cached is not None:
-                            entry["local_path"] = str(cached)
+                        if fetch_source(cite, sources_dir) is not None:
                             entry["local_exists"] = True
-                            print(" cached", file=sys.stderr)
+                            print(" fetched", file=sys.stderr)
                         else:
                             print(" not available", file=sys.stderr)
                     except Exception as exc:
                         print(f" error: {exc}", file=sys.stderr)
+
+            # Short forms read their parent's text: refresh what they inherit.
+            from cite_check import annotate_short_forms
+            annotate_short_forms(result)
 
         return result
     finally:
@@ -525,7 +519,7 @@ def _load_citations(opinion_path: Path, cite_json_path: Path | None,
 
 
 # Pattern to extract neutral citation from opinion local paths
-# e.g., ~/refs/opin/ND/2008/2008ND228.md → 2008ND228
+# e.g., <sources>/2008ND228.md → 2008ND228
 _ND_LOCAL_PATH_RE = re.compile(r"/(\d{4}ND\d+)\.md$")
 
 
@@ -947,10 +941,7 @@ def _ndlaw_eligible(cite: dict, meta: dict) -> bool:
     Signal 2 is what covers pre-1997 ND cases: they are cited to N.W. or
     N.W.2d, which jetcite classifies as a regional reporter with jurisdiction
     ``us`` — correct, the reporter is regional. The reporter alone cannot
-    stand in, because N.W.2d also carries six other states. A refs path cannot
-    stand in either: ``~/refs/opin/`` holds every reporter, federal and state
-    alike (``opin/US/``, ``opin/F3d/``, ``opin/Cal2d/``), so it says nothing
-    about jurisdiction until the three-tier restructure lands.
+    stand in, because N.W.2d also carries six other states.
     """
     return cite.get("jurisdiction") == "nd" or bool(meta)
 
@@ -1000,22 +991,17 @@ def _download_pdf(url: str, dest: Path, timeout: int = 15) -> bool:
 
 
 def _local_trust(local_path: str) -> dict:
-    """What jetcite says a cached copy may be relied on for.
+    """What a file in the run's sources directory may be relied on for.
 
     The pane shows the text either way — it is still the opinion a reviewer
     wants to read. What changes is the badge: a file fetched through a
     pairing this draft asserted cannot stand as verification of that pairing,
     and a reviewer looking at the source pane deserves to be told which kind
-    of file they are looking at. Degrades to unknown if the vendored jetcite
-    predates source_trust().
+    of file they are looking at.
     """
     try:
-        from jetcite.cache import source_trust
-    except ImportError:
-        return {"origin": "unknown", "confirms": False, "pairing_basis": None,
-                "fetched": None}
-    try:
-        return source_trust(Path(local_path).expanduser())
+        from cite_check import source_trust
+        return source_trust(local_path)
     except Exception:
         return {"origin": "unknown", "confirms": False, "pairing_basis": None,
                 "fetched": None}
@@ -1038,7 +1024,7 @@ def _read_local_markdown(local_path: str | None) -> str | None:
 # Lightweight markdown → HTML for legal texts
 _MD_HEADING = re.compile(r"^(#{1,4})\s+(.*)", re.MULTILINE)
 _MD_PARA_MARKER = re.compile(r"\[¶\s*(\d+)\]")
-# West star pagination in cached opinion markdown: [*774] marks where
+# West star pagination in opinion markdown: [*774] marks where
 # reporter page 774 begins.
 _MD_STAR_PAGE = re.compile(r"\[\*(\d+)\]")
 _MD_SECTION = re.compile(r"§\s*([\d\w.-]+)")
@@ -2537,17 +2523,17 @@ _JS = """\
     srcName.textContent = d.short_name || '';
     srcName.title = d.full_name || '';
     const srcBody = document.querySelector('.src-body');
-    // How much a cached copy is worth saying out loud. The text shows either
+    // How much a local copy is worth saying out loud. The text shows either
     // way; the badge is where a reviewer learns whether this file can stand
     // as verification. A copy fetched through a pairing THIS draft asserted
     // cannot confirm that pairing -- it is the draft's own claim, round-
-    // tripped through a filename -- and a file cached before jetcite
-    // recorded provenance says nothing about where it came from.
+    // tripped through a filename -- and a file with no provenance
+    // sidecar says nothing about where it came from.
     function localBadge(d) {
       const t = d.source_trust || {};
       if (t.pairing_basis === 'asserted-by-source') return {
         badge: 'asserted pairing',
-        title: 'Cached under this reporter cite only because the draft paired '
+        title: 'Fetched under this reporter cite only because the draft paired '
              + 'it with another citation. Confirms the draft\\'s assertion, not '
              + 'the pairing — verify the parallel cite independently.'};
       if (t.origin === 'ndlaw-corpus') return {
@@ -2555,12 +2541,12 @@ _JS = """\
         title: 'Text from the ndlaw corpus, which carries validation fixes '
              + 'the scraped copies do not. Readable with no network.'};
       if (t.origin === 'web-fetch') return {
-        badge: 'cached',
-        title: 'Fetched copy under ~/refs' + (t.fetched ? ', ' + t.fetched.slice(0, 10) : '')
+        badge: 'fetched',
+        title: 'Copy fetched from the web for this review' + (t.fetched ? ', ' + t.fetched.slice(0, 10) : '')
              + '. Readable with no network; may predate later corrections.'};
       return {
         badge: 'unverified copy',
-        title: 'Cached under ~/refs with no record of where it came from or '
+        title: 'Local copy with no record of where it came from or '
              + 'when. Readable offline; not evidence of anything.'};
     }
     const sourceHtml = d.source_key ? SOURCES[d.source_key] : null;
@@ -2658,7 +2644,7 @@ _JS = """\
     // No load-timeout fallback. An earlier version switched to the offline
     // copy if a frame had not loaded in 8s, and it misfired on the first
     // request to a cold server — the reviewer picked ndlaw and silently got
-    // ~/refs. Slow is not failed, the switch is one click or one keypress
+    // the local copy. Slow is not failed, the switch is one click or one keypress
     // away, and a verification tool should never change what you are looking
     // at without being asked.
 
@@ -2669,7 +2655,7 @@ _JS = """\
     // for U.S. Const. cites (the two never coexist on one entry).
     var modes = [];
     if (d.kind === 'authority') {
-      // A supplied authority has no reporter, no ~/refs copy, and usually no
+      // A supplied authority has no reporter, no fetched copy, and usually no
       // stable URL — the embedded PDF page IS the source of truth, so it
       // leads. The detail pane carries the proposition it is cited for.
       var abanner = '<div class="fact-banner ' + d.result + '">' +
@@ -2834,7 +2820,7 @@ _JS = """\
       } else {
         urlLink.removeAttribute('href');
         urlLink.textContent = m.key === 'local'
-          ? 'cached copy — no network needed' : '';
+          ? 'local copy — no network needed' : '';
       }
       m.render();
     }
@@ -3423,7 +3409,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
     # Pin/repeat entries carry no file of their own; their parent's path
     # (parent_local_path) keys the same map.
     sources_map: dict[str, str] = {}  # local_path → rendered HTML
-    trust_map: dict[str, dict] = {}   # local_path → jetcite source_trust()
+    trust_map: dict[str, dict] = {}   # local_path → cite_check.source_trust()
     for c in citations:
         for lp, exists in ((c.get("local_path"), c.get("local_exists")),
                            (c.get("parent_local_path"),
@@ -3463,8 +3449,8 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
         case_name = meta.get("case_name")
         if meta.get("url"):
             url = meta["url"]
-        # Fallback for ND opinions with local refs but no direct URL:
-        # derive the ndcourts.gov search URL from the refs path
+        # Fallback for ND opinions with local text but no direct URL:
+        # derive the ndcourts.gov search URL from the source path
         lp = c.get("local_path") or c.get("parent_local_path")
         if lp and (not url or "?cit1=" in url):
             direct = _nd_direct_url(lp)
@@ -3867,14 +3853,19 @@ def main():
     parser.add_argument("--cite-json", "-c",
                         help="Path to pre-generated cite_check.py JSON "
                              "(if omitted, runs cite_check internally)")
-    parser.add_argument("--refs-dir", default="~/refs",
-                        help="Refs directory for cite_check (default: ~/refs)")
+    parser.add_argument("--sources-dir",
+                        help="This run's sources directory (e.g. "
+                             "<TMPDIR>/sources): authority text that "
+                             "ndlaw_export.py wrote there is embedded, and "
+                             "missing case text is fetched into it. Omit to "
+                             "embed no fetched text.")
     parser.add_argument("--output", default="cite-review.html",
                         help="Output HTML file path (default: cite-review.html)")
     parser.add_argument("--title", "-t", default="",
                         help="Document title for the header")
     parser.add_argument("--local-only", action="store_true",
-                        help="Skip web downloads; use local refs only")
+                        help="Skip web downloads; embed only what --sources-dir "
+                             "already holds")
     parser.add_argument("--via-json",
                         help="Path to a JSON object mapping a citation "
                              "(normalized or as-written) to the tier that "
@@ -3979,7 +3970,7 @@ def main():
                              "(or NDLAW_DB env). Falls back to NDLAW_URL.")
     parser.add_argument("--no-ndlaw", action="store_true",
                         help="Do not embed ndlaw reading copies; official "
-                             "sources and local refs only.")
+                             "sources and fetched text only.")
     args = parser.parse_args()
 
     global _PDFJS_CDN_OVERRIDE
@@ -3991,10 +3982,9 @@ def main():
         sys.exit(1)
 
     cite_json_path = Path(args.cite_json).expanduser() if args.cite_json else None
-    # Resolve to absolute: jetcite's local-source attach builds file:// URIs,
-    # which require absolute paths.
-    args.refs_dir = str(Path(args.refs_dir).expanduser().resolve())
-    citations = _load_citations(opinion_path, cite_json_path, args.refs_dir,
+    if args.sources_dir:
+        args.sources_dir = str(Path(args.sources_dir).expanduser().resolve())
+    citations = _load_citations(opinion_path, cite_json_path, args.sources_dir,
                                 local_only=args.local_only)
 
     via_map: dict[str, str] = {}

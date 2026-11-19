@@ -265,9 +265,9 @@ Exit 1 means no hits (pass nothing); exit 2 means a bad pattern or unreadable fi
    Writes `<stem>-ANALYSIS.html` beside the markdown — a single self-contained file, safe to email or hand over in Cowork as-is. Add `--cite-review <stem>-CITE-REVIEW.html` once Step 11b has produced that page. `--check` exits 3 if any source line failed to survive into the page; if so, say so and deliver the markdown alongside — never silently ship a page that dropped content. Re-run after any edit to the markdown (idempotent). Skip only in audit mode and web mode.
 11. **Generate the citation review page** (CLI and Cowork) after Pass 3 completes. Full procedure, fallbacks, and flag semantics: `references/cite-review-workflow.md` — Read it the first time this runs in a session and whenever a step below fails.
 
-    **11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost):**
+    **11a. Pull ND authority text + direct URLs from ndlaw into this run's sources directory (zero token cost):**
     ```bash
-    $VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" --opinion <opinion_md_path> --refs-dir ~/refs --meta-out <TMPDIR>/sources.json
+    $VENV_PYTHON "${CLAUDE_SKILL_DIR}/ndlaw_export.py" --opinion <opinion_md_path> --sources-dir <TMPDIR>/sources --meta-out <TMPDIR>/sources.json
     ```
     It picks its own backend (local `opinions.db`, `NDLAW_URL`, else the public `https://ndlaw.org/mcp` — no credentials; do not hunt for MCP config). Exit 2 = no backend reachable (almost always an egress allowlist missing `ndlaw.org`): fall back to **one scribe subagent** (Agent tool, `model: haiku`) riding the in-context ndlaw MCP tools, as the reference specifies — opinion text never passes through main context. If that is impossible too, fall through, but render **⚠ Authority Text Not Refreshed** in the analysis document and say so in Step 12. Never stall here.
 
@@ -276,7 +276,7 @@ Exit 1 means no hits (pass nothing); exit 2 means a bad pattern or unreadable fi
     $VENV_PYTHON "${CLAUDE_SKILL_DIR}/cite_review.py" \
       --opinion <opinion_md_path> \
       --docx <original_draft.docx> \
-      --refs-dir ~/refs \
+      --sources-dir <TMPDIR>/sources \
       --title "<case caption>" \
       --via-json <TMPDIR>/via.json \
       --sources-meta <TMPDIR>/sources.json \
@@ -303,7 +303,7 @@ Exit 1 means no hits (pass nothing); exit 2 means a bad pattern or unreadable fi
 9. Perform Pass 7 (dissent cross-check) inline if the user uploaded a dissent/concurrence and `DOC_TYPE == opinion`.
 10. Perform Pass 5 inline.
 
-For each delegated pass performed inline (1, 3B, 3D, 4, 6, 7 — and 2's entry format), read its instruction file from project knowledge (`references/pass-instructions/passN-*.md`) and apply it, adapting CLI-only steps (shell commands, `~/refs/`, ledger files) per the pass's Web-mode note.
+For each delegated pass performed inline (1, 3B, 3D, 4, 6, 7 — and 2's entry format), read its instruction file from project knowledge (`references/pass-instructions/passN-*.md`) and apply it, adapting CLI-only steps (shell commands, the sources directory, ledger files) per the pass's Web-mode note.
 11. Skip .docx assembly.
 12. Produce the analysis document as markdown in the conversation.
 
@@ -311,14 +311,14 @@ For each delegated pass performed inline (1, 3B, 3D, 4, 6, 7 — and 2's entry f
 
 ## Legal-Research MCP Servers (ndlaw, CourtListener)
 
-Two optional MCP servers improve citation verification when connected. **They are augmentation, not replacement** — every check below degrades gracefully to the existing pipeline (`cite_check.py` + `~/refs/` + `WebFetch` + web search). Never fail or stall a task because an MCP server is absent or returns no data.
+Two MCP servers carry citation verification when connected. **A run without them still completes** — every check below degrades gracefully to the fallback pipeline (`cite_check.py` + `WebFetch` + web search). The skill keeps no local library of authorities: text it fetches lives in `<TMPDIR>/sources` for the run and nowhere else. Never fail or stall a task because an MCP server is absent or returns no data.
 
 **Availability:** Before relying on a server, check whether its tools are present in your tool set (e.g. an `ndlaw` tool such as `verify_citation`, or a CourtListener tool such as `verify_citations`). If a tool is not available, skip silently to the next tier.
 
 **Source precedence — apply at every case-citation check; fall through on a miss:**
-1. **ndlaw** (primary, North Dakota cases) — local ND opinion corpus. Deterministic, no network.
+1. **ndlaw** (primary, North Dakota authority) — the ND corpus: opinions, and through `lookup_authority` the N.D.C.C., court rules, constitution and administrative code as in force on a date.
 2. **CourtListener MCP** (secondary) — case data ndlaw lacks: federal and out-of-state authorities, and ND opinions missing from the ND corpus.
-3. **Existing pipeline** (fallback) — `cite_check.py` / `~/refs/` / `WebFetch` / web search. Always available in CLI mode; the only path when no MCP server is connected.
+3. **Fallback pipeline** — `cite_check.py` URLs / `WebFetch` / web search. Always available in CLI mode; the only path when no MCP server is connected.
 
 **Out of scope for both servers:** authoritative text of statutes, court rules, the constitution, and NDAC — these always resolve through the existing pipeline.
 
@@ -409,7 +409,7 @@ Pass 3B verifies ALL North Dakota citations — cases, statutes, constitution, c
 
 **Returns:** the results table (`¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes`), a summary line with counts by type, the lookup-methods tally for case citations (`ndlaw / CourtListener / local / web / not found`), and an ND web-fallback note. The subagent also writes `<TMPDIR>/passages.json` (the passages ledger embedded in the citation-review HTML). Carry the tally and note into the analysis document alongside the results table. The instructions enforce the closed-loop case-name rule (correct same-cite typos only; never harmonize different citations) — Step 8a depends on the resulting Caption Check column and `name_similarity` values.
 
-**Web mode:** No shell, Python, or `~/refs/` — but the MCP servers, if connected, are the primary way to verify case citations here.
+**Web mode:** No shell or Python — but the MCP servers, if connected, are the primary way to verify case citations here.
 1. **If ndlaw / CourtListener tools are available, use them first**, following Step 1.5 of `references/pass-instructions/pass3b-citations.md` (read it from project knowledge — verify_citation for caption/existence/name drift, verify_quotation for quotes); run Part C's `detect_overruled_in_draft` too. This closes the gap where case citations otherwise can't be verified without a filesystem.
 2. For ND citations the MCP servers don't cover, use WebFetch on the official URL (build it from the citation, or run `cite_check.py` if any shell is available).
 3. For ND case citations, use web search to locate the opinion on ndcourts.gov or Google Scholar.

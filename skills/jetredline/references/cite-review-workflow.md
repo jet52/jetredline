@@ -2,36 +2,36 @@
 
 SKILL.md Step 11 carries the two commands and the rules that bite on every run. This file holds the full procedure: backend selection, the scribe-subagent fallback, what each flag does and when to omit it, the sidecar/bundle mechanics, review-state resumption, local-PDF authorities, and what the finished page contains. `$SKILL_DIR` and `$VENV_PYTHON` are the literal paths captured in SKILL.md's Environment Setup.
 
-## 11a. Refresh ND authority text + direct URLs from ndlaw (zero token cost)
+## 11a. Pull ND authority text + direct URLs from ndlaw (zero token cost)
 
-Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into `~/refs`, plus a metadata map for the review page. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance named by `NDLAW_URL` + `NDLAW_AUTH` env (or `--url`/`--auth`), else **the public server at `https://ndlaw.org/mcp`**, which needs no credentials. The public default is what makes this step work in Cowork and on any machine without a local corpus; do not go looking for a URL or auth header in MCP config. The script speaks to the server directly, so no opinion text passes through model context.
+Run the export script first — it pulls each cited ND opinion's authoritative text and the court's direct opinion URL (`https://www.ndcourts.gov/supreme-court/opinions/<id>`) from the ndlaw corpus into this run's sources directory (`<TMPDIR>/sources`), plus a metadata map for the review page. Nothing is written outside `<TMPDIR>`: the skill keeps no shared library of authority text, and it never writes to a `~/refs` tree. It auto-selects a backend: a local `opinions.db` (`NDLAW_DB` env or the default dev path), else a deployed ndlaw instance named by `NDLAW_URL` + `NDLAW_AUTH` env (or `--url`/`--auth`), else **the public server at `https://ndlaw.org/mcp`**, which needs no credentials. The public default is what makes this step work in Cowork and on any machine without a local corpus; do not go looking for a URL or auth header in MCP config. The script speaks to the server directly, so no opinion text passes through model context.
 
 ```bash
 $VENV_PYTHON "$SKILL_DIR/ndlaw_export.py" \
   --opinion <opinion_md_path> \
-  --refs-dir ~/refs \
+  --sources-dir <TMPDIR>/sources \
   --meta-out <TMPDIR>/sources.json
 ```
 
 Exit 2 means no backend was reachable — almost always an egress allowlist that omits `ndlaw.org` (stderr classifies the failure and names the fix, and the Step 0 preflight should already have warned). **Fall back to a scribe subagent riding the in-context MCP connection** — if ndlaw tools are available:
 
-1. From the cite JSON, list the corpus-eligible authorities that still lack refs text: case entries (not `pin_cite`, not `is_repeat`) whose `normalized` is an ND neutral cite (`YYYY ND N`) or N.W.-family reporter cite, with `local_exists` false.
-2. Launch **one** subagent (Agent tool, `model: haiku`, subagent_type `general-purpose`) with that list and these instructions: for each citation, call `lookup_opinion(<cite>)` and record `case_name`, `url`, `url_source`, `date_filed`, and `citations`; then page through `get_opinion_text(<cite>, offset=..., limit=50000)` until `has_more` is false and **Write the concatenated text verbatim** (do not summarize, reformat, or strip the frontmatter block) to the refs path: `~/refs/opin/ND/<year>/<year>ND<n>.md` for `YYYY ND N`; `~/refs/opin/NW2d/<vol>/<page>.md` for `V N.W.2d P` (analogously `NW3d`, `NW`). Write `<TMPDIR>/sources.json` **incrementally**: after each `lookup_opinion` call and *before* paging that opinion's text, re-read the file, add entries mapping **every** citation form from `citations` to `{"case_name", "url", "url_source", "date_filed", "via": "ndlaw"}`, and write it back — paging text is the context-expensive step, and metadata held only in memory has been lost to context exhaustion on long lists. Finish by counting the refs files actually on disk (not from memory) and return only that tally ("N exported, M not in corpus") — never opinion text.
+1. From the cite JSON, list the corpus-eligible authorities that still lack text in the sources directory: case entries (not `pin_cite`, not `is_repeat`) whose `normalized` is an ND neutral cite (`YYYY ND N`) or N.W.-family reporter cite, with `local_exists` false.
+2. Launch **one** subagent (Agent tool, `model: haiku`, subagent_type `general-purpose`) with that list and these instructions: for each citation, call `lookup_opinion(<cite>)` and record `case_name`, `url`, `url_source`, `date_filed`, and `citations`; then page through `get_opinion_text(<cite>, offset=..., limit=50000)` until `has_more` is false and **Write the concatenated text verbatim** (do not summarize, reformat, or strip the frontmatter block) to that entry's `local_path` from the cite JSON (a file under `<TMPDIR>/sources`; run `cite_check.py --file <opinion> --sources-dir <TMPDIR>/sources` if the JSON was made without one), and beside it `<local_path>.meta.json` holding `{"citation": <cite>, "origin": "ndlaw-corpus", "source_url": <url>}` so the page badges the text as corpus text. Write `<TMPDIR>/sources.json` **incrementally**: after each `lookup_opinion` call and *before* paging that opinion's text, re-read the file, add entries mapping **every** citation form from `citations` to `{"case_name", "url", "url_source", "date_filed", "via": "ndlaw"}`, and write it back — paging text is the context-expensive step, and metadata held only in memory has been lost to context exhaustion on long lists. Finish by counting the source files actually on disk (not from memory) and return only that tally ("N exported, M not in corpus") — never opinion text.
 3. The token cost stays inside the subagent's isolated context (and within the subscription); main context must never page opinion text through its own tool results just to embed it.
 
 If MCP tools are also unavailable, skip `--sources-meta` below and fall through (never stall on this step) — or, at most, build a minimal `sources.json` from one cheap `lookup_opinion` call per unique ND case (URL + case name only) if a stray connection allows it.
 
-**Fall through, but never silently.** When neither the corpus nor the MCP connection was reachable, the citation text the review rests on is whatever `~/refs` already held — copies of unrecorded age, which the corpus has since corrected in ways they cannot know about (`opinions.db` carries Westlaw merges and quality-scan fixes that never reach a refs file). Record it: say so in the Step 12 summary, and render the **⚠ Authority Text Not Refreshed** section of the analysis document. A run that could not check its authorities against the corpus must not read as one that did.
+**Fall through, but never silently.** When neither the corpus nor the MCP connection was reachable, the review page embeds only what `cite_review.py` can fetch from the web for itself, which lacks the corpus's corrections, and ND opinions it cannot fetch are link-only. Record it: say so in the Step 12 summary, and render the **⚠ Authority Text Not Refreshed** section of the analysis document. A run that could not check its authorities against the corpus must not read as one that did.
 
 ## 11b. Generate the page
 
-Write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndlaw", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "local"}`:
+Write a `via.json` mapping each citation (as written, or its normalized form) to the tier from the Pass 3B **Via** column — e.g. `{"2024 ND 156": "ndlaw", "445 U.S. 684": "CourtListener", "N.D.C.C. § 14-05-24": "ndlaw"}`:
 
 ```bash
 $VENV_PYTHON "$SKILL_DIR/cite_review.py" \
   --opinion <opinion_md_path> \
   --docx <original_draft.docx> \
-  --refs-dir ~/refs \
+  --sources-dir <TMPDIR>/sources \
   --title "<case caption>" \
   --via-json <TMPDIR>/via.json \
   --sources-meta <TMPDIR>/sources.json \

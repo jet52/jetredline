@@ -26,7 +26,7 @@ This walks the case directory and identifies candidate authority PDFs from metad
 
 ## Step 2: Collect candidate spans from the draft
 
-First generate the cite JSON so spans jetcite already claimed are excluded (no `--cache` — this run only needs span positions, not fetched sources):
+First generate the cite JSON so spans jetcite already claimed are excluded (no `--sources-dir` — this run only needs span positions, not source text):
 
 ```bash
 <VENV_PYTHON> "<SKILL_ROOT>/cite_check.py" --file <draft.md> > <TMPDIR>/cites.json

@@ -218,8 +218,8 @@ class PinCiteMatcher(BaseMatcher):
             ))
 
         # Bare "Rule N(x)" candidates. cite_type is COURT_RULE (unlike case
-        # pins): a resolved rule pin refers to a rule, and consumer cache
-        # loops must treat it as one. The scanner drops any candidate the
+        # pins): a resolved rule pin refers to a rule, and consumers must
+        # treat it as one. The scanner drops any candidate the
         # attribution ladder cannot assign to a rule set.
         for m in _RULE_PIN.finditer(text):
             subdivision = m.group(2) or None

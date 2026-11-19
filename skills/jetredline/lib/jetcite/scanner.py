@@ -170,10 +170,10 @@ def _detect_parallel_citations(citations: list[Citation], text: str) -> None:
         # have, stamped with the member it actually addresses. The merge is
         # what makes a reporter cite fetchable at all -- a bare "29 N.W.3d
         # 885" has no resolver of its own -- but the URL only reaches that
-        # opinion because *this document* paired the two. Cached content
-        # fetched through such a source therefore confirms the document's
-        # assertion and not the pairing, and via_parallel is what lets the
-        # cache say so instead of laundering one into the other.
+        # opinion because *this document* paired the two. Text fetched
+        # through such a source therefore confirms the document's assertion
+        # and not the pairing, and via_parallel is what lets a consumer say
+        # so instead of laundering one into the other.
         a_source_names = {s.name for s in cite_a.sources}
         b_source_names = {s.name for s in cite_b.sources}
         for src in list(cite_b.sources):
@@ -823,8 +823,7 @@ def _resolve_pin_cites(
 def _inherit_pin_sources(pins: list[Citation], citations: list[Citation]) -> None:
     """Copy each resolved pin's sources from its parent full cite.
 
-    Runs after URL resolution and cache application so pins inherit resolved
-    PDF URLs and local sources. Pin cites never get their own refs files.
+    Runs after URL resolution so pins inherit resolved PDF URLs.
     """
     by_position = {c.position: c for c in citations}
     for pin in pins:
@@ -833,19 +832,26 @@ def _inherit_pin_sources(pins: list[Citation], citations: list[Citation]) -> Non
             pin.sources = list(parent.sources)
 
 
-def _apply_cache(citations: list[Citation], refs_dir: Path) -> None:
-    """Check the local cache for each citation and add local sources."""
-    from jetcite.cache import add_local_source, resolve_local
+_STAR_PAGE = re.compile(r"\[\*{1,2}\d{1,4}\]")
 
-    for cite in citations:
-        local_path = resolve_local(cite, refs_dir)
-        if local_path is not None:
-            add_local_source(cite, local_path)
+
+def _mask_star_pages(text: str) -> str:
+    """Star-page markers ("[*442]", "[**335]") as spaces of the same width."""
+    return _STAR_PAGE.sub(lambda m: " " * len(m.group()), text)
+
+
+def _restore_printed(citations: list[Citation], printed: str) -> list[Citation]:
+    """Give each citation the raw text as printed, where masking changed it."""
+    for c in citations:
+        seg = printed[c.position:c.position + len(c.raw_text)]
+        if seg != c.raw_text and _mask_star_pages(seg) == c.raw_text:
+            c.raw_text = seg
+    return citations
 
 
 def scan_text(
     text: str,
-    refs_dir: Path | None = None,
+    *,
     resolve: bool = True,
     include_pin_cites: bool = False,
     include_occurrences: bool = False,
@@ -854,9 +860,6 @@ def scan_text(
 
     Returns citations in order of first appearance, with parallel
     citations detected and linked.
-
-    If refs_dir is provided, checks the local cache and adds a local
-    Source at the front of each citation's sources list when found.
 
     If resolve is True (default), resolves ndcourts.gov search URLs to
     direct opinion PDF URLs via HTTP.
@@ -877,7 +880,7 @@ def scan_text(
     to the first occurrence. A different subdivision of the same provision
     is a repeat of that provision: subdivisions live in ``pinpoint``, not
     ``normalized``. Repeats inherit the parent's sources, never resolve
-    URLs or map to refs-cache files of their own, and never affect the
+    URLs of their own, and never affect the
     deduplicated entries; the default output is unchanged.
 
     Citation positions index into ``preprocess_document_text(text)``, not
@@ -889,6 +892,13 @@ def scan_text(
     # parallel/antecedent detectors below see. Idempotent with the same call
     # inside each matcher's find_all.
     text = preprocess_document_text(text)
+    # A star-page marker printed inside a citation ("447 [*442] N.W.2d 286",
+    # "20 N. Y. [*495] 473", "2012 [*5] ND 15") is the reporter's page break, not
+    # part of the cite. Matchers see it as blank space of the same width, so the
+    # cite matches and every position still indexes the printed text; raw_text is
+    # then read back from the printed text, marker included.
+    printed = text
+    text = _mask_star_pages(text)
 
     all_citations: list[Citation] = []
     repeats: list[Citation] = []
@@ -953,10 +963,6 @@ def scan_text(
     if resolve:
         resolve_nd_opinion_urls(all_citations)
 
-    # Check local cache
-    if refs_dir is not None:
-        _apply_cache(all_citations, refs_dir)
-
     if repeats:
         _inherit_pin_sources(repeats, all_citations)
 
@@ -982,20 +988,17 @@ def scan_text(
             antecedents = sorted(occurrences + linked, key=lambda c: c.position)
         pins = _resolve_pin_cites(pin_candidates, antecedents, text)
         _inherit_pin_sources(pins, antecedents)
-        return sorted(occurrences + pins, key=lambda c: c.position)
+        return _restore_printed(sorted(occurrences + pins, key=lambda c: c.position), printed)
 
-    return occurrences
+    return _restore_printed(occurrences, printed)
 
 
 def lookup(
     text: str,
-    refs_dir: Path | None = None,
+    *,
     resolve: bool = True,
 ) -> Citation | None:
     """Look up a single citation string. Returns the first match.
-
-    If refs_dir is provided, checks the local cache and adds a local
-    Source at the front of the citation's sources list when found.
 
     If resolve is True (default), resolves ndcourts.gov search URLs to
     direct opinion PDF URLs via HTTP.
@@ -1006,7 +1009,5 @@ def lookup(
         if result:
             if resolve:
                 resolve_nd_opinion_urls([result])
-            if refs_dir is not None:
-                _apply_cache([result], refs_dir)
             return result
     return None

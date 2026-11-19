@@ -83,7 +83,7 @@ def fetch_ndcourts(
             return None, {}, None
         pdf_bytes = resp.content
 
-    from jetcite.cache import pdf_to_text
+    from jetcite.fetch import pdf_to_text
     text = pdf_to_text(pdf_bytes)
     if not text:
         return None, {}, None

@@ -94,7 +94,6 @@ fi
 | Text extraction | `$SKILL_DIR/extract_text.py` |
 | splitmarks | `$SKILL_DIR/splitmarks.py` |
 | Node modules | `$NODE_PATH` (from `bootstrap_env.py --node` — new-.docx creation only) |
-| ND opinions (markdown) | `$OPINIONS_MD` → `~/cDocs/refs/ndsc_opinions/markdown/` |
 | Citation checker | `$SKILL_DIR/cite_check.py` |
 | Readability metrics | `$SKILL_DIR/readability_metrics.py` |
 | PDF page grep | `$SKILL_DIR/pdf_page_grep.py` |
@@ -102,7 +101,7 @@ fi
 | Text-layer quality | `$SKILL_DIR/textquality.py` |
 | Supplied-source PDFs | `$SKILL_DIR/pdfsource.py` |
 | Authority matching | `$SKILL_DIR/authorities.py` |
-| Legal refs | `~/refs/` (opin/, statute/, reg/, cnst/, rule/) |
+| Authority text for this run | `<TMPDIR>/sources/` (written by `ndlaw_export.py` and `cite_review.py`; discarded with `<TMPDIR>`) |
 | OOXML fixup | `$SKILL_DIR/ooxml_fixup.py` |
 | OOXML validate | `$SKILL_DIR/ooxml_validate.py <file.docx>` — run it on the tracked-changes .docx after Step 9; exit 1 with diagnostic JSON means Word would call the file unreadable |
 | Citation review | `$SKILL_DIR/cite_review.py` |
@@ -112,9 +111,7 @@ fi
 | ndlaw export | `$SKILL_DIR/ndlaw_export.py` |
 | Model gate / update / preflight | `$SKILL_DIR/check_model.py`, `check_update.py`, `preflight.py` (system `python3`, stdlib only) |
 
-The opinions directory contains markdown copies of published ND Supreme Court opinions organized as `<year>/<year>ND<number>.md` (e.g., `2022/2022ND210.md` for *Feickert v. Feickert*, 2022 ND 210). Paragraphs are marked `[¶N]`. Use `$OPINIONS_MD` in commands; fall back to the hardcoded path if the variable is unset.
-
-The `~/refs/` directory contains a local repository of legal materials in markdown format: opinions (`opin/{reporter}/`), statutes (`statute/NDCC/`, `statute/USC/`), constitutions (`cnst/ND/`, `cnst/US/`), regulations (`reg/NDAC/`, `reg/CFR/`), and court rules (`rule/{set}/`). The citation checker resolves these paths automatically via jetcite.
+The skill keeps no local library of authorities. North Dakota authority is read through the ndlaw MCP server (or, for the review page, exported from it into `<TMPDIR>/sources/`); other authority through the CourtListener MCP or the URL `cite_check.py` supplies.
 
 ## Temporary Files
 

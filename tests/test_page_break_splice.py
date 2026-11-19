@@ -22,14 +22,14 @@ SPLIT_CITE_TEXT = (
 
 
 def test_split_neutral_cite_recovers_and_emits_no_phantom(tmp_path):
-    entries = scan_opinion(SPLIT_CITE_TEXT, refs_dir=str(tmp_path))
+    entries = scan_opinion(SPLIT_CITE_TEXT, sources_dir=str(tmp_path))
     norms = [e["normalized"] for e in entries]
     assert "2025 ND 127" in norms
     assert "2025 ND 13" not in norms
 
 
 def test_split_cite_keeps_antecedent_name(tmp_path):
-    entries = scan_opinion(SPLIT_CITE_TEXT, refs_dir=str(tmp_path))
+    entries = scan_opinion(SPLIT_CITE_TEXT, sources_dir=str(tmp_path))
     recovered = next(e for e in entries if e["normalized"] == "2025 ND 127")
     assert recovered.get("antecedent_name") is not None
     assert "B.F." in recovered["antecedent_name"]

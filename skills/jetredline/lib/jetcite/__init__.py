@@ -3,14 +3,13 @@
 from jetcite._egress import EGRESS_ALLOWLIST
 from jetcite._http import EgressBlockedWarning, egress_blocked_hosts
 from jetcite._version import __version__
-from jetcite.cache import citation_path
 from jetcite.casename import extract_antecedent_name
 from jetcite.models import Citation, CitationType, Source
 from jetcite.scanner import lookup, scan_text
 
 __all__ = [
     "Citation", "CitationType", "Source",
-    "citation_path", "extract_antecedent_name", "lookup", "scan_text",
+    "extract_antecedent_name", "lookup", "scan_text",
     "EGRESS_ALLOWLIST", "EgressBlockedWarning", "egress_blocked_hosts",
     "__version__",
 ]

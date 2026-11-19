@@ -55,7 +55,7 @@ One or more provided source files could not be fully read. Fact-check and brief-
 ```
 ## ⚠ Authority Text Not Refreshed
 
-The ndlaw corpus was not reachable for this run, so cited authorities were checked against whatever local copies `~/refs` already held. Those copies carry no record of when they were fetched, and the corpus has since corrected opinion text in ways a cached copy cannot reflect. **Quotation and citation findings below are weaker than usual in both directions** — an unverified quotation may be accurate, and a verified one may rest on superseded text. Re-run with the corpus reachable to settle them.
+The ndlaw corpus was not reachable for this run, so cited North Dakota authorities were checked against copies fetched from the web, where one could be fetched at all. The corpus carries corrections to opinion text that those copies lack. **Quotation and citation findings below are weaker than usual in both directions** — an unverified quotation may be accurate, and a verified one may rest on superseded text. Re-run with the corpus reachable to settle them.
 ```
 
 **Reduced-reliability model warning (conditional — render only when Step 0.0 reported `warn` and the user chose to proceed).** Place it immediately after the source-materials warning, or in its place when every input was ingested. Omit the section entirely on an Opus-, Fable-, or Mythos-class model:

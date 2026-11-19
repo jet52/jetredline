@@ -29,25 +29,25 @@ this" — the wrong conclusion, reached invisibly.
 
 ## Source precedence (apply at every case-citation check; fall through on a miss)
 
-1. **ndlaw** (primary, North Dakota cases) — local ND opinion corpus. Deterministic, no network. Check whether its tools (e.g. `verify_citation`) are present in your tool set; if not, skip silently to the next tier.
+1. **ndlaw** (primary, North Dakota authority) — the ND corpus: opinions, and through `lookup_authority` the N.D.C.C., court rules, constitution and administrative code as in force on a date. Check whether its tools (e.g. `verify_citation`) are present in your tool set; if not, skip silently to the next tier.
 2. **CourtListener MCP** (secondary) — federal and out-of-state authorities, and ND opinions missing from the ND corpus.
-3. **Existing pipeline** (fallback) — `cite_check.py` / `~/refs/` / WebFetch / web search. Always available in CLI mode.
+3. **Fallback pipeline** — the `url` from `cite_check.py` / WebFetch / web search. Always available in CLI mode.
 
-Statutes, court rules, the constitution, and NDAC always resolve through the existing pipeline (tier 3) — the MCP servers are out of scope for them. ndlaw is a research aid, not an authoritative text: use its signals to *flag for human review*, never to auto-edit on a signal alone. Never fail or stall because an MCP server is absent or returns no data.
+North Dakota statutes, court rules, the constitution, and NDAC resolve through ndlaw's `lookup_authority` (Step 2); federal and other states' provisions resolve through tier 3. ndlaw is a research aid, not an authoritative text: use its signals to *flag for human review*, never to auto-edit on a signal alone. Never fail or stall because an MCP server is absent or returns no data.
 
 ## Step 1: Generate the lookup plan
 
 Run the citation checker on the opinion file to get structured resolution data:
 ```bash
-<VENV_PYTHON> "<SKILL_ROOT>/cite_check.py" --file <opinion_path> --refs-dir ~/refs --cache
+<VENV_PYTHON> "<SKILL_ROOT>/cite_check.py" --file <opinion_path> --sources-dir <TMPDIR>/sources
 ```
-The `--cache` flag auto-fetches and caches any case citations (ND, federal, other states) not already in `~/refs/`. This builds the local cache progressively so future runs have more local hits.
+`<TMPDIR>/sources` is this run's sources directory. It starts empty and is discarded with `<TMPDIR>`; nothing is read from or written to a shared library of authorities.
 
 This outputs a JSON array with one entry per citation found. Each entry includes:
 - `cite_type`: neutral_cite, statute, statute_chapter, constitution, regulation, court_rule, regional_reporter, federal_reporter, us_supreme_court
-- `local_path` / `local_exists`: path in `~/refs/` and whether it exists
+- `local_path` / `local_exists`: where this authority's text would sit in the sources directory, and whether a step of this run has put it there (normally false at this point; do not go looking elsewhere on disk)
 - `url`: official source URL (always populated)
-- `search_hint`: text to search for within the local file
+- `search_hint`: text to search for within the source text
 - `antecedent_name`: the case name jetcite saw immediately before the cite (heuristic; may be null, and may include stray leading words) — seeds the case-name drift check in Step 1.5
 - `improper_parallel_pincite: true`: the reporter half of a ND public-domain pair that carries a page pin cite — a style defect under the Court's Redbook supplement (see the parallel-cite bullet in Step 1.5)
 - ND Court of Appeals cites normalize as `YYYY ND App N` and are a **different court** from `YYYY ND N` — `2005 ND 7` and `2005 ND App 7` are different cases. Never conflate them or drop the `App` token.
@@ -88,8 +88,9 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 (All non-case citations, and any case citation Step 1.5 could not resolve.) For each such entry from the lookup plan:
 
 1. **Retrieve source text.**
-   - If `local_exists` is `true`: use the Read tool on `local_path`. For NDCC sections, search for the `search_hint` within the chapter file. For ND opinions, locate the pinpoint paragraph (`[¶N]`).
-   - If `local_exists` is `false`: use WebFetch on the `url` to retrieve the source text. For PDF URLs (ndlegis.gov), note that WebFetch may not extract PDF content — mark as "URL only" and verify what you can.
+   - North Dakota statute, court rule, constitution or NDAC cite, with ndlaw available: call `lookup_authority(citation=<cite>)`, adding `as_of_date` when the draft applies the provision as of a past date. Record Via `ndlaw`.
+   - If `local_exists` is `true`: use the Read tool on `local_path`. For ND opinions, locate the pinpoint paragraph (`[¶N]`).
+   - Otherwise: use WebFetch on the `url` to retrieve the source text. For a chapter-level page, search for the `search_hint`. For PDF URLs (ndlegis.gov), note that WebFetch may not extract PDF content — mark as "URL only" and verify what you can.
 
 2. **If the opinion quotes the cited source:**
    - Compare the quoted text against the source **character by character**.
@@ -100,7 +101,7 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 
 3. **Existence check.** Does the cited provision/opinion actually exist? For statutes and rules, confirm the section number is valid.
 
-4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., `~/refs/opin/ND/2023/2023ND219.md` shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the caller can generate a correction. **Apply the same closed-loop rule as Step 1.5:** correct only same-cite typos; never harmonize two different citations. For non-case citations (statutes, rules, etc.), mark as N/A.
+4. **Case-name verification** (case citations only). Compare the case name as it appears in the draft opinion against the official caption in the source text. The official caption appears in the first 10–15 lines of ND opinion markdown files (e.g., the text of 2023 ND 219 shows "Monica Tracey" and "David Tracey") and at the top of fetched opinion pages. If the draft says "Tracy v. Tracy, 2023 ND 219" but the official caption reads "Tracey v. Tracey," report the mismatch with the official caption so the caller can generate a correction. **Apply the same closed-loop rule as Step 1.5:** correct only same-cite typos; never harmonize two different citations. For non-case citations (statutes, rules, etc.), mark as N/A.
 
 5. **Substantive support check.** Read the cited material in context and assess whether it supports the proposition for which it is cited. Consider:
    - Does the source actually state or hold the legal principle attributed to it?
@@ -112,7 +113,7 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 
 7. **Build the results table.** The Source Link column **must** use the full `url` value from the cite_check.py JSON output as a markdown hyperlink — e.g., `[N.D.C.C. § 12.1-32-01](https://ndlegis.gov/cencode/t12c32.pdf#nameddest=12-32-01)`. Never link to just a domain root like `https://ndlegis.gov/`. Every citation's `url` field already points to the specific document; use it verbatim.
 
-   The **Via** column records the tier that actually produced the verification — `ndlaw`, `CourtListener`, `local` (a `~/refs/` file), `web` (WebFetch or web search), or `not found` — following the source precedence you applied in Steps 1.5 and 2. This is the *method*, not the Source Link (which is the canonical URL regardless of how the cite was checked). It is the provenance for any edit generated from this row, so record the tier that supplied the value you relied on.
+   The **Via** column records the tier that actually produced the verification — `ndlaw`, `CourtListener`, `local` (a file in this run's sources directory), `web` (WebFetch or web search), or `not found` — following the source precedence you applied in Steps 1.5 and 2. This is the *method*, not the Source Link (which is the canonical URL regardless of how the cite was checked). It is the provenance for any edit generated from this row, so record the tier that supplied the value you relied on.
 
    | ¶ | Citation | Type | Caption Check | Quote Check | Supports? | Via | Source Link | Notes |
    |---|----------|------|---------------|-------------|-----------|-----|-------------|-------|
@@ -136,11 +137,3 @@ For each **case** citation only (statutes, rules, constitution, and admin code u
 - If a local reference file does not exist for a citation, proceed with web verification only (WebFetch on the `url`). Do not stall or re-search for the file.
 - If WebFetch also fails, mark the citation as **UNVERIFIED** in the results table with the reason (e.g., "Local file missing, URL unreachable").
 - Always return partial results. A table with UNVERIFIED entries is better than no table. Never fail silently — every citation must appear in the output table with a status.
-
-## Reference file paths (do not search — use directly)
-
-- Opinions: `~/refs/opin/{reporter}/` — e.g., `opin/ND/2024/2024ND156.md`, `opin/NW2d/585/351.md`
-- Statutes: `~/refs/statute/NDCC/` (by title/chapter), `~/refs/statute/USC/`
-- Constitution: `~/refs/cnst/ND/`, `~/refs/cnst/US/`
-- Regulations: `~/refs/reg/NDAC/`, `~/refs/reg/CFR/`
-- Court Rules: `~/refs/rule/{set}/` — e.g., `rule/ndrcivp/rule-56.md`

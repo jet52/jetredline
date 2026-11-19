@@ -21,8 +21,7 @@ _WS = r'(?:[^\S\n]*\n[^\S\n]*|[^\S\n]+)'
 # Per the ND Supreme Court's Redbook supplement, the court abbreviation is "ND"
 # for the Supreme Court and "ND App" for the Court of Appeals. The two share a
 # year/number space — 2005 ND 7 and 2005 ND App 7 are different cases — so the
-# court token is carried in components and normalized, and keyed separately in
-# the local refs cache.
+# court token is carried in components and normalized.
 # Also accept period-spelled forms common in older prose / mixed punctuation:
 # `1997 N.D. 24`, `2024 N. D. 156`, `2005 N.D. App. 8` — normalize to compact
 # `ND` / `ND App` (N.D. Reports volumes top out at 79, so a 4-digit year + N.D.

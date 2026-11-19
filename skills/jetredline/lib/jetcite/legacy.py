@@ -22,8 +22,6 @@ Cite type taxonomy:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from jetcite.models import Citation, CitationType
 
 # Federal case reporters — used to distinguish federal_reporter from regional_reporter
@@ -46,8 +44,8 @@ AUTHORITY_TYPES = frozenset({
 })
 
 # Pin-cite short forms ("491 F.3d at 363", "Id. ¶ 14"). Deliberately NOT in
-# CASE_TYPES: consumer auto-cache loops must skip pins — they inherit the
-# parent's sources and never get their own refs files.
+# CASE_TYPES: a consumer loop that fetches each cited case must skip pins,
+# which inherit the parent's sources.
 PIN_CITE_TYPE = "pin_cite"
 
 
@@ -148,20 +146,15 @@ def search_hint(c: Citation, cite_type: str | None = None) -> str:
 
 
 def primary_url(c: Citation) -> str | None:
-    """Get the primary non-local URL from a citation's sources."""
-    for s in c.sources:
-        if s.name != "local":
-            return s.url
-    return None
+    """Get the primary URL from a citation's sources."""
+    return c.sources[0].url if c.sources else None
 
 
-def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
+def to_legacy_dict(c: Citation) -> dict:
     """Convert a jetcite Citation to the legacy JSON dict format.
 
     This is the canonical conversion used by both jetmemo and jetredline.
     """
-    from jetcite.cache import citation_path
-
     ct = legacy_cite_type(c)
     url = primary_url(c)
     # Link-only official-print PDF (see sources/usreports.py). Carried as its
@@ -202,13 +195,13 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
         entry["improper_parallel_pincite"] = True
 
     if c.is_repeat:
-        # Repeat occurrences carry no refs file of their own; consumers
+        # Repeat occurrences are not authorities of their own; consumers
         # follow parent_normalized to the first-occurrence entry.
         entry["is_repeat"] = True
         entry["parent_normalized"] = c.parent_normalized
 
     if c.is_pin_cite:
-        # Pin cites carry no refs file of their own; consumers follow
+        # Pin cites are not authorities of their own; consumers follow
         # parent_normalized to the parent entry (None = unresolved short form).
         entry["parent_normalized"] = c.parent_normalized
         if c.pin_page:
@@ -226,52 +219,25 @@ def to_legacy_dict(c: Citation, refs_dir: Path) -> dict:
             # written by the drafter.
             entry["pinpoint_inherited"] = True
 
-    rel = citation_path(c)
-    if rel is not None:
-        full = refs_dir / rel
-        entry["local_path"] = str(full)
-        entry["local_exists"] = full.is_file()
-    else:
-        entry["local_path"] = None
-        entry["local_exists"] = False
-
     return entry
 
 
 def add_parallel_info(entries: list[dict], citations: list[Citation]) -> None:
-    """Add parallel_cite, suspected_parallel_cites, and preferred fields.
+    """Add parallel_cite and suspected_parallel_cites fields.
 
     ``entries`` must be the element-wise conversion of ``citations``
-    (same order). Repeat occurrences get their own parallel_cite link —
-    occurrence-level data — but are excluded from the normalized-form map
-    and the preferred-source marking, which are authority-level concepts
-    that belong to the first occurrence.
+    (same order). Repeat occurrences get their own parallel_cite link,
+    which is occurrence-level data.
     """
-    norm_to_entry = {
-        e["normalized"]: e for e in entries
-        if not e.get("is_repeat") and e.get("cite_type") != PIN_CITE_TYPE
-    }
-
     for entry, cite in zip(entries, citations):
         if cite.suspected_parallel_cites:
             # Recorded, never asserted: the source punctuated these as separate
             # authorities (a semicolon) where a parallel pair was apparently
             # meant — the pre-1960 style, or a stray semicolon. Consumers must
-            # not read it as parallel_cite; it carries no preferred marking and
-            # no merged sources.
+            # not read it as parallel_cite; it carries no merged sources.
             entry["suspected_parallel_cites"] = list(cite.suspected_parallel_cites)
 
         if not cite.parallel_cites:
             continue
 
         entry["parallel_cite"] = cite.parallel_cites[0]
-
-        if cite.is_repeat or cite.is_pin_cite:
-            continue
-
-        if entry.get("local_exists"):
-            entry["preferred"] = True
-
-        parallel_entry = norm_to_entry.get(cite.parallel_cites[0])
-        if parallel_entry and parallel_entry.get("local_exists"):
-            parallel_entry["preferred"] = True

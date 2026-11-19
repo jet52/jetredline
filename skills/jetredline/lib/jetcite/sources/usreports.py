@@ -3,7 +3,7 @@
 Link-only source: these URLs are surfaced to reviewers (e.g. jetredline's
 cite-review pane) but never fetched by jetcite — there is no extractor for
 these hosts, and they are appended after the fetchable sources, so neither
-the extractor loop nor the generic-fetch fallback in ``fetch_and_cache``
+the extractor loop nor the generic-fetch fallback in ``fetch_text``
 ever touches them. Both hosts are listed in ``_egress.NON_FETCH_HOSTS``.
 
 Two publishers, checked in coverage order:

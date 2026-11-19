@@ -524,7 +524,7 @@ def _run_cli(tmp_path, facts, *extra):
     out.parent.mkdir(exist_ok=True)
     cmd = [sys.executable, str(SCRIPT), "--opinion", str(op),
            "--cite-json", str(cites),
-           "--refs-dir", str(tmp_path / "refs"),
+           "--sources-dir", str(tmp_path / "refs"),
            "--facts-json", str(fj), "--output", str(out),
            "--case-dir", str(tmp_path), *extra]
     r = subprocess.run(cmd, capture_output=True, text=True)
