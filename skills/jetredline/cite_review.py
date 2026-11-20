@@ -1759,12 +1759,16 @@ main { display:flex; flex:1; overflow:hidden; }
 }
 .cite-group-hdr:first-child { border-top:none; margin-top:0; }
 .cite-group-hdr:hover { background:var(--surface-alt); }
+/* The name keeps a floor and the cite gives way first. Every badge beside
+   them is flex-shrink:0, so a name allowed to shrink to nothing did exactly
+   that whenever a "parallels ok" badge took the room. */
 .cite-group-hdr .gname {
   font-weight:600; color:var(--text);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  flex:0 1 auto; min-width:7ch;
 }
 .cite-group-hdr .gcite {
-  color:var(--text-muted); flex-shrink:0;
+  color:var(--text-muted); flex:0 4 auto; min-width:4ch;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   max-width:40%;
 }
@@ -1847,6 +1851,16 @@ main { display:flex; flex:1; overflow:hidden; }
   max-width:50%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 .pane-hdr .curl:hover { text-decoration:underline; }
+/* The cited case's short name, centered between the view switcher and the
+   URL, so an Id. row says which case it is. The URL gives up width first. */
+.pane-src .pane-hdr .curl { flex:0 4 auto; min-width:8ch; }
+.pane-src .pane-hdr .src-mode-wrap { flex-shrink:0; }
+.src-name {
+  flex:1 1 auto; min-width:6ch; padding:0 16px; text-align:center;
+  font-family:'Charter','Georgia',serif; font-style:italic; font-size:14px;
+  color:var(--text);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
 
 .draft-body {
   flex:1; padding:16px 24px; overflow-y:auto;
@@ -2263,6 +2277,9 @@ _JS = """\
       groupByKey[key] = g;
       groups.push(g);
     }
+    // Short name first ("Bice"), full caption on hover; a caption-less
+    // authority falls back as before.
+    if (!g.name && d.short_name) { g.name = d.short_name; g.full = d.full_name; }
     if (!g.name && d.case_name) g.name = d.case_name;
     if (!g.name && d.antecedent_name) g.name = d.antecedent_name;
     if (!g.url && d.url) g.url = d.url;
@@ -2283,7 +2300,8 @@ _JS = """\
     const viaCls = g.via === 'web' ? ' web'
       : (g.via === 'ndlaw' || g.via === 'CourtListener' || g.via === 'ndcourts-mcp') ? ' mcp' : '';  // 'ndcourts-mcp': legacy via label
     hdr.innerHTML =
-      '<span class="gname">' + escWithItalics(g.name || g.key) + '</span>' +
+      '<span class="gname"' + (g.full ? ' title="' + esc(g.full) + '"' : '') + '>' +
+        escWithItalics(g.name || g.key) + '</span>' +
       (g.name ? '<span class="gcite">' + esc(g.key) +
         (g.parallel ? ', ' + esc(g.parallel) : '') + '</span>' : '') +
       (g.via ? '<span class="via' + viaCls + '" title="Verified via ' + esc(g.via) + '">' + esc(g.via) + '</span>' : '') +
@@ -2515,6 +2533,9 @@ _JS = """\
     const urlLink = srcHdr.querySelector('.curl');
     const modeBtn = srcHdr.querySelector('.src-mode');
     const modeBadge = srcHdr.querySelector('.src-badge');
+    const srcName = srcHdr.querySelector('.src-name');
+    srcName.textContent = d.short_name || '';
+    srcName.title = d.full_name || '';
     const srcBody = document.querySelector('.src-body');
     // How much a cached copy is worth saying out loud. The text shows either
     // way; the badge is where a reviewer learns whether this file can stand
@@ -2807,7 +2828,9 @@ _JS = """\
       }
       if (m.url) {
         urlLink.href = m.url;
-        urlLink.textContent = m.url.replace(/^https?:\\/\\//, '');
+        var shown = m.url.replace(/^https?:\\/\\//, '');
+        try { shown = decodeURI(shown); } catch (e) { /* keep it encoded */ }
+        urlLink.textContent = shown;
       } else {
         urlLink.removeAttribute('href');
         urlLink.textContent = m.key === 'local'
@@ -3268,6 +3291,70 @@ def _via_key(s: str) -> str:
     return " ".join((s or "").split()).casefold()
 
 
+# A first party that is a government or the State is not how a case is called
+# for short; the short form names the other side (State v. Baker -> Baker).
+_GOV_PARTY_RE = re.compile(
+    r"^(?:State(?: of [A-Z][\w .]*)?|United States(?: of America)?|People|"
+    r"Commonwealth|City of .+|County of .+|[A-Z][\w.]* County|"
+    r"North Dakota .+|N\.D\. .+|Workforce Safety .+)$")
+_CAPTION_PREFIX_RE = re.compile(
+    r"^(?:In re|In the Matter of|Matter of|In the Interest of|Interest of)\s",
+    re.IGNORECASE)
+
+
+def _short_case_name(caption: str | None) -> str | None:
+    """The short form a reader would call a case by, from its caption.
+
+    "Bice, et al. v. Petro-Hunt, L.L.C., et al." -> "Bice";
+    "State v. Baker" -> "Baker". A caption with no "v." ("Estate of Hogen")
+    is returned whole, less any trailing "et al.". Returns None for an
+    empty caption.
+    """
+    cap = " ".join((caption or "").split()).strip(" ,;")
+    if not cap:
+        return None
+    if " v. " not in cap:
+        return re.sub(r",?\s+et al\.?$", "", cap) or None
+    first, second = cap.split(" v. ", 1)
+    # jetcite sometimes carries the word before a case name into its
+    # antecedent ("In Bice v. Petro-Hunt"); "In re" captions have no " v. ".
+    first = re.sub(r"^In\s+(?=[A-Z])", "", first)
+    party = first
+
+    def head(p: str) -> str:
+        return re.split(r",\s|\s+et al\b", p, maxsplit=1)[0].strip(" ,;")
+
+    if _GOV_PARTY_RE.match(head(first)) and head(second):
+        party = second
+    return head(party) or None
+
+
+def _assign_short_names(entries: list[dict]) -> None:
+    """Give every citation entry its authority's short case name.
+
+    The caption comes from ndlaw (``case_name``) when any occurrence of the
+    authority has one; otherwise from a draft antecedent that is a whole
+    caption (contains " v. " or a recognized prefix), since jetcite's
+    antecedent can be a fragment ("Inc."). Id. and repeat rows share their
+    authority's name, which is the point: the header says what Id. means.
+    """
+    captions: dict[str, str] = {}
+    for e in entries:
+        key = e.get("authority")
+        if key and e.get("case_name") and key not in captions:
+            captions[key] = e["case_name"]
+    for e in entries:
+        key = e.get("authority")
+        ant = e.get("antecedent_name") or ""
+        if key and key not in captions and (
+                " v. " in ant or _CAPTION_PREFIX_RE.match(ant)):
+            captions[key] = ant
+    for e in entries:
+        cap = captions.get(e.get("authority") or "")
+        e["full_name"] = cap
+        e["short_name"] = _short_case_name(cap)
+
+
 def _find_passage(passages: list[dict], cite: str,
                   pin_anchor: str | None, pin_page: str | None) -> str | None:
     """Find a Pass 3B verification passage for a citation occurrence.
@@ -3498,6 +3585,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             "passage": passage,
             "via": via,
         })
+    _assign_short_names(enriched)
 
     # Factual assertions (Pass 4 facts ledger), appended after the citation
     # entries so they share navigation, statuses, notes, and export.
@@ -3699,6 +3787,7 @@ def _build_html(title: str, citations: list[dict], paragraphs: list[dict],
             <button type="button" class="ptitle src-mode">Source</button>
             <span class="src-badge" hidden></span>
           </span>
+          <span class="src-name"></span>
           <a class="curl" href="#" target="_blank"></a>
         </div>
         <div class="src-body" style="flex:1;display:flex;flex-direction:column;position:relative;min-height:0;overflow:hidden;">

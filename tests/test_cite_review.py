@@ -15,8 +15,10 @@ from cite_review import (
     _find_paragraph,
     _ndlaw_eligible,
     _ndlaw_url,
+    _assign_short_names,
     _opinion_to_html,
     _split_paragraphs,
+    _short_case_name,
     _via_key,
 )
 
@@ -1140,3 +1142,59 @@ class TestOpinionHeadings:
         text = "[¶1] Text.\nII\n[¶2] More."
         html = self._render(text)
         assert [m.group(2) for m in _HEADING_DIV_RE.finditer(html)] == ["II"]
+
+
+# ---------------------------------------------------------------------------
+# Short case names (source-pane header and sidebar group names)
+# ---------------------------------------------------------------------------
+
+class TestShortCaseName:
+    @pytest.mark.parametrize("caption,expected", [
+        ("Bice, et al. v. Petro-Hunt, L.L.C., et al.", "Bice"),
+        ("Three Aces Properties v. United Rentals (North America), Inc.",
+         "Three Aces Properties"),
+        ("Powell, et al. v. Statoil Oil & Gas", "Powell"),
+        ("Larson Latham Huettl v. Burckhard", "Larson Latham Huettl"),
+        ("State v. Baker", "Baker"),
+        ("State of North Dakota v. Smith, et al.", "Smith"),
+        ("City of Fargo v. Jones", "Jones"),
+        ("Cass County v. Doe", "Doe"),
+        ("In Bice v. Petro-Hunt, L.L.C.", "Bice"),
+        ("Mittelstaedt v. Santa Fe Mins., Inc.", "Mittelstaedt"),
+        ("Antero Res. Corp. v. Airport Land Partners, Ltd.",
+         "Antero Res. Corp."),
+        ("Guardianship of Example", "Guardianship of Example"),
+        ("Estate of Hogen, et al.", "Estate of Hogen"),
+        ("", None),
+        (None, None),
+    ])
+    def test_short_form(self, caption, expected):
+        assert _short_case_name(caption) == expected
+
+    def test_authority_shares_name_with_id_rows(self):
+        entries = [
+            {"authority": "2009 ND 124", "case_name":
+             "Bice, et al. v. Petro-Hunt, L.L.C., et al.",
+             "antecedent_name": "In Bice v. Petro-Hunt, L.L.C."},
+            {"authority": "2009 ND 124", "case_name": None,
+             "antecedent_name": None},          # an Id. row
+            {"authority": "N.D.R.Civ.P. 56", "case_name": None,
+             "antecedent_name": None},
+        ]
+        _assign_short_names(entries)
+        assert [e["short_name"] for e in entries] == ["Bice", "Bice", None]
+        assert entries[1]["full_name"].startswith("Bice, et al. v.")
+
+    def test_fragment_antecedent_is_not_a_name(self):
+        # jetcite can carry a fragment ("Inc.") as the antecedent; without an
+        # ndlaw caption the header stays blank rather than say "Inc."
+        entries = [{"authority": "2020 ND 258", "case_name": None,
+                    "antecedent_name": "Inc."}]
+        _assign_short_names(entries)
+        assert entries[0]["short_name"] is None
+
+    def test_antecedent_caption_used_without_ndlaw(self):
+        entries = [{"authority": "1998 OK 7", "case_name": None,
+                    "antecedent_name": "Mittelstaedt v. Santa Fe Mins., Inc."}]
+        _assign_short_names(entries)
+        assert entries[0]["short_name"] == "Mittelstaedt"
