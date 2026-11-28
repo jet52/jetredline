@@ -381,6 +381,13 @@ _SANCTIONS = re.compile(
 # Local Rules
 _LOCAL = re.compile(r'Local[\s.]*Rule[\s.]*(\d{1,4}(?:-\d+)?)', re.IGNORECASE)
 
+# (first, last) group of each rule pattern's trailing-form number, for _rule_matches
+_TRAILING_GROUPS = {
+    _NDRCT_3: (1, 3), _NDRCT_2: (1, 2), _ADMIN_2: (1, 2), _ADMIN_1: (1, 1), _NDREV: (1, 1),
+    _PROC_RULES: (1, 1), _PROF_CONDUCT: (1, 2), _LAWYER_DISCIPL: (1, 2), _JUV_DECIMAL: (1, 2),
+    _CLE: (2, 2), _ADMISSION_DEC: (3, 4), _ADMISSION: (2, 2), _SANCTIONS: (2, 2),
+}
+
 # N.D. Sup. Ct. Admin. Order — the Supreme Court's administrative orders
 # (Order 25 suspended jury trials during COVID-19), a set distinct from
 # N.D. Sup. Ct. Admin. R.
@@ -485,6 +492,48 @@ _PROC_MAP = {
     "appellate": "ndrappp", "app": "ndrappp",
     "juvenile": "ndrjuvp", "juv": "ndrjuvp",
 }
+
+
+# A trailing-form rule cite ("Rule 56, N.D.R.Civ.P.") reads the number BEFORE the rule set.
+# Three things that sit in that place are not rule numbers:
+#   * the last component of a Century Code section or chapter: "N.D.C.C. § 28-26-06(5),
+#     N.D.R.Civ.P." is not Rule 6, and "ch. 27-20.3. N.D.R.Juv.P." is not Rule 3. A range of
+#     rules ("Rules 26-37, N.D.R.Civ.P.") has one hyphen and is kept;
+#   * a number across a paragraph break: "...32.2-02\n\nNDRCivP 49(a)" is not Rule 2;
+#   * a section of the Revised Code of 1943: "Section 32-1503, N.D.Rev.Code of 1943" (and
+#     "ND Revised Code") is not N.D.R.Ev. 1503 -- "Rev" followed by "Code"/"ised".
+# Measured over the ND opinions 2026-11-24: 8, 1 and 13 sites, every one a phantom.
+_SECTION_TAIL = re.compile(r'(?:\d[\d.]*[-\u2013]\d+[\d.]*|\bch(?:apter|s?\.)\s*\d[\d.]*)[-\u2013]$',
+                           re.IGNORECASE)
+_RULE_SET_START = re.compile(r'N[\s.]*D|North', re.IGNORECASE)
+_REV_CODE = re.compile(r'N[\s.]*D[\s.]*Rev(?:ised|[\s.]*Codes?\b|[\s.]*C\.)')
+
+
+def _rule_matches(pattern, text):
+    """``pattern.finditer(text)`` without the trailing-form phantoms described above.
+    ``_TRAILING_GROUPS`` names the first and last group of each pattern's trailing-form
+    number; a pattern not listed there (a leading-only form) is passed through."""
+    groups = _TRAILING_GROUPS.get(pattern)
+    if not groups:
+        yield from pattern.finditer(text)
+        return
+    pos = 0
+    while True:
+        m = pattern.search(text, pos)
+        if m is None:
+            return
+        if m.start(groups[0]) >= 0:
+            a, b = m.start(groups[0]), m.end(groups[1])
+            mk = _RULE_SET_START.search(text, b, m.end())
+            if (_SECTION_TAIL.search(text[max(0, a - 30):a])
+                    or (mk and re.search(r'\n\s*\n', text[b:mk.start()]))
+                    or (mk and _REV_CODE.match(text, mk.start()))):
+                # resume AT the rule set: the phantom swallowed it, and a leading-form cite
+                # may start there ("§ 472.\n\nN.D.R.Evid. 503")
+                pos = mk.start() if mk else m.end()
+                continue
+        yield m
+        pos = m.end() if m.end() > m.start() else m.end() + 1
 
 
 def _first_groups(m, *pairs):
@@ -722,9 +771,18 @@ class NDMatcher(BaseMatcher):
                 position=m.start(),
             ))
 
+        # A chapter printed under the 1943 code's name ("Chapter 27-16, NDRC
+        # 1943") is that code's (nd_old_codes); only a cite that names the
+        # Century Code itself is still read here.
+        from jetcite.patterns.states.nd_old_codes import chapter_spans_1943
+        old_spans = chapter_spans_1943(text) if "19" in text else []
+
         for m in _NDCC_CHAPTER.finditer(text):
             title, title_dec = m.group(1), m.group(2)
             chapter, chapter_dec = m.group(3), m.group(4)
+            if old_spans and m.group(0)[:1] in "Cc" and any(
+                    s <= m.start(1) < e for s, e in old_spans):
+                continue
 
             title_full = f"{title}.{title_dec}" if title_dec else title
             chapter_full = f"{chapter}.{chapter_dec}" if chapter_dec else chapter
@@ -877,39 +935,39 @@ class NDMatcher(BaseMatcher):
 
     def _match_nd_rules(self, text: str, results: list[Citation]):
         # N.D.R.Ct. 3-part
-        for m in _NDRCT_3.finditer(text):
+        for m in _rule_matches(_NDRCT_3, text):
             parts = _first_groups(m, (1, 2, 3), (4, 5, 6))
             if parts[0]:
                 results.append(self._rule_cite(m, "ndrct", "N.D.R.Ct.", parts))
 
         # N.D.R.Ct. 2-part
-        for m in _NDRCT_2.finditer(text):
+        for m in _rule_matches(_NDRCT_2, text):
             parts = _first_groups(m, (1, 2), (3, 4))
             if parts[0]:
                 results.append(self._rule_cite(m, "ndrct", "N.D.R.Ct.", parts))
 
         # Admin rules 2-part
-        for m in _ADMIN_2.finditer(text):
+        for m in _rule_matches(_ADMIN_2, text):
             parts = _first_groups(m, (1, 2), (3, 4))
             if parts[0]:
                 results.append(self._rule_cite(
                     m, "ndsupctadminr", "N.D. Sup. Ct. Admin. R.", parts))
 
         # Admin rules 1-part
-        for m in _ADMIN_1.finditer(text):
+        for m in _rule_matches(_ADMIN_1, text):
             part = m.group(1) or m.group(2)
             if part:
                 results.append(self._rule_cite(
                     m, "ndsupctadminr", "N.D. Sup. Ct. Admin. R.", [part]))
 
         # Evidence rules
-        for m in _NDREV.finditer(text):
+        for m in _rule_matches(_NDREV, text):
             rule = m.group(1) or m.group(2)
             if rule:
                 results.append(self._rule_cite(m, "ndrev", "N.D.R.Ev.", [rule]))
 
         # Procedural rules (suffix pattern)
-        for m in _PROC_RULES.finditer(text):
+        for m in _rule_matches(_PROC_RULES, text):
             rule_num = m.group(1)
             proc_type = (m.group(2) or m.group(3)).lower()
             rule_set = _PROC_MAP.get(proc_type)
@@ -924,7 +982,7 @@ class NDMatcher(BaseMatcher):
                 results.append(self._rule_cite(m, rule_set, display, parts))
 
         # Procedural rules (prefix pattern)
-        for m in _PROC_RULES_PREFIX.finditer(text):
+        for m in _rule_matches(_PROC_RULES_PREFIX, text):
             proc_type = m.group(1).lower()
             rule_num = m.group(2)
             rule_set = _PROC_MAP.get(proc_type)
@@ -939,60 +997,60 @@ class NDMatcher(BaseMatcher):
                 results.append(self._rule_cite(m, rule_set, display, parts))
 
         # Professional Conduct
-        for m in _PROF_CONDUCT.finditer(text):
+        for m in _rule_matches(_PROF_CONDUCT, text):
             parts = _first_groups(m, (1, 2), (3, 4))
             if parts[0]:
                 results.append(self._rule_cite(
                     m, "ndrprofconduct", "N.D.R. Prof. Conduct", parts))
 
         # Lawyer Discipline
-        for m in _LAWYER_DISCIPL.finditer(text):
+        for m in _rule_matches(_LAWYER_DISCIPL, text):
             parts = _first_groups(m, (1, 2), (3, 4))
             if parts[0]:
                 results.append(self._rule_cite(
                     m, "ndrlawyerdiscipl", "N.D.R. Lawyer Discipl.", parts))
 
         # Judicial Conduct (Canon:Rule)
-        for m in _JUD_CONDUCT_CANON.finditer(text):
+        for m in _rule_matches(_JUD_CONDUCT_CANON, text):
             canon = m.group(1)
             results.append(self._rule_cite(
                 m, "ndcodejudconduct", "N.D. Code Jud. Conduct", [f"canon-{canon}"]))
 
         # Judicial Conduct (Rule X.Y)
-        for m in _JUD_CONDUCT_RULE.finditer(text):
+        for m in _rule_matches(_JUD_CONDUCT_RULE, text):
             parts = [m.group(1), m.group(2)]
             results.append(self._rule_cite(
                 m, "ndcodejudconduct", "N.D. Code Jud. Conduct", parts))
 
         # Juvenile Procedure decimal
-        for m in _JUV_DECIMAL.finditer(text):
+        for m in _rule_matches(_JUV_DECIMAL, text):
             parts = _first_groups(m, (1, 2), (3, 4))
             if parts[0]:
                 results.append(self._rule_cite(m, "ndrjuvp", "N.D.R.Juv.P.", parts))
 
         # Continuing Legal Ed.
-        for m in _CLE.finditer(text):
+        for m in _rule_matches(_CLE, text):
             rule = m.group(1) or m.group(2)
             if rule:
                 results.append(self._rule_cite(
                     m, "ndrcontinuinglegaled", "N.D.R. Continuing Legal Ed.", [rule]))
 
         # Admission to Practice (decimal)
-        for m in _ADMISSION_DEC.finditer(text):
+        for m in _rule_matches(_ADMISSION_DEC, text):
             parts = _first_groups(m, (1, 2), (3, 4))
             if parts[0]:
                 results.append(self._rule_cite(
                     m, "admissiontopracticer", "N.D. Admission to Practice R.", parts))
 
         # Admission to Practice (simple)
-        for m in _ADMISSION.finditer(text):
+        for m in _rule_matches(_ADMISSION, text):
             rule = m.group(1) or m.group(2)
             if rule:
                 results.append(self._rule_cite(
                     m, "admissiontopracticer", "N.D. Admission to Practice R.", [rule]))
 
         # Lawyer Sanctions
-        for m in _SANCTIONS.finditer(text):
+        for m in _rule_matches(_SANCTIONS, text):
             rule = m.group(1) or m.group(2)
             if rule:
                 results.append(self._rule_cite(

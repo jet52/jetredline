@@ -66,6 +66,7 @@ _SHORT_RE = re.compile(rf"(?P<name>{_PARTY})\s*$")
 # Leading capitalized tokens that are citation signals, not part of the name.
 _SIGNALS = frozenset({
     "see", "cf", "cf.", "but", "accord", "also", "compare", "contra",
+    "contrast", "generally",
     "e.g.", "eg", "i.e.", "quoting", "citing", "following", "overruling",
     "affirming", "reversing", "rev'g", "aff'g", "modifying",
 })

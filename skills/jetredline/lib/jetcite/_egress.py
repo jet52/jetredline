@@ -44,6 +44,8 @@ NON_FETCH_HOSTS: frozenset[str] = frozenset({
     "tile.loc.gov",           # U.S. Reports per-case scans (link-only)
     "www.supremecourt.gov",   # U.S. Reports bound volumes (link-only)
     "avalon.law.yale.edu",    # U.S. Constitution reading copy (iframe-only)
+    "ndlaw.org",              # ND authority resolver links (link-only;
+                              # robots.txt disallows automated fetching)
 })
 
 

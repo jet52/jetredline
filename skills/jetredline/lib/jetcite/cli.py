@@ -17,7 +17,10 @@ from jetcite.scanner import lookup, scan_text
 
 
 def _format_url(cite: Citation) -> str:
-    """Return the primary URL for a citation."""
+    """Return the reader-facing URL for a citation: link_url (which the
+    --prefer choice sets), else the primary URL."""
+    if cite.link_url:
+        return cite.link_url
     if cite.sources:
         return cite.sources[0].url
     return "(no URL)"
@@ -105,6 +108,9 @@ def main(ctx):
               help="Include Bluebook pin-cite short forms (e.g. '491 F.3d at 363', 'Id. ¶ 14') linked to their parent cites (scan mode only).")
 @click.option("--occurrences", "occurrences", is_flag=True,
               help="Include repeat full-form case cites (second and later appearances) linked to their first occurrence (scan mode only).")
+@click.option("--prefer", "prefer", type=click.Choice(["official", "ndlaw"]),
+              default=None,
+              help="Which link to print for ND opinions, rules, N.D.C.C., and N.D.A.C.: the official site (default) or ndlaw.org. Defaults to $JETCITE_PREFER.")
 def cite_cmd(
     citation: str | None,
     scan_file: str | None,
@@ -116,6 +122,7 @@ def cite_cmd(
     do_fetch: bool,
     pin_cites: bool,
     occurrences: bool,
+    prefer: str | None,
 ):
     """Parse legal citations and generate URLs to official sources."""
     # Determine input
@@ -126,7 +133,7 @@ def cite_cmd(
             with open(scan_file) as f:
                 text = f.read()
         citations = scan_text(text, include_pin_cites=pin_cites,
-                              include_occurrences=occurrences)
+                              include_occurrences=occurrences, prefer=prefer)
         if fmt is None:
             fmt = "table"
     elif from_clipboard:
@@ -165,7 +172,7 @@ def cite_cmd(
                 sys.exit(1)
 
         if citation:
-            result = lookup(citation)
+            result = lookup(citation, prefer=prefer)
             if result:
                 citations = [result]
             else:
@@ -197,8 +204,8 @@ def cite_cmd(
         sys.exit(1 if failed else 0)
 
     # Open URL
-    if open_url and citations and citations[0].sources:
-        webbrowser.open(citations[0].sources[0].url)
+    if open_url and citations and (citations[0].link_url or citations[0].sources):
+        webbrowser.open(_format_url(citations[0]))
 
     # Output
     if fmt == "json":

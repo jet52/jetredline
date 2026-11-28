@@ -188,6 +188,14 @@ def to_legacy_dict(c: Citation) -> dict:
     if avalon_url:
         entry["avalon_url"] = avalon_url
 
+    # ndlaw.org resolver link (jetcite.links): link-only, never the primary
+    # url. link_url is the one to render as the reader's hyperlink.
+    ndlaw_url = next((s.url for s in c.sources if s.name == "ndlaw"), None)
+    if ndlaw_url:
+        entry["ndlaw_url"] = ndlaw_url
+    entry["link_url"] = c.link_url or url
+    entry["text_link_url"] = c.text_link_url or url
+
     if c.improper_parallel_pincite:
         # ND style defect: the reporter half of a public-domain pair carries a
         # page pin cite. Consumers surface this as a correctable citation-form

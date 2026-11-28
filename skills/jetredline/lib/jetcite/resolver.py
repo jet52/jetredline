@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import urlparse
 
+from jetcite._egress import NON_FETCH_HOSTS
 from jetcite.models import Citation, CitationType, Source
 
 try:
@@ -52,8 +54,14 @@ async def verify_citations(
 
             # Pick the best source to verify: prefer non-CourtListener
             # when alternatives exist
-            source = cite.sources[0]
-            for s in cite.sources:
+            # Link-only hosts (ndlaw.org, official-print scans) are never
+            # requested, so they are never the source verified.
+            fetchable = [s for s in cite.sources
+                         if urlparse(s.url).netloc not in NON_FETCH_HOSTS]
+            if not fetchable:
+                continue
+            source = fetchable[0]
+            for s in fetchable:
                 if "courtlistener.com/c/" not in s.url:
                     source = s
                     break

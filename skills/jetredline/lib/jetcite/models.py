@@ -11,6 +11,7 @@ class CitationType(Enum):
     COURT_RULE = "court_rule"
     REGULATION = "regulation"
     SESSION_LAW = "session_law"
+    JURY_INSTRUCTION = "jury_instruction"
 
 
 @dataclass
@@ -59,6 +60,13 @@ class Citation:
     # the ¶ is the pinpoint — so "1997 ND 231, ¶ 10, 571 N.W.2d 358, 360" is
     # improper. Set by the scanner, which sees the surrounding text.
     improper_parallel_pincite: bool = False
+    # The URL a reader should click (jetcite.links): the ndlaw.org resolver
+    # link when the caller prefers ndlaw.org and it covers this authority,
+    # else the primary URL. Never fetched; sources[0] stays the fetch URL.
+    link_url: str | None = None
+    # The same link, valid wherever raw_text appears: carries a pinpoint only
+    # when raw_text itself does. For consumers that map text -> URL.
+    text_link_url: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to a plain dictionary suitable for JSON serialization."""
@@ -88,6 +96,10 @@ class Citation:
                 d["pin_page"] = self.pin_page
             if self.pin_paragraph:
                 d["pin_paragraph"] = self.pin_paragraph
+        if self.link_url:
+            d["link_url"] = self.link_url
+        if self.text_link_url:
+            d["text_link_url"] = self.text_link_url
         d["sources"] = [
             {"name": s.name, "url": s.url}
             | ({"verified": s.verified} if s.verified is not None else {})

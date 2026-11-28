@@ -842,10 +842,29 @@ def _mask_star_pages(text: str) -> str:
 
 def _restore_printed(citations: list[Citation], printed: str) -> list[Citation]:
     """Give each citation the raw text as printed, where masking changed it."""
+    masked = None
     for c in citations:
         seg = printed[c.position:c.position + len(c.raw_text)]
-        if seg != c.raw_text and _mask_star_pages(seg) == c.raw_text:
+        if seg == c.raw_text:
+            continue
+        if _mask_star_pages(seg) == c.raw_text:
             c.raw_text = seg
+            continue
+        # `position` is not always the first character of raw_text (a neutral
+        # cite's position is where its match began, which can sit a few
+        # characters either side of the text it keeps). Where the masked run
+        # of spaces is still in raw_text, find that text in the masked
+        # document near the position and read the printed characters there.
+        if "    " not in c.raw_text:
+            continue
+        if masked is None:
+            masked = _mask_star_pages(printed)
+        lo = max(0, c.position - len(c.raw_text) - 40)
+        i = masked.find(c.raw_text, lo, c.position + len(c.raw_text) + 40)
+        if i >= 0 and masked.find(c.raw_text, i + 1, c.position + len(c.raw_text) + 40) < 0:
+            seg = printed[i:i + len(c.raw_text)]
+            if seg != c.raw_text and _STAR_PAGE.search(seg):
+                c.raw_text = seg
     return citations
 
 
@@ -855,6 +874,7 @@ def scan_text(
     resolve: bool = True,
     include_pin_cites: bool = False,
     include_occurrences: bool = False,
+    prefer: str | None = None,
 ) -> list[Citation]:
     """Scan text for all citations, deduplicated by normalized form.
 
@@ -886,7 +906,13 @@ def scan_text(
     Citation positions index into ``preprocess_document_text(text)``, not
     the raw input — consumers mapping positions back to the document must
     preprocess identically.
+
+    ``prefer`` chooses the reader-facing ``link_url`` ("official", the
+    default, or "ndlaw" for ndlaw.org); None defers to $JETCITE_PREFER. It
+    never changes ``sources[0]``, the fetchable URL. See jetcite.links.
     """
+    from jetcite.links import apply_links, resolve_preference
+    resolve_preference(prefer)          # fail fast on a bad value
     # Strip page furniture up front so a citation split across a page break
     # rejoins, and so matcher positions stay aligned with the text the
     # parallel/antecedent detectors below see. Idempotent with the same call
@@ -988,26 +1014,39 @@ def scan_text(
             antecedents = sorted(occurrences + linked, key=lambda c: c.position)
         pins = _resolve_pin_cites(pin_candidates, antecedents, text)
         _inherit_pin_sources(pins, antecedents)
-        return _restore_printed(sorted(occurrences + pins, key=lambda c: c.position), printed)
+        return apply_links(_restore_printed(
+            sorted(occurrences + pins, key=lambda c: c.position), printed),
+            printed, prefer)
 
-    return _restore_printed(occurrences, printed)
+    return apply_links(_restore_printed(occurrences, printed), printed, prefer)
 
 
 def lookup(
     text: str,
     *,
     resolve: bool = True,
+    prefer: str | None = None,
 ) -> Citation | None:
     """Look up a single citation string. Returns the first match.
 
     If resolve is True (default), resolves ndcourts.gov search URLs to
-    direct opinion PDF URLs via HTTP.
+    direct opinion PDF URLs via HTTP. ``prefer`` chooses ``link_url`` as in
+    scan_text.
     """
+    from jetcite.links import apply_links, resolve_preference
+    from jetcite.sources.ndlaw import NDLAW_CITE_BASE, ndlaw_cite_url
+    resolve_preference(prefer)
     matchers = get_matchers()
     for matcher in matchers:
         result = matcher.find_first(text)
         if result:
             if resolve:
                 resolve_nd_opinion_urls([result])
+            apply_links([result], preprocess_document_text(text), prefer)
+            # lookup's input is the citation as written -- case name and
+            # pinpoint included, which lookup itself does not parse -- so the
+            # ndlaw.org resolver gets all of it
+            if result.link_url and result.link_url.startswith(NDLAW_CITE_BASE):
+                result.link_url = ndlaw_cite_url(text)
             return result
     return None
